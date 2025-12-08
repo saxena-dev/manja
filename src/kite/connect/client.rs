@@ -511,6 +511,8 @@ pub mod test_utils {
     use super::*;
 
     use mockito::{Mock, ServerGuard};
+    use crate::kite::connect::config::{Config, KITECONNECT_API_LOGIN, KITECONNECT_API_REDIRECT};
+    use crate::kite::connect::credentials::KiteCredentials;
 
     pub fn read_to_object<M>(path: &str) -> Result<M>
     where
@@ -552,11 +554,23 @@ pub mod test_utils {
         {
             dotenv::dotenv().ok();
         }
-        // Patch the API base url on HTTPClient for testing
-        std::env::set_var("KITECONNECT_API_BASE", &server.url());
+        // Build a dedicated Config that points HTTPClient at the mock server.
+        let credentials = KiteCredentials::new(
+            "TEST_API_KEY",
+            "TEST_API_SECRET",
+            "TEST_USER_ID",
+            "TEST_PASSWORD",
+            "TEST_TOTP",
+        );
+        let config = Config::from_parts(
+            server.url(),
+            KITECONNECT_API_LOGIN.to_string(),
+            KITECONNECT_API_REDIRECT.to_string(),
+            credentials,
+        );
         let session =
             read_to_object::<UserSession>("./kiteconnect-mocks/generate_session.json").unwrap();
 
-        (server, HTTPClient::default().with_user_session(session))
+        (server, HTTPClient::with_config(config).with_user_session(session))
     }
 }

@@ -4,8 +4,8 @@
 //! detailed representations of orders, trades, and their various attributes,
 //! making it easier to manage and process trading activities.
 //!
-use chrono::{DateTime, FixedOffset};
-use serde::{Deserialize, Serialize};
+use chrono::{DateTime, FixedOffset, NaiveDateTime, TimeZone};
+use serde::{Deserialize, Deserializer, Serialize};
 
 use crate::kite::connect::models::order_enums::{
     OrderStatus, OrderType, ProductType, TransactionType,
@@ -26,16 +26,30 @@ use super::order_enums::OrderVariety;
 ///
 fn parse_datetime<'de, D>(deserializer: D) -> Result<Option<DateTime<FixedOffset>>, D::Error>
 where
-    D: serde::Deserializer<'de>,
+    D: Deserializer<'de>,
 {
     let s: Option<&str> = Option::deserialize(deserializer)?;
     if let Some(s) = s {
-        DateTime::parse_from_str(s, "%Y-%m-%d %H:%M:%S")
-            .map(|dt| Some(dt.with_timezone(&FixedOffset::east_opt(5 * 3600 + 1800)?)))
-            .map_err(serde::de::Error::custom)
+        let naive =
+            NaiveDateTime::parse_from_str(s, "%Y-%m-%d %H:%M:%S").map_err(serde::de::Error::custom)?;
+        let offset = FixedOffset::east_opt(5 * 3600 + 1800)
+            .ok_or_else(|| serde::de::Error::custom("invalid fixed offset"))?;
+        let datetime = offset
+            .from_local_datetime(&naive)
+            .single()
+            .ok_or_else(|| serde::de::Error::custom("ambiguous local time"))?;
+        Ok(Some(datetime))
     } else {
         Ok(None)
     }
+}
+
+fn deserialize_guid<'de, D>(deserializer: D) -> Result<String, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let value: Option<String> = Option::deserialize(deserializer)?;
+    Ok(value.unwrap_or_default())
 }
 
 /// Represents an order received (and acknowledged) by Zerodha's OMS.
@@ -131,16 +145,16 @@ pub struct Order {
     pub disclosed_quantity: u32,
 
     /// Timestamp at which the order was registered by the API.
-    #[serde(deserialize_with = "parse_datetime")]
+    #[serde(default, deserialize_with = "parse_datetime")]
     pub order_timestamp: Option<DateTime<FixedOffset>>,
 
     /// Timestamp at which the order was registered by the exchange. Orders that
     /// don't reach the exchange have null timestamps.
-    #[serde(deserialize_with = "parse_datetime")]
+    #[serde(default, deserialize_with = "parse_datetime")]
     pub exchange_timestamp: Option<DateTime<FixedOffset>>,
 
     /// Timestamp at which an order's state changed at the exchange.
-    #[serde(deserialize_with = "parse_datetime")]
+    #[serde(default, deserialize_with = "parse_datetime")]
     pub exchange_update_timestamp: Option<DateTime<FixedOffset>>,
 
     /// Textual description of the order's status. Failed orders come with a
@@ -157,6 +171,7 @@ pub struct Order {
     pub auction_number: Option<String>,
 
     /// Map of arbitrary fields that the system may attach to an order.
+    #[serde(default)]
     pub meta: serde_json::Value,
 
     /// An optional tag to apply to an order to identify it (alphanumeric,
@@ -164,6 +179,7 @@ pub struct Order {
     pub tag: Option<String>,
 
     /// Unusable request ID to avoid order duplication.
+    #[serde(default, deserialize_with = "deserialize_guid")]
     pub guid: String,
 
     /// The total number of legs for iceberg orders.
@@ -204,7 +220,7 @@ pub struct Trade {
 
     /// The numerical identifier issued by the exchange representing the instrument.
     /// Used for subscribing to live market data over WebSocket.
-    pub instrument_token: String,
+    pub instrument_token: u64,
 
     /// BUY or SELL transaction type.
     pub transaction_type: TransactionType,

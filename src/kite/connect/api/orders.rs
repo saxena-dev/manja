@@ -209,3 +209,158 @@ impl<'c> Orders<'c> {
             .await
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use std::collections::HashMap;
+
+    use mockito::ServerGuard;
+    use tokio::join;
+
+    use crate::kite::connect::client::test_utils::{
+        add_mocks, get_manja_test_client, read_to_object, APIEndpoint, HTTPMethod, TestResponse,
+    };
+    use crate::kite::connect::client::HTTPClient;
+    use crate::kite::connect::config::{Config, KITECONNECT_API_LOGIN, KITECONNECT_API_REDIRECT};
+    use crate::kite::connect::credentials::KiteCredentials;
+    use crate::kite::connect::models::{Order, Trade};
+    use crate::kite::error::{KiteApiException, ManjaError};
+    use crate::test_support::init_tracing;
+
+    use super::*;
+
+    fn mock_map() -> HashMap<(HTTPMethod, APIEndpoint), TestResponse> {
+        let mut mmap = HashMap::new();
+        mmap.insert(("GET", "/orders"), "./kiteconnect-mocks/orders.json");
+        mmap.insert(
+            ("GET", "/orders/171229000724687"),
+            "./kiteconnect-mocks/order_info.json",
+        );
+        mmap.insert(("GET", "/trades"), "./kiteconnect-mocks/trades.json");
+        mmap.insert(
+            ("GET", "/orders/171229000724687/trades"),
+            "./kiteconnect-mocks/order_trades.json",
+        );
+        mmap
+    }
+
+    #[tokio::test]
+    async fn test_list_orders_success() {
+        init_tracing();
+        let (server, mut manja_client) = get_manja_test_client().await;
+        let server_ptr: *const ServerGuard = &server;
+        log::debug!("Server @address: {:p}", server_ptr);
+        let (_server,) = join!(add_mocks(server, mock_map()));
+
+        let response = manja_client.orders().list_orders().await.unwrap();
+        let expected =
+            read_to_object::<Vec<Order>>("./kiteconnect-mocks/orders.json").unwrap();
+
+        let orders = response.data.expect("expected orders data");
+        assert_eq!(orders.len(), expected.len());
+        assert_eq!(orders[0].order_id, expected[0].order_id);
+    }
+
+    #[tokio::test]
+    async fn test_get_order_history_success() {
+        let (server, mut manja_client) = get_manja_test_client().await;
+        let (_server,) = join!(add_mocks(server, mock_map()));
+
+        let response = manja_client
+            .orders()
+            .get_order_history("171229000724687")
+            .await
+            .unwrap();
+        let expected =
+            read_to_object::<Vec<Order>>("./kiteconnect-mocks/order_info.json").unwrap();
+
+        let history = response.data.expect("expected order history");
+        assert_eq!(history.len(), expected.len());
+        assert_eq!(history[0].order_id, expected[0].order_id);
+    }
+
+    #[tokio::test]
+    async fn test_list_trades_success() {
+        let (server, mut manja_client) = get_manja_test_client().await;
+        let (_server,) = join!(add_mocks(server, mock_map()));
+
+        let response = manja_client.orders().list_trades().await.unwrap();
+        let expected =
+            read_to_object::<Vec<Trade>>("./kiteconnect-mocks/trades.json").unwrap();
+
+        let trades = response.data.expect("expected trades data");
+        assert_eq!(trades.len(), expected.len());
+        assert_eq!(trades[0].trade_id, expected[0].trade_id);
+    }
+
+    #[tokio::test]
+    async fn test_get_order_trades_success() {
+        let (server, mut manja_client) = get_manja_test_client().await;
+        let (_server,) = join!(add_mocks(server, mock_map()));
+
+        let response = manja_client
+            .orders()
+            .get_order_trades("171229000724687")
+            .await
+            .unwrap();
+        let expected =
+            read_to_object::<Vec<Trade>>("./kiteconnect-mocks/order_trades.json").unwrap();
+
+        let trades = response.data.expect("expected trades data");
+        assert_eq!(trades.len(), expected.len());
+        assert_eq!(trades[0].trade_id, expected[0].trade_id);
+    }
+
+    #[tokio::test]
+    async fn test_list_orders_token_exception_error() {
+        init_tracing();
+        let mut server = mockito::Server::new_async().await;
+        let credentials = KiteCredentials::new(
+            "TEST_API_KEY",
+            "TEST_API_SECRET",
+            "TEST_USER_ID",
+            "TEST_PASSWORD",
+            "TEST_TOTP",
+        );
+        let config = Config::from_parts(
+            server.url(),
+            KITECONNECT_API_LOGIN.to_string(),
+            KITECONNECT_API_REDIRECT.to_string(),
+            credentials,
+        );
+        let mut client = HTTPClient::with_config(config);
+
+        let _m = server
+            .mock("GET", "/orders")
+            .with_status(403)
+            .with_header("content-type", "application/json")
+            .with_body(
+                r#"{
+                    "status": "error",
+                    "data": null,
+                    "message": "Token is invalid or has expired",
+                    "error_type": "TokenException"
+                }"#,
+            )
+            .create_async()
+            .await;
+
+        let err = client
+            .orders()
+            .list_orders()
+            .await
+            .expect_err("expected token exception error");
+
+        match err {
+            ManjaError::KiteApiError(api_err) => {
+                assert_eq!(api_err.status_code, 403);
+                assert!(matches!(
+                    api_err.error_type,
+                    KiteApiException::TokenException
+                ));
+                assert_eq!(api_err.error_type.as_str(), "TokenException");
+            }
+            other => panic!("unexpected error variant: {:?}", other),
+        }
+    }
+}
