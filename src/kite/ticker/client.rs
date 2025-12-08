@@ -56,10 +56,11 @@ where
             // TODO: Fix `unwrap`
             let request = stream_state.clone().into_client_request().unwrap();
             let kite_uri = format!("{}", request.uri());
+            info!(uri = %kite_uri, "ticker.connect.start");
             match tokio_tungstenite::connect_async(kite_uri).await {
                 Ok((mut ws_stream, response)) => {
-                    info!("Connected to the server");
-                    info!("Response HTTP code: {}", response.status());
+                    info!("ticker.connect.success (status: {})", response.status());
+                    info!("Response contains the following headers:");
                     info!("Response contains the following headers:");
                     for (header, value) in response.headers() {
                         info!("* {}: {:?}", header, value);
@@ -84,10 +85,13 @@ where
                         stream_state: stream_state,
                     })
                 }
-                Err(e) => Err(io::Error::new(
-                    io::ErrorKind::Other,
-                    format!("Big problem := {}", e),
-                )),
+                Err(e) => {
+                    error!("ticker.connect.error: {}", e);
+                    Err(io::Error::new(
+                        io::ErrorKind::Other,
+                        format!("Big problem := {}", e),
+                    ))
+                }
             }
         })
     }

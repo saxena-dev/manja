@@ -129,6 +129,7 @@ mod tests {
     use mockito::ServerGuard;
     use tokio::join;
 
+    use crate::test_support::init_tracing;
     use crate::kite::connect::client::test_utils::{
         add_mocks, get_manja_test_client, read_to_object, APIEndpoint, HTTPMethod, TestResponse,
     };
@@ -159,6 +160,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_user_profile() {
+        init_tracing();
         let (server, manja_client) = get_manja_test_client().await;
         let (_server,) = join!(add_mocks(server, mock_map()));
 

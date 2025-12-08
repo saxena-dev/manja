@@ -401,7 +401,12 @@ impl HTTPClient {
 
             retry(backoff.clone(), || async {
                 let request = request_baker().await.map_err(backoff::Error::Permanent)?;
+                let method = request.method().to_string();
                 let path = request.url().path().to_string();
+                let span = tracing::info_span!("http.request", %method, %path);
+                let _enter = span.enter();
+
+                tracing::trace!("sending HTTP request");
                 let response = client
                     .execute(request)
                     .await
@@ -427,14 +432,24 @@ impl HTTPClient {
                             .and_then(|error_type| Some(KiteApiException::from(error_type.as_str())))
                             .unwrap(),
                     };
+                    tracing::error!(
+                        status = status.as_u16(),
+                        error_type = %kite_error.error_type.as_str(),
+                        "Kite API error at {}",
+                        path
+                    );
                     if status.as_u16() == 429 {
                         tracing::warn!("Rate limited at endpoint: {}", path);
                         return Err(backoff::Error::transient(ManjaError::KiteApiError(
                             kite_error,
                         )));
                     }
+                    return Err(backoff::Error::Permanent(ManjaError::KiteApiError(
+                        kite_error,
+                    )));
                 }
 
+                tracing::debug!(status = status.as_u16(), "HTTP request succeeded");
                 Ok(json_response)
             })
             .await
@@ -443,7 +458,12 @@ impl HTTPClient {
         #[cfg(not(feature = "backoff"))]
         {
             let request = request_baker().await?;
+            let method = request.method().to_string();
             let path = request.url().path().to_string();
+            let span = tracing::info_span!("http.request", %method, %path);
+            let _enter = span.enter();
+
+            tracing::trace!("sending HTTP request");
             let response = client
                 .execute(request)
                 .await
@@ -466,12 +486,19 @@ impl HTTPClient {
                         .and_then(|error_type| Some(KiteApiException::from(error_type.as_str())))
                         .unwrap(),
                 };
+                tracing::error!(
+                    status = status.as_u16(),
+                    error_type = %kite_error.error_type.as_str(),
+                    "Kite API error at {}",
+                    path
+                );
                 if status.as_u16() == 429 {
                     tracing::warn!("Rate limited at endpoint: {}", path);
                 }
                 return Err(ManjaError::KiteApiError(kite_error));
             }
 
+            tracing::debug!(status = status.as_u16(), "HTTP request succeeded");
             Ok(json_response)
         }
     }

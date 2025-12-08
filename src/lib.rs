@@ -83,3 +83,22 @@ pub use crate::kite::connect::models::{
 };
 
 pub mod kite;
+
+#[cfg(test)]
+pub mod test_support {
+    /// Initialize a tracing subscriber for tests when `MANJA_TEST_TRACING` is set.
+    ///
+    /// This keeps tests quiet by default while allowing opt-in tracing:
+    ///
+    /// ```bash
+    /// MANJA_TEST_TRACING=1 RUST_LOG=trace cargo test my_test -- --nocapture
+    /// ```
+    pub fn init_tracing() {
+        if std::env::var("MANJA_TEST_TRACING").is_err() {
+            return;
+        }
+        let _ = tracing_subscriber::fmt()
+            .with_max_level(tracing::Level::TRACE)
+            .try_init();
+    }
+}
