@@ -21,81 +21,40 @@
 //!    - *Reduce Downtime*: with real-time insights and quick access to logs, identify and resolve issues faster, minimizing downtime.
 //!    - *Enhance User Experience*: quickly address errors and performance bottlenecks to provide a better experience for your users.
 //!
-//! - **WebSocket** support for streaming binary market data.
+//! - **WebSocket** support for streaming binary market data (via a feature-gated ticker client).
 //!    - *Auto-reconnect Mechanism*: `manja` provides a reliable and stateful async WebSocket client with a configurable exponential backoff retry mechanism.
 //!
-//! - **WebDriver** integration for retrieving `request token` from the redirect URL after successfully authenticating with the Kite platform.
+//! - **WebDriver** integration for retrieving `request token` from the redirect URL after successfully authenticating with the Kite platform (when enabled).
 //!
-//! # Example:
+//! # Quickstart
+//!
+//! The recommended entrypoint is the [`ManjaClient`] facade, which wraps the
+//! lower-level HTTP client and exposes typed API groups for each Kite domain.
+//!
 //! ```ignore
-//! use std::error::Error;
-//!
-//! mod kite;
-//! use kite::connect::client::HTTPClient;
-//!
-//! use kite::login::flow::browser_login_flow;
-//! use kite::ticker::{client::WebSocketClient, models::Mode};
-//! use kite::ticker::{KiteStreamCredentials, StreamState};
-//! use kite::traits::KiteLoginFlow;
-//!
-//! use futures_util::StreamExt;
-//!
-//! use tokio;
-//! use tracing::{error, info};
-//! use tungstenite::client::IntoClientRequest;
+//! use manja::ManjaClient;
+//! use manja::{KiteApiResponse, UserProfile};
 //!
 //! #[tokio::main]
-//! async fn main() -> Result<(), Box<dyn Error>> {
-//!     // Setup tracing
-//!     tracing_subscriber::fmt()
-//!         .with_max_level(tracing::Level::INFO)
-//!         .init();
+//! async fn main() -> Result<(), Box<dyn std::error::Error>> {
+//!     // Create a client using environment-based configuration
+//!     let mut client = ManjaClient::from_env();
 //!
-//!     // Load env vars
-//!     dotenv::dotenv().ok();
+//!     // Example: log in using a request token obtained via your preferred flow
+//!     let request_token = "<request_token>".to_string();
+//!     let session = client.session();
+//!     let kite_session = session.generate_session(&request_token).await?;
 //!
-//!     // Create a default HTTPClient
-//!     let mut manja_client = HTTPClient::default();
-//!
-//!     let session = manja_client.session();
-//!
-//!     // Login flow I: request token
-//!     let request_token = session.gen_request_token(browser_login_flow).await?;
-//!
-//!     // Login flow II: user session
-//!     let kite_session = manja_client
-//!         .session()
-//!         .generate_session(&request_token)
-//!         .await?;
-//!
-//!     let stream_creds = KiteStreamCredentials::from(kite_session.data.unwrap());
-//!     let stream_state = StreamState::from_credentials(stream_creds)
-//!         // INFY
-//!         .subscribe_token(Mode::Full, 408065)
-//!         // TATAMOTORS
-//!         .subscribe_token(Mode::Full, 884737);
-//!     
-//!
-//!     info!(
-//!         "StreamState = {:?}",
-//!         stream_state.clone().into_client_request()
-//!     );
-//!
-//!     if let Ok(mut ticker) = WebSocketClient::connect(stream_state).await {
-//!         for _ in 0..120 {
-//!             tokio::time::sleep(std::time::Duration::from_millis(500)).await;
-//!             if let Some(maybe_msg) = ticker.next().await {
-//!                 match maybe_msg {
-//!                     Ok(msg) => info!("Message: {}", msg),
-//!                     Err(e) => error!("Error: {}", e),
-//!                 }
-//!             }
-//!         }
-//!     }
+//!     // Example: fetch the user profile
+//!     let profile: KiteApiResponse<UserProfile> = client.user().profile().await?;
+//!     println!("User: {:?}", profile.data);
 //!
 //!     Ok(())
 //! }
 //! ```
+//!
+//! For WebSocket streaming or WebDriver-assisted login flows, refer to the
+//! module-level documentation under [`kite::ticker`] and [`kite::login`].
 //!
 //! # Disclaimer
 //!
