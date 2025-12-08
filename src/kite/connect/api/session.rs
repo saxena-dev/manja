@@ -261,7 +261,12 @@ mod tests {
 
     #[test]
     fn test_delete_session_success_fixture_parses() {
-        let json = std::fs::read_to_string("./kiteconnect-mocks/session_logout.json").unwrap();
+        let root =
+            std::env::var("CARGO_MANIFEST_DIR").unwrap_or_else(|_| ".".to_string());
+        let path = std::path::Path::new(&root)
+            .join("kiteconnect-mocks/session_logout.json");
+        let json = std::fs::read_to_string(&path)
+            .unwrap_or_else(|err| panic!("failed to read fixture at {}: {}", path.display(), err));
         let response: KiteApiResponse<bool> = serde_json::from_str(&json).unwrap();
         assert_eq!(response.status, "success");
         assert_eq!(response.data, Some(true));

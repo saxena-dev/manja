@@ -518,7 +518,13 @@ pub mod test_utils {
     where
         M: DeserializeOwned,
     {
-        let contents = std::fs::read_to_string(path).unwrap();
+        // Resolve fixture paths relative to the crate root so tests behave
+        // consistently regardless of the current working directory.
+        let root = std::env::var("CARGO_MANIFEST_DIR").unwrap_or_else(|_| ".".to_string());
+        let full_path = std::path::Path::new(&root).join(path);
+        let contents = std::fs::read_to_string(&full_path).unwrap_or_else(|err| {
+            panic!("failed to read fixture at {}: {}", full_path.display(), err)
+        });
         let obj: KiteApiResponse<M> = serde_json::from_str(&contents)?;
         obj.data
             .ok_or(ManjaError::Internal(format!("obj not found")))
@@ -534,7 +540,12 @@ pub mod test_utils {
     ) -> ServerGuard {
         let mut mocks = Vec::new();
         for ((method, api_endpoint), response_path) in mock_map {
-            let response_json = std::fs::read_to_string(response_path).unwrap();
+            let root =
+                std::env::var("CARGO_MANIFEST_DIR").unwrap_or_else(|_| ".".to_string());
+            let full_path = std::path::Path::new(&root).join(response_path);
+            let response_json = std::fs::read_to_string(&full_path).unwrap_or_else(|err| {
+                panic!("failed to read fixture at {}: {}", full_path.display(), err)
+            });
             let m = server
                 .mock(method, api_endpoint)
                 .with_status(200)

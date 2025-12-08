@@ -215,7 +215,11 @@ mod tests {
 
     #[test]
     fn test_get_full_quotes_success() {
-        let json = std::fs::read_to_string("./kiteconnect-mocks/quote.json").unwrap();
+        let root =
+            std::env::var("CARGO_MANIFEST_DIR").unwrap_or_else(|_| ".".to_string());
+        let path = std::path::Path::new(&root).join("kiteconnect-mocks/quote.json");
+        let json = std::fs::read_to_string(&path)
+            .unwrap_or_else(|err| panic!("failed to read fixture at {}: {}", path.display(), err));
         let response: KiteApiResponse<HashMap<String, FullQuote>> =
             serde_json::from_str(&json).unwrap();
         let data = response.data.expect("expected quote data");
@@ -225,7 +229,11 @@ mod tests {
 
     #[test]
     fn test_get_ohlc_quotes_success() {
-        let json = std::fs::read_to_string("./kiteconnect-mocks/ohlc.json").unwrap();
+        let root =
+            std::env::var("CARGO_MANIFEST_DIR").unwrap_or_else(|_| ".".to_string());
+        let path = std::path::Path::new(&root).join("kiteconnect-mocks/ohlc.json");
+        let json = std::fs::read_to_string(&path)
+            .unwrap_or_else(|err| panic!("failed to read fixture at {}: {}", path.display(), err));
         let response: KiteApiResponse<HashMap<String, OHLCQuote>> =
             serde_json::from_str(&json).unwrap();
         let data = response.data.expect("expected quote data");
@@ -235,7 +243,11 @@ mod tests {
 
     #[test]
     fn test_get_ltp_quotes_success() {
-        let json = std::fs::read_to_string("./kiteconnect-mocks/ltp.json").unwrap();
+        let root =
+            std::env::var("CARGO_MANIFEST_DIR").unwrap_or_else(|_| ".".to_string());
+        let path = std::path::Path::new(&root).join("kiteconnect-mocks/ltp.json");
+        let json = std::fs::read_to_string(&path)
+            .unwrap_or_else(|err| panic!("failed to read fixture at {}: {}", path.display(), err));
         let response: KiteApiResponse<HashMap<String, LTPQuote>> =
             serde_json::from_str(&json).unwrap();
         let data = response.data.expect("expected quote data");
