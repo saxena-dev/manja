@@ -5,6 +5,35 @@ manja
 
 This crate provides a Rust client library for [Zerodha](https://zerodha.com/)'s [Kite Connect](https://kite.trade/) trading APIs (a set of REST-like HTTP APIs).
 
+The primary entrypoint is the `ManjaClient` facade, which wraps the lower-level HTTP client and exposes typed API groups for Kite domains (user, session, orders, portfolio, market, margins, etc.).
+
+## Quickstart
+
+```rust ignore
+use manja::ManjaClient;
+use manja::{KiteApiResponse, UserProfile};
+
+#[tokio::main]
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    // Create a client using environment-based configuration.
+    // Required env vars depend on your Kite app configuration.
+    let mut client = ManjaClient::from_env();
+
+    // Assume you have obtained a request token via a browser-based login flow.
+    let request_token = "<request_token>".to_string();
+
+    // Login flow: create a user session
+    let session = client.session();
+    let kite_session = session.generate_session(&request_token).await?;
+
+    // Fetch the user profile using the authenticated session
+    let profile: KiteApiResponse<UserProfile> = client.user().profile().await?;
+    println!("User: {:?}", profile.data);
+
+    Ok(())
+}
+```
+
 ## `manja` Features
 
 `manja` strives to improve the developer experience by providing better support in IDEs with features like auto-completion, type-inference, and inline documentation.

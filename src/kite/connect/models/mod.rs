@@ -21,6 +21,21 @@
 //!    .await?;
 //! ```
 //!
+//! A minimal example that does not depend on external services:
+//!
+//! ```rust
+//! use manja::KiteApiResponse;
+//!
+//! let response: KiteApiResponse<u32> = KiteApiResponse {
+//!     status: "success".to_string(),
+//!     data: Some(42),
+//!     message: None,
+//!     error_type: None,
+//! };
+//!
+//! assert_eq!(response.data, Some(42));
+//! ```
+//!
 use serde::{Deserialize, Serialize};
 
 /// Represents the default response structure used by Kite Connect API.
@@ -80,7 +95,7 @@ pub use market::{FullQuote, Instrument, LTPQuote, OHLCQuote, QuoteMode};
 ///
 mod margins;
 #[allow(unused_imports)]
-pub(crate) use margins::{
+pub use margins::{
     BasketMargin, Charges, OrderCharges, OrderChargesRequest, OrderMargin, OrderMarginRequest, GST,
     PNL,
 };

@@ -82,6 +82,10 @@ pub enum OrderStatus {
     #[serde(rename = "REJECTED")]
     Rejected,
 
+    /// The order has been modified after placement.
+    #[serde(rename = "MODIFIED")]
+    Modified,
+
     /// Order request has been received by the backend.
     #[serde(rename = "PUT ORDER REQ RECEIVED")]
     PutOrderReqReceived,
@@ -122,6 +126,7 @@ impl fmt::Display for OrderStatus {
             OrderStatus::Complete => "COMPLETE",
             OrderStatus::Cancelled => "CANCELLED",
             OrderStatus::Rejected => "REJECTED",
+            OrderStatus::Modified => "MODIFIED",
             OrderStatus::PutOrderReqReceived => "PUT ORDER REQ RECEIVED",
             OrderStatus::ValidationPending => "VALIDATION PENDING",
             OrderStatus::OpenPending => "OPEN PENDING",
@@ -190,6 +195,10 @@ pub enum ProductType {
     /// Margin Intraday Squareoff for futures and options.
     #[serde(rename = "MIS")]
     MarginIntradaySquareoff,
+
+    /// Margin Trading Facility.
+    #[serde(rename = "MTF")]
+    MarginTradingFacility,
 }
 
 impl fmt::Display for ProductType {
@@ -198,6 +207,7 @@ impl fmt::Display for ProductType {
             ProductType::CashAndCarry => "CNC",
             ProductType::Normal => "NRML",
             ProductType::MarginIntradaySquareoff => "MIS",
+            ProductType::MarginTradingFacility => "MTF",
         };
         write!(f, "{}", display_str)
     }

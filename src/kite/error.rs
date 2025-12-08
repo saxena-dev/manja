@@ -11,8 +11,8 @@
 use std::env::VarError;
 use std::fmt;
 
-use fantoccini::error::CmdError;
-use fantoccini::error::NewSessionError;
+#[cfg(feature = "webdriver-login")]
+use fantoccini::error::{CmdError, NewSessionError};
 use reqwest::header::InvalidHeaderValue;
 use serde::Deserialize;
 
@@ -41,16 +41,18 @@ pub enum ManjaError {
     #[error("Invalid header value: {0}")]
     InvalidHeaderValueError(#[from] InvalidHeaderValue),
 
+    #[cfg(feature = "webdriver-login")]
     /// Represents errors related to starting a new WebDriver session.
     #[error("WebDriver new session error: {0}")]
     WebDriverNewSessionError(#[from] NewSessionError),
 
+    #[cfg(feature = "webdriver-login")]
     /// Represents general WebDriver errors.
     #[error("WebDriver error: {0}")]
     WebDriverError(#[from] CmdError),
 
-    /// Represents errors that occur during JSON deserialization.
-    #[error("JSON deserialization error: {0}")]
+    /// Represents errors that occur during JSON deserialization of Kite API responses.
+    #[error("failed to deserialize Kite API response: {0}")]
     JSONDeserialize(#[from] serde_json::Error),
 
     /// Represents general I/O errors.
@@ -66,7 +68,7 @@ pub enum ManjaError {
     TotpError(String),
 
     /// Represents internal errors within the `manja` crate.
-    #[error("Internal `manja` error: {0}")]
+    #[error("internal manja error: {0}")]
     Internal(String),
 }
 
@@ -90,10 +92,25 @@ pub(crate) struct KiteApiError {
     pub error_type: KiteApiException,
 }
 
-// TODO: Fix this.
 impl fmt::Display for KiteApiError { 
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{:?}", self.message)
+        match &self.message {
+            Some(msg) if !msg.is_empty() => write!(
+                f,
+                "HTTP {} {} at {}: {}",
+                self.status_code,
+                self.error_type.as_str(),
+                self.endpoint,
+                msg
+            ),
+            _ => write!(
+                f,
+                "HTTP {} {} at {}",
+                self.status_code,
+                self.error_type.as_str(),
+                self.endpoint
+            ),
+        }
     }
 }
 
@@ -149,6 +166,24 @@ pub enum KiteApiException {
     /// This error indicates that the KiteConnect API has been updated with
     /// a new `error_type`.
     DeserializationException(String),
+}
+
+impl KiteApiException {
+    /// Returns the short identifier for this exception as it appears in Kite API responses.
+    pub fn as_str(&self) -> &str {
+        match self {
+            KiteApiException::TokenException => "TokenException",
+            KiteApiException::UserException => "UserException",
+            KiteApiException::OrderException => "OrderException",
+            KiteApiException::InputException => "InputException",
+            KiteApiException::MarginException => "MarginException",
+            KiteApiException::HoldingException => "HoldingException",
+            KiteApiException::NetworkException => "NetworkException",
+            KiteApiException::DataException => "DataException",
+            KiteApiException::GeneralException => "GeneralException",
+            KiteApiException::DeserializationException(_) => "DeserializationException",
+        }
+    }
 }
 
 

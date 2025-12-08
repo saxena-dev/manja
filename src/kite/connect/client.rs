@@ -34,14 +34,12 @@
 //!
 use core::future::Future;
 use std::time::Duration;
-
-use backoff::ExponentialBackoff;
 use secrecy::{ExposeSecret, Secret};
 use serde::{de::DeserializeOwned, Serialize};
 
 use crate::kite::{
     connect::{
-        api::{Charges, Margins, Market, Orders, Session, User},
+        api::{BackoffPolicy, Charges, Margins, Market, Orders, Session, User},
         config::Config,
         models::{KiteApiResponse, UserSession},
     },
@@ -62,7 +60,7 @@ use crate::kite::{
 pub struct HTTPClient {
     client: reqwest::Client,
     config: Config,
-    backoff: backoff::ExponentialBackoff,
+    backoff: BackoffPolicy,
     session: Option<UserSession>,
 }
 
@@ -111,7 +109,7 @@ impl HTTPClient {
 
     /// Exponential backoff for retrying [rate limited](https://kite.trade/docs/connect/v3/exceptions/#api-rate-limit) requests.
     ///
-    pub fn with_backoff(mut self, backoff: backoff::ExponentialBackoff) -> Self {
+    pub fn with_backoff(mut self, backoff: BackoffPolicy) -> Self {
         self.backoff = backoff;
         self
     }
@@ -190,7 +188,7 @@ impl HTTPClient {
 
     /// Make a GET request to {path} and return the response body.
     ///
-    pub(crate) async fn get_raw(&self, path: &str, backoff: &ExponentialBackoff) -> Result<String> {
+    pub(crate) async fn get_raw(&self, path: &str, backoff: &BackoffPolicy) -> Result<String> {
         let request_baker = || async {
             Ok(self
                 .client
@@ -208,7 +206,7 @@ impl HTTPClient {
     pub(crate) async fn get<Model>(
         &self,
         path: &str,
-        backoff: &ExponentialBackoff,
+        backoff: &BackoffPolicy,
     ) -> Result<KiteApiResponse<Model>>
     where
         Model: DeserializeOwned,
@@ -231,7 +229,7 @@ impl HTTPClient {
         &self,
         path: &str,
         query: &Q,
-        backoff: &ExponentialBackoff,
+        backoff: &BackoffPolicy,
     ) -> Result<KiteApiResponse<Model>>
     where
         Q: Serialize + ?Sized,
@@ -256,7 +254,7 @@ impl HTTPClient {
         &self,
         path: &str,
         data: Payload,
-        backoff: &ExponentialBackoff,
+        backoff: &BackoffPolicy,
     ) -> Result<KiteApiResponse<Model>>
     where
         Model: DeserializeOwned,
@@ -282,7 +280,7 @@ impl HTTPClient {
         &self,
         path: &str,
         form: &F,
-        backoff: &ExponentialBackoff,
+        backoff: &BackoffPolicy,
     ) -> Result<KiteApiResponse<Model>>
     where
         Model: DeserializeOwned,
@@ -307,7 +305,7 @@ impl HTTPClient {
         &self,
         path: &str,
         data: Payload,
-        backoff: &ExponentialBackoff,
+        backoff: &BackoffPolicy,
     ) -> Result<KiteApiResponse<Model>>
     where
         Model: DeserializeOwned,
@@ -332,7 +330,7 @@ impl HTTPClient {
         &self,
         path: &str,
         with_auth: bool,
-        backoff: &ExponentialBackoff,
+        backoff: &BackoffPolicy,
     ) -> Result<KiteApiResponse<Model>>
     where
         Model: DeserializeOwned,
@@ -368,7 +366,7 @@ impl HTTPClient {
     ///
     async fn execute<Model, RB, Fut>(
         &self,
-        backoff: &ExponentialBackoff,
+        backoff: &BackoffPolicy,
         request_baker: RB,
     ) -> Result<KiteApiResponse<Model>>
     where
@@ -388,7 +386,7 @@ impl HTTPClient {
     ///
     async fn execute_raw<RB, Fut>(
         &self,
-        backoff: &ExponentialBackoff,
+        backoff: &BackoffPolicy,
         request_baker: RB,
     ) -> Result<String>
     where
@@ -396,30 +394,89 @@ impl HTTPClient {
         Fut: Future<Output = Result<reqwest::Request>>,
     {
         let client = self.http_client();
-        // The magic sauce.
-        backoff::future::retry(backoff.clone(), || async {
-            // Bake a fresh request with rate limit
-            let request = request_baker().await.map_err(backoff::Error::Permanent)?;
+
+        #[cfg(feature = "backoff")]
+        {
+            use backoff::future::retry;
+
+            retry(backoff.clone(), || async {
+                let request = request_baker().await.map_err(backoff::Error::Permanent)?;
+                let method = request.method().to_string();
+                let path = request.url().path().to_string();
+                let span = tracing::info_span!("http.request", %method, %path);
+                let _enter = span.enter();
+
+                tracing::trace!("sending HTTP request");
+                let response = client
+                    .execute(request)
+                    .await
+                    .map_err(ManjaError::Reqwest)
+                    .map_err(backoff::Error::Permanent)?;
+                let status = response.status();
+                let json_response = response
+                    .text()
+                    .await
+                    .map_err(ManjaError::Reqwest)
+                    .map_err(backoff::Error::Permanent)?;
+                if !status.is_success() {
+                    let kite_response: KiteApiResponse<Option<String>> =
+                        serde_json::from_str(&json_response)
+                            .map_err(|e| map_deserialization_error(e, &json_response))
+                            .map_err(backoff::Error::Permanent)?;
+                    let kite_error = KiteApiError {
+                        endpoint: path.clone(),
+                        status_code: status.as_u16(),
+                        message: kite_response.message,
+                        error_type: kite_response
+                            .error_type
+                            .and_then(|error_type| Some(KiteApiException::from(error_type.as_str())))
+                            .unwrap(),
+                    };
+                    tracing::error!(
+                        status = status.as_u16(),
+                        error_type = %kite_error.error_type.as_str(),
+                        "Kite API error at {}",
+                        path
+                    );
+                    if status.as_u16() == 429 {
+                        tracing::warn!("Rate limited at endpoint: {}", path);
+                        return Err(backoff::Error::transient(ManjaError::KiteApiError(
+                            kite_error,
+                        )));
+                    }
+                    return Err(backoff::Error::Permanent(ManjaError::KiteApiError(
+                        kite_error,
+                    )));
+                }
+
+                tracing::debug!(status = status.as_u16(), "HTTP request succeeded");
+                Ok(json_response)
+            })
+            .await
+        }
+
+        #[cfg(not(feature = "backoff"))]
+        {
+            let request = request_baker().await?;
+            let method = request.method().to_string();
             let path = request.url().path().to_string();
-            // Execute the HTTP request against some KiteConnect API endpoint
+            let span = tracing::info_span!("http.request", %method, %path);
+            let _enter = span.enter();
+
+            tracing::trace!("sending HTTP request");
             let response = client
                 .execute(request)
                 .await
-                .map_err(ManjaError::Reqwest)
-                .map_err(backoff::Error::Permanent)?;
+                .map_err(ManjaError::Reqwest)?;
             let status = response.status();
-            // Attempt to fetch the string (JSON) response
             let json_response = response
                 .text()
                 .await
-                .map_err(ManjaError::Reqwest)
-                .map_err(backoff::Error::Permanent)?;
+                .map_err(ManjaError::Reqwest)?;
             if !status.is_success() {
-                // Attempt to JSON deserialize the KiteConnect API response
                 let kite_response: KiteApiResponse<Option<String>> =
                     serde_json::from_str(&json_response)
-                        .map_err(|e| map_deserialization_error(e, &json_response))
-                        .map_err(backoff::Error::Permanent)?;
+                        .map_err(|e| map_deserialization_error(e, &json_response))?;
                 let kite_error = KiteApiError {
                     endpoint: path.clone(),
                     status_code: status.as_u16(),
@@ -427,21 +484,23 @@ impl HTTPClient {
                     error_type: kite_response
                         .error_type
                         .and_then(|error_type| Some(KiteApiException::from(error_type.as_str())))
-                        // This unwrap is safe since From<&str> is implemented for `KiteApiException`.
                         .unwrap(),
                 };
-                // Check if rate limit was exceeded on the endpoint
+                tracing::error!(
+                    status = status.as_u16(),
+                    error_type = %kite_error.error_type.as_str(),
+                    "Kite API error at {}",
+                    path
+                );
                 if status.as_u16() == 429 {
                     tracing::warn!("Rate limited at endpoint: {}", path);
-                    return Err(backoff::Error::transient(ManjaError::KiteApiError(
-                        kite_error,
-                    )));
                 }
+                return Err(ManjaError::KiteApiError(kite_error));
             }
 
+            tracing::debug!(status = status.as_u16(), "HTTP request succeeded");
             Ok(json_response)
-        })
-        .await
+        }
     }
 }
 
@@ -452,12 +511,20 @@ pub mod test_utils {
     use super::*;
 
     use mockito::{Mock, ServerGuard};
+    use crate::kite::connect::config::{Config, KITECONNECT_API_LOGIN, KITECONNECT_API_REDIRECT};
+    use crate::kite::connect::credentials::KiteCredentials;
 
     pub fn read_to_object<M>(path: &str) -> Result<M>
     where
         M: DeserializeOwned,
     {
-        let contents = std::fs::read_to_string(path).unwrap();
+        // Resolve fixture paths relative to the crate root so tests behave
+        // consistently regardless of the current working directory.
+        let root = std::env::var("CARGO_MANIFEST_DIR").unwrap_or_else(|_| ".".to_string());
+        let full_path = std::path::Path::new(&root).join(path);
+        let contents = std::fs::read_to_string(&full_path).unwrap_or_else(|err| {
+            panic!("failed to read fixture at {}: {}", full_path.display(), err)
+        });
         let obj: KiteApiResponse<M> = serde_json::from_str(&contents)?;
         obj.data
             .ok_or(ManjaError::Internal(format!("obj not found")))
@@ -473,7 +540,12 @@ pub mod test_utils {
     ) -> ServerGuard {
         let mut mocks = Vec::new();
         for ((method, api_endpoint), response_path) in mock_map {
-            let response_json = std::fs::read_to_string(response_path).unwrap();
+            let root =
+                std::env::var("CARGO_MANIFEST_DIR").unwrap_or_else(|_| ".".to_string());
+            let full_path = std::path::Path::new(&root).join(response_path);
+            let response_json = std::fs::read_to_string(&full_path).unwrap_or_else(|err| {
+                panic!("failed to read fixture at {}: {}", full_path.display(), err)
+            });
             let m = server
                 .mock(method, api_endpoint)
                 .with_status(200)
@@ -488,13 +560,28 @@ pub mod test_utils {
 
     pub async fn get_manja_test_client() -> (ServerGuard, HTTPClient) {
         let server = mockito::Server::new_async().await;
-        // Load env vars
-        dotenv::dotenv().ok();
-        // Patch the API base url on HTTPClient for testing
-        std::env::set_var("KITECONNECT_API_BASE", &server.url());
+        // Load env vars (if enabled via feature)
+        #[cfg(feature = "dotenv-config")]
+        {
+            dotenv::dotenv().ok();
+        }
+        // Build a dedicated Config that points HTTPClient at the mock server.
+        let credentials = KiteCredentials::new(
+            "TEST_API_KEY",
+            "TEST_API_SECRET",
+            "TEST_USER_ID",
+            "TEST_PASSWORD",
+            "TEST_TOTP",
+        );
+        let config = Config::from_parts(
+            server.url(),
+            KITECONNECT_API_LOGIN.to_string(),
+            KITECONNECT_API_REDIRECT.to_string(),
+            credentials,
+        );
         let session =
             read_to_object::<UserSession>("./kiteconnect-mocks/generate_session.json").unwrap();
 
-        (server, HTTPClient::default().with_user_session(session))
+        (server, HTTPClient::with_config(config).with_user_session(session))
     }
 }

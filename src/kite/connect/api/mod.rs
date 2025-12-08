@@ -6,8 +6,21 @@
 //! Kite Connect API, making it easier to interact with different aspects of the
 //! trading platform.
 //!
-use backoff::{ExponentialBackoff, ExponentialBackoffBuilder};
 use std::time::Duration;
+
+#[cfg(feature = "backoff")]
+use backoff::{ExponentialBackoff, ExponentialBackoffBuilder};
+
+/// Backoff policy type used by API groups.
+///
+/// When the `backoff` feature is enabled, this is a real exponential backoff
+/// policy. When the feature is disabled, it becomes a unit type and callers
+/// should treat it as a no-backoff placeholder.
+#[cfg(feature = "backoff")]
+pub type BackoffPolicy = ExponentialBackoff;
+
+#[cfg(not(feature = "backoff"))]
+pub type BackoffPolicy = ();
 
 // Manages the `/session/` API group, including authentication and session management.
 mod session;
@@ -38,7 +51,7 @@ pub use market::Market;
 mod margins;
 pub use margins::{Charges, Margins};
 
-/// Creates an ExponentialBackoff policy with a specified rate limit.
+/// Creates a backoff policy with a specified rate limit.
 ///
 /// This function sets up an exponential backoff policy to control the rate of
 /// API requests, ensuring compliance with rate limits by introducing a minimum
@@ -50,14 +63,15 @@ pub use margins::{Charges, Margins};
 ///
 /// # Returns
 ///
-/// An `ExponentialBackoff` instance configured with the specified rate limit.
+/// A `BackoffPolicy` instance configured with the specified rate limit.
 ///
 /// # Example
 ///
 /// ```ignore
 /// let backoff_policy = create_backoff_policy(10); // 10 requests per second
 /// ```
-fn create_backoff_policy(rate_limit_per_second: u64) -> ExponentialBackoff {
+#[cfg(feature = "backoff")]
+fn create_backoff_policy(rate_limit_per_second: u64) -> BackoffPolicy {
     // Calculate the minimum duration between requests
     let min_interval = Duration::from_secs_f64(1.0 / rate_limit_per_second as f64);
 
@@ -67,4 +81,9 @@ fn create_backoff_policy(rate_limit_per_second: u64) -> ExponentialBackoff {
         .with_max_interval(min_interval) // Ensure max interval does not exceed rate limit
         .with_max_elapsed_time(None) // No maximum elapsed time for retries
         .build()
+}
+
+#[cfg(not(feature = "backoff"))]
+fn create_backoff_policy(_rate_limit_per_second: u64) -> BackoffPolicy {
+    ()
 }

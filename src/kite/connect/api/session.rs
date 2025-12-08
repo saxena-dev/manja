@@ -19,12 +19,10 @@
 use std::collections::HashMap;
 use std::future::Future;
 use std::pin::Pin;
-
-use backoff::ExponentialBackoff;
 use secrecy::ExposeSecret;
 
 use crate::kite::connect::{
-    api::create_backoff_policy,
+    api::{create_backoff_policy, BackoffPolicy},
     client::HTTPClient,
     models::{KiteApiResponse, UserSession},
     utils::create_checksum,
@@ -44,7 +42,7 @@ pub struct Session<'c> {
     /// and storing a `UserSession` object after a successful login flow.
     pub client: &'c mut HTTPClient,
     /// Backoff policy for retrying API requests.
-    backoff: ExponentialBackoff,
+    backoff: BackoffPolicy,
 }
 
 impl<'c> KiteLoginFlow for Session<'c> {
@@ -115,12 +113,12 @@ impl<'c> Session<'c> {
     ///
     /// # Arguments
     ///
-    /// * `backoff` - An `ExponentialBackoff` instance specifying the backoff policy.
+    /// * `backoff` - A `BackoffPolicy` instance specifying the backoff policy.
     ///
     /// # Returns
     ///
     /// The `User` instance with the updated backoff policy.
-    pub fn with_backoff(mut self, backoff: ExponentialBackoff) -> Self {
+    pub fn with_backoff(mut self, backoff: BackoffPolicy) -> Self {
         self.backoff = backoff;
         self
     }
@@ -208,6 +206,122 @@ impl<'c> Session<'c> {
                 Ok(kite_response)
             }
             Err(err) => Err(err),
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::HashMap;
+
+    use mockito::ServerGuard;
+    use tokio::join;
+
+    use crate::kite::connect::client::test_utils::{
+        add_mocks, get_manja_test_client, read_to_object, APIEndpoint, HTTPMethod, TestResponse,
+    };
+    use crate::kite::connect::client::HTTPClient;
+    use crate::kite::connect::config::{Config, KITECONNECT_API_LOGIN, KITECONNECT_API_REDIRECT};
+    use crate::kite::connect::credentials::KiteCredentials;
+    use crate::kite::connect::models::UserSession;
+    use crate::kite::error::{KiteApiException, ManjaError};
+    use crate::test_support::init_tracing;
+
+    use super::*;
+
+    fn mock_map() -> HashMap<(HTTPMethod, APIEndpoint), TestResponse> {
+        let mut mmap = HashMap::new();
+        mmap.insert(
+            ("POST", "/session/token"),
+            "./kiteconnect-mocks/generate_session.json",
+        );
+        mmap
+    }
+
+    #[tokio::test]
+    async fn test_generate_session_success() {
+        init_tracing();
+        let (server, mut manja_client) = get_manja_test_client().await;
+        let server_ptr: *const ServerGuard = &server;
+        log::debug!("Server @address: {:p}", server_ptr);
+        let (_server,) = join!(add_mocks(server, mock_map()));
+
+        let mut session_api = manja_client.session();
+        let response = session_api
+            .generate_session("dummy_request_token")
+            .await
+            .unwrap();
+        let expected =
+            read_to_object::<UserSession>("./kiteconnect-mocks/generate_session.json").unwrap();
+
+        let session = response.data.expect("expected session data");
+        assert_eq!(session.user_id, expected.user_id);
+        assert!(manja_client.user_session().is_some());
+    }
+
+    #[test]
+    fn test_delete_session_success_fixture_parses() {
+        let root =
+            std::env::var("CARGO_MANIFEST_DIR").unwrap_or_else(|_| ".".to_string());
+        let path = std::path::Path::new(&root)
+            .join("kiteconnect-mocks/session_logout.json");
+        let json = std::fs::read_to_string(&path)
+            .unwrap_or_else(|err| panic!("failed to read fixture at {}: {}", path.display(), err));
+        let response: KiteApiResponse<bool> = serde_json::from_str(&json).unwrap();
+        assert_eq!(response.status, "success");
+        assert_eq!(response.data, Some(true));
+    }
+
+    #[tokio::test]
+    async fn test_generate_session_token_exception_error() {
+        init_tracing();
+        let mut server = mockito::Server::new_async().await;
+        let credentials = KiteCredentials::new(
+            "TEST_API_KEY",
+            "TEST_API_SECRET",
+            "TEST_USER_ID",
+            "TEST_PASSWORD",
+            "TEST_TOTP",
+        );
+        let config = Config::from_parts(
+            server.url(),
+            KITECONNECT_API_LOGIN.to_string(),
+            KITECONNECT_API_REDIRECT.to_string(),
+            credentials,
+        );
+        let mut client = HTTPClient::with_config(config);
+
+        let _m = server
+            .mock("POST", "/session/token")
+            .with_status(403)
+            .with_header("content-type", "application/json")
+            .with_body(
+                r#"{
+                    "status": "error",
+                    "data": null,
+                    "message": "Token is invalid or has expired",
+                    "error_type": "TokenException"
+                }"#,
+            )
+            .create_async()
+            .await;
+
+        let mut session_api = Session::new(&mut client);
+        let err = session_api
+            .generate_session("invalid_request_token")
+            .await
+            .expect_err("expected token exception error");
+
+        match err {
+            ManjaError::KiteApiError(api_err) => {
+                assert_eq!(api_err.status_code, 403);
+                assert!(matches!(
+                    api_err.error_type,
+                    KiteApiException::TokenException
+                ));
+                assert_eq!(api_err.error_type.as_str(), "TokenException");
+            }
+            other => panic!("unexpected error variant: {:?}", other),
         }
     }
 }

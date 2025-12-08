@@ -6,6 +6,11 @@
 //!
 pub mod connect;
 pub mod error;
+
+#[cfg(feature = "webdriver-login")]
 pub mod login;
+
+#[cfg(feature = "websocket")]
 pub mod ticker;
+
 pub mod traits;
