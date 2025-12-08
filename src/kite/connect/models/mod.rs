@@ -80,7 +80,7 @@ pub use market::{FullQuote, Instrument, LTPQuote, OHLCQuote, QuoteMode};
 ///
 mod margins;
 #[allow(unused_imports)]
-pub(crate) use margins::{
+pub use margins::{
     BasketMargin, Charges, OrderCharges, OrderChargesRequest, OrderMargin, OrderMarginRequest, GST,
     PNL,
 };

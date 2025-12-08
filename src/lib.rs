@@ -111,4 +111,16 @@ mod client;
 
 pub use client::ManjaClient;
 
+// Core error types and result alias.
+pub use crate::kite::error::{KiteApiException, ManjaError, Result};
+
+// Primary HTTP models and enums.
+pub use crate::kite::connect::models::{
+    Auction, Available, BasketMargin, Charges, Exchange, FullQuote, GST, Holding, Instrument,
+    KiteApiResponse, LTPQuote, OHLCQuote, Order, OrderCharges, OrderChargesRequest, OrderMargin,
+    OrderMarginRequest, OrderReceipt, OrderStatus, OrderType, OrderValidity, OrderVariety, PNL,
+    Position, PositionConversionRequest, ProductType, QuoteMode, Segment, SegmentKind, Trade,
+    TransactionType, UserMargins, UserProfile, UserSession, Utilised,
+};
+
 pub mod kite;
