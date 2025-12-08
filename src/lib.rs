@@ -107,4 +107,8 @@
 #![warn(rust_2018_idioms)]
 #![allow(private_interfaces, unused)]
 
+mod client;
+
+pub use client::ManjaClient;
+
 pub mod kite;
