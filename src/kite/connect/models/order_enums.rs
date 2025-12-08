@@ -195,6 +195,10 @@ pub enum ProductType {
     /// Margin Intraday Squareoff for futures and options.
     #[serde(rename = "MIS")]
     MarginIntradaySquareoff,
+
+    /// Margin Trading Facility.
+    #[serde(rename = "MTF")]
+    MarginTradingFacility,
 }
 
 impl fmt::Display for ProductType {
@@ -203,6 +207,7 @@ impl fmt::Display for ProductType {
             ProductType::CashAndCarry => "CNC",
             ProductType::Normal => "NRML",
             ProductType::MarginIntradaySquareoff => "MIS",
+            ProductType::MarginTradingFacility => "MTF",
         };
         write!(f, "{}", display_str)
     }
