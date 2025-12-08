@@ -1,6 +1,6 @@
 [package]
 name = "manja"
-version = "0.2.0"
+version = "0.3.0"
 edition = "2021"
 authors = ["Paresh Saxena <pareshsaxena@gmail.com>"]
 license = "MIT"
@@ -9,14 +9,17 @@ repository = "https://github.com/saxena-dev/manja"
 readme = "README.md"
 documentation = "https://docs.rs/manja"
 exclude = [
+    # See .gitignore for development-only artifacts; this list focuses on
+    # large or non-source assets that should not be packaged on crates.io.
     "Cargo.lock",
-    "tests/*",
-    "examples/*",
-    "*.md",
-    ".*",
+    ".gitignore",
+    ".github/*",
     ".temp/*",
-    "kiteconnect-mocks",
-    "*.py"
+    ".codex/*",
+    ".agent/*",
+    ".data/*",
+    "data/*",
+    "kiteconnect-mocks/*",
 ]
 
 [dependencies]
