@@ -19,12 +19,10 @@
 use std::collections::HashMap;
 use std::future::Future;
 use std::pin::Pin;
-
-use backoff::ExponentialBackoff;
 use secrecy::ExposeSecret;
 
 use crate::kite::connect::{
-    api::create_backoff_policy,
+    api::{create_backoff_policy, BackoffPolicy},
     client::HTTPClient,
     models::{KiteApiResponse, UserSession},
     utils::create_checksum,
@@ -44,7 +42,7 @@ pub struct Session<'c> {
     /// and storing a `UserSession` object after a successful login flow.
     pub client: &'c mut HTTPClient,
     /// Backoff policy for retrying API requests.
-    backoff: ExponentialBackoff,
+    backoff: BackoffPolicy,
 }
 
 impl<'c> KiteLoginFlow for Session<'c> {
@@ -115,12 +113,12 @@ impl<'c> Session<'c> {
     ///
     /// # Arguments
     ///
-    /// * `backoff` - An `ExponentialBackoff` instance specifying the backoff policy.
+    /// * `backoff` - A `BackoffPolicy` instance specifying the backoff policy.
     ///
     /// # Returns
     ///
     /// The `User` instance with the updated backoff policy.
-    pub fn with_backoff(mut self, backoff: ExponentialBackoff) -> Self {
+    pub fn with_backoff(mut self, backoff: BackoffPolicy) -> Self {
         self.backoff = backoff;
         self
     }

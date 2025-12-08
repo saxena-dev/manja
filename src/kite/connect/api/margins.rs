@@ -6,7 +6,7 @@
 //!
 //! Refer to the official API [documentation](https://kite.trade/docs/connect/v3/market-quotes/).
 //!
-use crate::kite::connect::api::create_backoff_policy;
+use crate::kite::connect::api::{create_backoff_policy, BackoffPolicy};
 use crate::kite::connect::{
     client::HTTPClient,
     models::{
@@ -16,8 +16,6 @@ use crate::kite::connect::{
 };
 use crate::kite::error::Result;
 
-use backoff::ExponentialBackoff;
-
 /// Margin calculation APIs lets you calculate `span`, `exposure`, `option premium`,
 /// `additional`, `bo`, `cash`, `var`, `pnl` values for a list of orders.
 ///
@@ -25,7 +23,7 @@ pub struct Margins<'c> {
     /// Reference to the HTTP client used for making API requests.
     pub client: &'c HTTPClient,
     /// Backoff policy for retrying API requests.
-    backoff: ExponentialBackoff,
+    backoff: BackoffPolicy,
 }
 
 impl<'c> Margins<'c> {
@@ -51,13 +49,13 @@ impl<'c> Margins<'c> {
     ///
     /// # Arguments
     ///
-    /// * `backoff` - An `ExponentialBackoff` instance specifying the backoff policy.
+    /// * `backoff` - A `BackoffPolicy` instance specifying the backoff policy.
     ///
     /// # Returns
     ///
     /// The `Margins` instance with the updated backoff policy.
     ///
-    pub fn with_backoff(mut self, backoff: ExponentialBackoff) -> Self {
+    pub fn with_backoff(mut self, backoff: BackoffPolicy) -> Self {
         self.backoff = backoff;
         self
     }
@@ -131,7 +129,7 @@ pub struct Charges<'c> {
     /// Reference to the HTTP client used for making API requests.
     pub client: &'c HTTPClient,
     /// Backoff policy for retrying API requests.
-    backoff: ExponentialBackoff,
+    backoff: BackoffPolicy,
 }
 
 impl<'c> Charges<'c> {
@@ -157,13 +155,13 @@ impl<'c> Charges<'c> {
     ///
     /// # Arguments
     ///
-    /// * `backoff` - An `ExponentialBackoff` instance specifying the backoff policy.
+    /// * `backoff` - A `BackoffPolicy` instance specifying the backoff policy.
     ///
     /// # Returns
     ///
     /// The `Charges` instance with the updated backoff policy.
     ///
-    pub fn with_backoff(mut self, backoff: ExponentialBackoff) -> Self {
+    pub fn with_backoff(mut self, backoff: BackoffPolicy) -> Self {
         self.backoff = backoff;
         self
     }

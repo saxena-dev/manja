@@ -16,9 +16,7 @@
 //!
 //! Refer to the official [API documentation](https://kite.trade/docs/connect/v3/orders/).
 //!
-use backoff::ExponentialBackoff;
-
-use crate::kite::connect::api::create_backoff_policy;
+use crate::kite::connect::api::{create_backoff_policy, BackoffPolicy};
 use crate::kite::connect::{
     client::HTTPClient,
     models::{KiteApiResponse, Order, OrderReceipt, Trade},
@@ -32,7 +30,7 @@ pub struct Orders<'c> {
     /// Reference to the HTTP client used for making API requests.
     pub client: &'c HTTPClient,
     /// Backoff policy for retrying API requests.
-    backoff: ExponentialBackoff,
+    backoff: BackoffPolicy,
 }
 
 impl<'c> Orders<'c> {
@@ -58,13 +56,13 @@ impl<'c> Orders<'c> {
     ///
     /// # Arguments
     ///
-    /// * `backoff` - An `ExponentialBackoff` instance specifying the backoff policy.
+    /// * `backoff` - A `BackoffPolicy` instance specifying the backoff policy.
     ///
     /// # Returns
     ///
     /// The `Orders` instance with the updated backoff policy.
     ///
-    pub fn with_backoff(mut self, backoff: ExponentialBackoff) -> Self {
+    pub fn with_backoff(mut self, backoff: BackoffPolicy) -> Self {
         self.backoff = backoff;
         self
     }

@@ -11,8 +11,8 @@
 use std::env::VarError;
 use std::fmt;
 
-use fantoccini::error::CmdError;
-use fantoccini::error::NewSessionError;
+#[cfg(feature = "webdriver-login")]
+use fantoccini::error::{CmdError, NewSessionError};
 use reqwest::header::InvalidHeaderValue;
 use serde::Deserialize;
 
@@ -41,10 +41,12 @@ pub enum ManjaError {
     #[error("Invalid header value: {0}")]
     InvalidHeaderValueError(#[from] InvalidHeaderValue),
 
+    #[cfg(feature = "webdriver-login")]
     /// Represents errors related to starting a new WebDriver session.
     #[error("WebDriver new session error: {0}")]
     WebDriverNewSessionError(#[from] NewSessionError),
 
+    #[cfg(feature = "webdriver-login")]
     /// Represents general WebDriver errors.
     #[error("WebDriver error: {0}")]
     WebDriverError(#[from] CmdError),
