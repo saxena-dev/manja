@@ -21,7 +21,9 @@ pub mod utils;
 #[doc(hidden)]
 pub mod test_utils;
 
-pub use crate::api::{BackoffPolicy, Charges, Margins, Market, Orders, Portfolio, Session, User};
+pub use crate::api::{
+    BackoffPolicy, Charges, Gtt, Margins, Market, Orders, Portfolio, Session, User,
+};
 pub use crate::client::HTTPClient;
 pub use crate::config::Config;
 pub use crate::credentials::KiteCredentials;

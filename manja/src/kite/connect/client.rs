@@ -123,6 +123,11 @@ impl HTTPClient {
         Charges::new(self)
     }
 
+    /// To call [Gtt] related APIs using this client.
+    pub fn gtt(&mut self) -> crate::kite::connect::api::Gtt<'_> {
+        crate::kite::connect::api::Gtt::new(self)
+    }
+
     // --- [ HTTP verb functions ] ---
 
     /// Make a GET request to {path} and return the response body.

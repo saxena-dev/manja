@@ -103,3 +103,11 @@ pub use margins::{
 /// Enumerations for exchanges supported by Kite Connect API.
 mod exchange;
 pub use exchange::Exchange;
+
+/// Models for GTT (Good Till Triggered) orders.
+mod gtt;
+#[allow(unused_imports)]
+pub use gtt::{
+    GttCondition, GttOrderExecutionResult, GttOrderParams, GttOrderResult, GttStatus, GttTrigger,
+    GttTriggerId, GttTriggerRequest, GttType,
+};

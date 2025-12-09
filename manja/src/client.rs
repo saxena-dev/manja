@@ -1,5 +1,5 @@
 use crate::kite::connect::{
-    api::{Charges, Market, Margins, Orders, Portfolio, Session, User},
+    api::{Charges, Gtt, Market, Margins, Orders, Portfolio, Session, User},
     client::HTTPClient,
     config::Config,
 };
@@ -81,5 +81,10 @@ impl ManjaClient {
     /// Access charges-related HTTP APIs.
     pub fn charges(&mut self) -> Charges<'_> {
         self.http.charges()
+    }
+
+    /// Access GTT-related HTTP APIs.
+    pub fn gtt(&mut self) -> Gtt<'_> {
+        self.http.gtt()
     }
 }

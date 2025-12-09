@@ -51,6 +51,10 @@ pub use market::Market;
 mod margins;
 pub use margins::{Charges, Margins};
 
+// Manages the `/gtt/` API group for Good Till Triggered orders.
+mod gtt;
+pub use gtt::Gtt;
+
 /// Creates a backoff policy with a specified rate limit.
 ///
 /// This function sets up an exponential backoff policy to control the rate of

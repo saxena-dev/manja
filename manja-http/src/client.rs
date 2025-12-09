@@ -12,7 +12,7 @@ use std::time::Duration;
 use secrecy::{ExposeSecret, Secret};
 use serde::{de::DeserializeOwned, Serialize};
 
-use crate::api::{BackoffPolicy, Charges, Margins, Market, Orders, Session, User};
+use crate::api::{BackoffPolicy, Charges, Gtt, Margins, Market, Orders, Session, User};
 use crate::config::Config;
 use crate::error::{map_deserialization_error, Error, Result};
 use manja_core::error::{KiteApiError, KiteApiException};
@@ -132,6 +132,11 @@ impl HTTPClient {
     /// To call [Charges] related APIs using this client.
     pub fn charges(&mut self) -> Charges<'_> {
         Charges::new(self)
+    }
+
+    /// To call [Gtt] related APIs using this client.
+    pub fn gtt(&mut self) -> Gtt<'_> {
+        Gtt::new(self)
     }
 
     // --- [ HTTP verb functions ] ---
