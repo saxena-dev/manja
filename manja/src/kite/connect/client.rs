@@ -1,39 +1,16 @@
 //! Asynchronous HTTP client.
 //!
 //! This module provides an asynchronous HTTP client for interacting with the
-//! KiteConnect API. The `HTTPClient` struct encapsulates a `reqwest::Client`
-//! and includes methods for making HTTP requests to various KiteConnect endpoints.
-//! The client supports retry mechanisms with exponential backoff and handles
-//! user session management.
+//! Kite Connect API. The `HTTPClient` struct is a thin facade over the
+//! `manja-http` crate’s `HTTPClient`, preserving the original `manja` error
+//! types and configuration surface while delegating actual HTTP behavior to
+//! the shared transport crate.
 //!
-//! # Features
-//!
-//! - **Session Management**: Manages user sessions, including storing and retrieving
-//!     session tokens.
-//! - **Request Handling**: Provides methods for making `GET`, `POST`, `POST form`, and
-//!     `DELETE` requests.
-//! - **Configurable**: Allows configuration via the `Config` struct, which can
-//!     be loaded from environment variables or passed directly.
-//!
-//! # Examples
-//!
-//! ```ignore
-//! use crate::kite::connect::client::HTTPClient;
-//! use crate::kite::connect::config::Config;
-//!
-//! // Create a new client with default settings
-//! let client = HTTPClient::default();
-//!
-//! // Create a new client with a custom configuration
-//! let config = Config::default();
-//! let client = HTTPClient::with_config(config);
-//! ```
-//!
-//! For more information on using Kite Connect API, refer to the official
-//! [documentation](https://kite.trade/docs/connect/v3/).
-//!
+//! Existing callers should continue to use `crate::kite::connect::client::HTTPClient`
+//! and `crate::kite::error::ManjaError` as before.
+
 use core::future::Future;
-use std::time::Duration;
+
 use secrecy::{ExposeSecret, Secret};
 use serde::{de::DeserializeOwned, Serialize};
 
@@ -41,146 +18,107 @@ use crate::kite::{
     connect::{
         api::{BackoffPolicy, Charges, Margins, Market, Orders, Session, User},
         config::Config,
+        credentials::KiteCredentials,
         models::{KiteApiResponse, UserSession},
     },
     error::{map_deserialization_error, KiteApiException, ManjaError, Result},
     traits::KiteConfig,
 };
 use manja_core::error::KiteApiError;
+use manja_core::traits::CoreApiEndpoints;
+use manja_http::error::{Error as HttpError, Result as HttpResult};
 
 /// An asynchronous Kite Connect client to make HTTP requests with.
 ///
-/// `Client` is a wrapper over `reqwest::Client` which holds a connection
-/// pool internally. It is advisable to create one and **reuse** it.
-///
-/// You do **not** have to wrap `KiteConnectClient` in an [`std::rc::Rc`] or [`std::sync::Arc`] to
-/// **reuse** it because the `reqwest::Client` used internally already uses an
-/// [`std::sync::Arc`].
-///
+/// This type preserves the existing `manja` facade while internally delegating
+/// to `manja-http::HTTPClient` for all HTTP behavior.
 #[derive(Clone)]
 pub struct HTTPClient {
-    client: reqwest::Client,
+    inner: manja_http::HTTPClient,
     config: Config,
-    backoff: BackoffPolicy,
-    session: Option<UserSession>,
 }
 
 impl Default for HTTPClient {
     fn default() -> Self {
-        Self {
-            // Default timeout for I/O operations: 10 seconds
-            client: Self::default_reqwest_client(10),
-            // Default config parameters are loaded from environment variables
-            config: Config::default(),
-            backoff: Default::default(),
-            session: None,
-        }
+        let inner = manja_http::HTTPClient::default();
+        let config = config_from_http_config(inner.http_config());
+        Self { inner, config }
     }
 }
 
 impl HTTPClient {
-    // Default `reqwest::Client` with timeout for I/O operations
-    fn default_reqwest_client(timeout_seconds: u64) -> reqwest::Client {
-        reqwest::ClientBuilder::new()
-            .timeout(Duration::from_secs(timeout_seconds))
-            .build()
-            // This should not fail. Fallback to default `reqwest::Client`.
-            .unwrap_or_else(|_| reqwest::Client::new())
-    }
-
-    fn get_access_token(&self) -> Option<Secret<String>> {
-        // Clone and return the access token, if available
-        match self.session {
-            Some(ref user_session) => Some((user_session.access_token).clone()),
-            None => None,
-        }
-    }
-
-    /// Create a default HTTP client with config.
+    /// Create a HTTP client with explicit config.
     ///
+    /// This preserves the existing `Config` type in `manja` by converting it
+    /// into the transport crate’s configuration.
     pub fn with_config(config: Config) -> Self {
+        let http_config = http_config_from_manja_config(&config);
         Self {
-            // Default timeout for I/O operations: 10 seconds
-            client: Self::default_reqwest_client(10),
+            inner: manja_http::HTTPClient::with_config(http_config),
             config,
-            backoff: Default::default(),
-            session: None,
         }
     }
 
-    /// Exponential backoff for retrying [rate limited](https://kite.trade/docs/connect/v3/exceptions/#api-rate-limit) requests.
-    ///
+    /// Exponential backoff for retrying rate limited requests.
     pub fn with_backoff(mut self, backoff: BackoffPolicy) -> Self {
-        self.backoff = backoff;
+        self.inner = self.inner.with_backoff(backoff);
         self
     }
 
     /// Add `UserSession` to the `HTTPClient`.
-    ///
     pub fn with_user_session(mut self, user_session: UserSession) -> Self {
-        self.session = Some(user_session);
+        self.inner = self.inner.with_user_session(user_session);
         self
     }
 
-    /// Set `UserSession` to the `HTTPClient`.
-    ///
+    /// Set `UserSession` on the `HTTPClient`.
     pub fn set_user_session(&mut self, user_session: Option<UserSession>) {
-        self.session = user_session;
-        ()
+        self.inner.set_user_session(user_session);
     }
 
     /// User session, if it exists.
-    ///
     pub fn user_session(&self) -> Option<&UserSession> {
-        self.session.as_ref()
+        self.inner.user_session()
     }
 
-    /// HTTP configurations and Kite user credentials.
-    ///
+    /// HTTP configuration and Kite user credentials.
     pub fn http_config(&self) -> &Config {
         &self.config
     }
 
     /// Reqwest HTTP Client.
-    ///
     pub fn http_client(&self) -> &reqwest::Client {
-        &self.client
+        self.inner.http_client()
     }
 
     // --- [ API Groups ] ---
 
     /// To call [User] related APIs using this client.
-    ///
     pub fn user(&self) -> User<'_> {
         User::new(self)
     }
 
     /// To call [Session] related APIs using this client.
-    ///
     pub fn session(&mut self) -> Session<'_> {
         Session::new(self)
     }
 
     /// To call [Orders] related APIs using this client.
-    ///
     pub fn orders(&mut self) -> Orders<'_> {
         Orders::new(self)
     }
 
     /// To call [Market] related APIs using this client.
-    ///
     pub fn market(&mut self) -> Market<'_> {
         Market::new(self)
     }
 
     /// To call [Margins] related APIs using this client.
-    ///
     pub fn margins(&mut self) -> Margins<'_> {
         Margins::new(self)
     }
 
     /// To call [Charges] related APIs using this client.
-    ///
     pub fn charges(&mut self) -> Charges<'_> {
         Charges::new(self)
     }
@@ -188,22 +126,11 @@ impl HTTPClient {
     // --- [ HTTP verb functions ] ---
 
     /// Make a GET request to {path} and return the response body.
-    ///
     pub(crate) async fn get_raw(&self, path: &str, backoff: &BackoffPolicy) -> Result<String> {
-        let request_baker = || async {
-            Ok(self
-                .client
-                .get(self.config.url(path))
-                // Fetch access token for protected endpoints, if available
-                .headers(self.config.headers(self.get_access_token()))
-                .build()?)
-        };
-
-        self.execute_raw(backoff, request_baker).await
+        self.map_http_result(self.inner.get_raw(path, backoff).await, |s| s)
     }
 
     /// Make a GET request to {path} and deserialize the response body.
-    ///
     pub(crate) async fn get<Model>(
         &self,
         path: &str,
@@ -212,20 +139,10 @@ impl HTTPClient {
     where
         Model: DeserializeOwned,
     {
-        let request_baker = || async {
-            Ok(self
-                .client
-                .get(self.config.url(path))
-                // Fetch access token for protected endpoints, if available
-                .headers(self.config.headers(self.get_access_token()))
-                .build()?)
-        };
-
-        self.execute(backoff, request_baker).await
+        self.map_http_result(self.inner.get(path, backoff).await, |v| v)
     }
 
-    /// Make a GET request to {path} with given Query and deserialize the response body.
-    ///
+    /// Make a GET request to {path} with given query and deserialize the response body.
     pub(crate) async fn get_with_query<Q, Model>(
         &self,
         path: &str,
@@ -236,21 +153,13 @@ impl HTTPClient {
         Q: Serialize + ?Sized,
         Model: DeserializeOwned,
     {
-        let request_baker = || async {
-            Ok(self
-                .client
-                .get(self.config.url(path))
-                .query(query)
-                // Fetch access token for protected endpoints, if available
-                .headers(self.config.headers(self.get_access_token()))
-                .build()?)
-        };
-
-        self.execute(backoff, request_baker).await
+        self.map_http_result(
+            self.inner.get_with_query(path, query, backoff).await,
+            |v| v,
+        )
     }
 
     /// Make a POST request to {path} and deserialize the response body.
-    ///
     pub(crate) async fn post<Model, Payload>(
         &self,
         path: &str,
@@ -261,22 +170,11 @@ impl HTTPClient {
         Model: DeserializeOwned,
         Payload: Serialize,
     {
-        let request_baker = || async {
-            Ok(self
-                .client
-                .post(self.config.url(path))
-                // Fetch access token for protected endpoints, if available
-                .headers(self.config.headers(self.get_access_token()))
-                .json(&data)
-                .build()?)
-        };
-
-        self.execute(backoff, request_baker).await
+        self.map_http_result(self.inner.post(path, data, backoff).await, |v| v)
     }
 
     /// POST a form at {path} and deserialize the response body into the generic
     /// `Model` type.
-    ///
     pub(crate) async fn post_form<Model, F>(
         &self,
         path: &str,
@@ -287,21 +185,13 @@ impl HTTPClient {
         Model: DeserializeOwned,
         F: Serialize + ?Sized,
     {
-        let request_baker = || async {
-            Ok(self
-                .client
-                .post(self.config.url(path))
-                // Fetch access token for protected endpoints, if available
-                .headers(self.config.headers(self.get_access_token()))
-                .form(form)
-                .build()?)
-        };
-
-        self.execute(backoff, request_baker).await
+        self.map_http_result(
+            self.inner.post_form(path, form, backoff).await,
+            |v| v,
+        )
     }
 
     /// Make a PUT request to {path} and deserialize the response body.
-    ///
     pub(crate) async fn put<Model, Payload>(
         &self,
         path: &str,
@@ -312,21 +202,10 @@ impl HTTPClient {
         Model: DeserializeOwned,
         Payload: Serialize,
     {
-        let request_baker = || async {
-            Ok(self
-                .client
-                .put(self.config.url(path))
-                // Fetch access token for protected endpoints, if available
-                .headers(self.config.headers(self.get_access_token()))
-                .json(&data)
-                .build()?)
-        };
-
-        self.execute(backoff, request_baker).await
+        self.map_http_result(self.inner.put(path, data, backoff).await, |v| v)
     }
 
     /// Make a DELETE request to {path} and deserialize the response body.
-    ///
     pub(crate) async fn delete<Model>(
         &self,
         path: &str,
@@ -336,22 +215,24 @@ impl HTTPClient {
     where
         Model: DeserializeOwned,
     {
+        // We need to replicate the query parameter behavior using the public
+        // config APIs and the session accessible via the facade.
         let request_baker = || async {
             let mut http_request_builder = self
-                .client
-                .delete(self.config.url(path))
-                // Fetch access token for protected endpoints, if available
-                .headers(self.config.headers(self.get_access_token()));
+                .http_client()
+                .delete(self.http_config().url(path))
+                .headers(self.http_config().headers(self.get_access_token()));
 
             if with_auth {
                 let api_key = self.http_config().credentials().api_key();
-                // Construct Vec<&str, &str> for query construction
                 let query_vec = vec![
                     ("api_key", api_key.expose_secret().as_str()),
                     (
                         "access_token",
                         self.user_session()
-                            .and_then(|session| Some(session.access_token.expose_secret().as_str()))
+                            .and_then(|session| {
+                                Some(session.access_token.expose_secret().as_str())
+                            })
                             .unwrap_or_else(|| &"(ﾉﾟ0ﾟ)ﾉ~"),
                     ),
                 ];
@@ -363,8 +244,7 @@ impl HTTPClient {
         self.execute(backoff, request_baker).await
     }
 
-    /// Execute a HTTP request asynchronously with backoff.
-    ///
+    /// Execute a HTTP request asynchronously with backoff and deserialize JSON.
     async fn execute<Model, RB, Fut>(
         &self,
         backoff: &BackoffPolicy,
@@ -383,8 +263,7 @@ impl HTTPClient {
         Ok(model)
     }
 
-    /// Execute a HTTP request asynchronously with backoff.
-    ///
+    /// Execute a HTTP request asynchronously with backoff and return raw body.
     async fn execute_raw<RB, Fut>(
         &self,
         backoff: &BackoffPolicy,
@@ -503,6 +382,87 @@ impl HTTPClient {
             Ok(json_response)
         }
     }
+
+    fn get_access_token(&self) -> Option<Secret<String>> {
+        self.inner
+            .user_session()
+            .map(|user_session| user_session.access_token.clone())
+    }
+
+    fn map_http_result<T, F>(&self, res: HttpResult<T>, map_ok: F) -> Result<T>
+    where
+        F: FnOnce(T) -> T,
+    {
+        res.map(map_ok).map_err(map_http_error)
+    }
+}
+
+fn map_http_error(err: HttpError) -> ManjaError {
+    match err {
+        HttpError::KiteApi(e) => ManjaError::KiteApiError(e),
+        HttpError::InvalidHeaderValue(e) => ManjaError::InvalidHeaderValueError(e),
+        HttpError::Json(e) => ManjaError::JSONDeserialize(e),
+        HttpError::Io(e) => ManjaError::IoError(e),
+        HttpError::Reqwest(e) => ManjaError::Reqwest(e),
+        HttpError::Internal(s) => ManjaError::Internal(s),
+    }
+}
+
+fn config_from_http_config(transport_cfg: &manja_http::Config) -> Config {
+    let creds = KiteCredentials::new(
+        transport_cfg
+            .credentials()
+            .api_key()
+            .expose_secret()
+            .to_string(),
+        transport_cfg
+            .credentials()
+            .api_secret()
+            .expose_secret()
+            .to_string(),
+        transport_cfg
+            .credentials()
+            .user_id()
+            .expose_secret()
+            .to_string(),
+        transport_cfg
+            .credentials()
+            .user_pwd()
+            .expose_secret()
+            .to_string(),
+        transport_cfg
+            .credentials()
+            .totp_key()
+            .expose_secret()
+            .to_string(),
+    );
+
+    Config::from_parts(
+        transport_cfg.api_base(),
+        transport_cfg.api_login(),
+        transport_cfg.api_redirect(),
+        creds,
+    )
+}
+
+fn http_config_from_manja_config(config: &Config) -> manja_http::Config {
+    // Use the public `KiteConfig` trait implementation plus `KiteCredentials`
+    // accessors to rebuild a transport config.
+    let credentials = config.credentials();
+    let http_creds = manja_http::KiteCredentials::new(
+        credentials.api_key().expose_secret().to_string(),
+        credentials.api_secret().expose_secret().to_string(),
+        credentials.user_id().expose_secret().to_string(),
+        credentials.user_pwd().expose_secret().to_string(),
+        credentials.totp_key().expose_secret().to_string(),
+    );
+
+    manja_http::Config::from_parts(
+        KiteConfig::api_base(config),
+        KiteConfig::api_login(config),
+        KiteConfig::api_redirect(config),
+        http_creds,
+    )
 }
 
 #[cfg(test)]
