@@ -10,6 +10,8 @@ use std::pin::Pin;
 use reqwest::header::{HeaderMap, HeaderValue};
 use secrecy::Secret;
 
+use manja_core::traits::CoreAuth;
+
 use crate::kite::connect::credentials::KiteCredentials;
 use crate::kite::error::Result;
 
@@ -124,9 +126,9 @@ pub trait KiteAuth {
 
 impl KiteAuth for HeaderMap {
     fn add_auth_header(&mut self, api_key: String, access_token: String) {
-        if let Ok(value) =
-            HeaderValue::from_str(format!("token {}:{}", api_key, access_token).as_ref())
-        {
+        let auth_value =
+            manja_core::traits::DefaultKiteAuth.build_auth_value(&api_key, &access_token);
+        if let Ok(value) = HeaderValue::from_str(auth_value.as_ref()) {
             // Once the authentication is complete, all requests should be
             // signed with the HTTP `Authorization` header with `token` as
             // the authorization scheme, followed by a space, and then the

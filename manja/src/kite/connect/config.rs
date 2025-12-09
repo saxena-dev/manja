@@ -157,3 +157,39 @@ impl Config {
         }
     }
 }
+
+impl manja_core::traits::CoreApiEndpoints for Config {
+    fn api_base(&self) -> &str {
+        self.api_base.as_str()
+    }
+
+    fn api_login(&self) -> &str {
+        self.api_login.as_str()
+    }
+
+    fn api_redirect(&self) -> &str {
+        self.api_redirect.as_str()
+    }
+}
+
+impl manja_core::traits::CoreCredentials for Config {
+    fn api_key(&self) -> Secret<String> {
+        self.credentials.api_key()
+    }
+
+    fn api_secret(&self) -> Secret<String> {
+        self.credentials.api_secret()
+    }
+
+    fn user_id(&self) -> Secret<String> {
+        self.credentials.user_id()
+    }
+
+    fn user_password(&self) -> Secret<String> {
+        self.credentials.user_pwd()
+    }
+
+    fn totp_key(&self) -> Secret<String> {
+        self.credentials.totp_key()
+    }
+}
