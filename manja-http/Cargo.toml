@@ -1,0 +1,10 @@
+[package]
+name = "manja-http"
+version = "0.3.0"
+edition = "2021"
+license = "MIT"
+description = "HTTP client crate for the manja SDK"
+repository = "https://github.com/saxena-dev/manja"
+
+[dependencies]
+

@@ -1,0 +1,10 @@
+[package]
+name = "manja-ticker"
+version = "0.3.0"
+edition = "2021"
+license = "MIT"
+description = "WebSocket ticker client for the manja SDK"
+repository = "https://github.com/saxena-dev/manja"
+
+[dependencies]
+

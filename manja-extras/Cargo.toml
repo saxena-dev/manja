@@ -1,0 +1,10 @@
+[package]
+name = "manja-extras"
+version = "0.3.0"
+edition = "2021"
+license = "MIT"
+description = "Optional extras for the manja SDK (e.g. WebDriver login)"
+repository = "https://github.com/saxena-dev/manja"
+
+[dependencies]
+

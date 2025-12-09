@@ -1,0 +1,10 @@
+[package]
+name = "manja-core"
+version = "0.3.0"
+edition = "2021"
+license = "MIT"
+description = "Core types and shared models for the manja SDK"
+repository = "https://github.com/saxena-dev/manja"
+
+[dependencies]
+
