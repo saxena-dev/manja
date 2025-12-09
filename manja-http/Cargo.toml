@@ -23,3 +23,6 @@ manja-core = { path = "../manja-core" }
 [features]
 default = ["backoff"]
 backoff = ["dep:backoff"]
+
+[dev-dependencies]
+mockito = "1.4.0"

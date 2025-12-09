@@ -100,3 +100,161 @@ impl<'c> Market<'c> {
             .await
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use std::collections::HashMap;
+
+    use tokio::join;
+
+    use crate::client::HTTPClient;
+    use crate::config::{Config, KITECONNECT_API_LOGIN, KITECONNECT_API_REDIRECT};
+    use crate::credentials::KiteCredentials;
+    use crate::error::Error;
+    use crate::test_utils::{
+        add_mocks, get_http_test_client, resolve_fixture_path, APIEndpoint, HTTPMethod, TestResponse,
+    };
+    use manja_core::error::KiteApiException;
+    use manja_core::models::{
+        Exchange, FullQuote, Instrument, KiteApiResponse, LTPQuote, OHLCQuote,
+    };
+
+    use super::*;
+
+    fn mock_map() -> HashMap<(HTTPMethod, APIEndpoint), TestResponse> {
+        let mut mmap = HashMap::new();
+        mmap.insert(
+            ("GET", "/instruments"),
+            "./kiteconnect-mocks/instruments_all.csv",
+        );
+        mmap.insert(
+            ("GET", "/instruments/NSE"),
+            "./kiteconnect-mocks/instruments_nse.csv",
+        );
+        mmap
+    }
+
+    #[tokio::test]
+    async fn test_get_instruments_all_success() {
+        let (server, mut client) = get_http_test_client().await;
+        let (_server,) = join!(add_mocks(server, mock_map()));
+
+        let instruments = client
+            .market()
+            .get_instruments_all()
+            .await
+            .unwrap();
+
+        assert!(!instruments.is_empty());
+        let first: &Instrument = &instruments[0];
+        assert_eq!(first.tradingsymbol, "CENTRALBK-BE");
+    }
+
+    #[tokio::test]
+    async fn test_get_instruments_for_exchange_success() {
+        let (server, mut client) = get_http_test_client().await;
+        let (_server,) = join!(add_mocks(server, mock_map()));
+
+        let instruments = client
+            .market()
+            .get_instruments(Exchange::NSE)
+            .await
+            .unwrap();
+
+        assert!(!instruments.is_empty());
+        for instrument in instruments {
+            assert_eq!(instrument.exchange, Exchange::NSE);
+        }
+    }
+
+    #[test]
+    fn test_get_full_quotes_success() {
+        let path = resolve_fixture_path("kiteconnect-mocks/quote.json");
+        let json = std::fs::read_to_string(&path).unwrap_or_else(|err| {
+            panic!("failed to read fixture at {}: {}", path.display(), err)
+        });
+        let response: KiteApiResponse<HashMap<String, FullQuote>> =
+            serde_json::from_str(&json).unwrap();
+        let data = response.data.expect("expected quote data");
+        let quote = data.get("NSE:INFY").expect("expected NSE:INFY quote");
+        assert_eq!(quote.instrument_token, 408065);
+    }
+
+    #[test]
+    fn test_get_ohlc_quotes_success() {
+        let path = resolve_fixture_path("kiteconnect-mocks/ohlc.json");
+        let json = std::fs::read_to_string(&path).unwrap_or_else(|err| {
+            panic!("failed to read fixture at {}: {}", path.display(), err)
+        });
+        let response: KiteApiResponse<HashMap<String, OHLCQuote>> =
+            serde_json::from_str(&json).unwrap();
+        let data = response.data.expect("expected quote data");
+        let quote = data.get("NSE:INFY").expect("expected NSE:INFY quote");
+        assert_eq!(quote.instrument_token, 408065);
+    }
+
+    #[test]
+    fn test_get_ltp_quotes_success() {
+        let path = resolve_fixture_path("kiteconnect-mocks/ltp.json");
+        let json = std::fs::read_to_string(&path).unwrap_or_else(|err| {
+            panic!("failed to read fixture at {}: {}", path.display(), err)
+        });
+        let response: KiteApiResponse<HashMap<String, LTPQuote>> =
+            serde_json::from_str(&json).unwrap();
+        let data = response.data.expect("expected quote data");
+        let quote = data.get("NSE:INFY").expect("expected NSE:INFY quote");
+        assert_eq!(quote.instrument_token, 408065);
+    }
+
+    #[tokio::test]
+    async fn test_get_instruments_all_token_exception_error() {
+        let mut server = mockito::Server::new_async().await;
+        let credentials = KiteCredentials::new(
+            "TEST_API_KEY",
+            "TEST_API_SECRET",
+            "TEST_USER_ID",
+            "TEST_PASSWORD",
+            "TEST_TOTP",
+        );
+        let config = Config::from_parts(
+            server.url(),
+            KITECONNECT_API_LOGIN.to_string(),
+            KITECONNECT_API_REDIRECT.to_string(),
+            credentials,
+        );
+        let mut client = HTTPClient::with_config(config);
+
+        let _m = server
+            .mock("GET", "/instruments")
+            .with_status(403)
+            .with_header("content-type", "application/json")
+            .with_body(
+                r#"{
+                    "status": "error",
+                    "data": null,
+                    "message": "Token is invalid or has expired",
+                    "error_type": "TokenException"
+                }"#,
+            )
+            .create_async()
+            .await;
+
+        let err = client
+            .market()
+            .get_instruments_all()
+            .await
+            .expect_err("expected token exception error");
+
+        match err {
+            Error::KiteApi(api_err) => {
+                assert_eq!(api_err.status_code, 403);
+                assert!(matches!(
+                    api_err.error_type,
+                    KiteApiException::TokenException
+                ));
+                assert_eq!(api_err.error_type.as_str(), "TokenException");
+            }
+            other => panic!("unexpected error variant: {:?}", other),
+        }
+    }
+}

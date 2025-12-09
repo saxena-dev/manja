@@ -14,9 +14,15 @@ pub mod credentials;
 pub mod error;
 pub mod utils;
 
+/// Test helpers for HTTP fixtures and mock servers.
+///
+/// This module is only compiled when running tests for this crate.
+#[cfg(test)]
+#[doc(hidden)]
+pub mod test_utils;
+
 pub use crate::api::{BackoffPolicy, Charges, Margins, Market, Orders, Portfolio, Session, User};
 pub use crate::client::HTTPClient;
 pub use crate::config::Config;
 pub use crate::credentials::KiteCredentials;
 pub use crate::error::{Error, Result};
-

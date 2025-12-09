@@ -79,3 +79,37 @@ impl ToString for TickerRequest {
     }
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::models::Mode;
+    use serde_json::{json, Value};
+
+    #[test]
+    fn subscribe_serializes_expected_shape() {
+        let req = TickerRequest::subscribe(vec![1, 2, 3]);
+        let v: Value = serde_json::from_str(&req.to_string()).unwrap();
+
+        assert_eq!(v["a"], "subscribe");
+        assert_eq!(v["v"], json!([1, 2, 3]));
+    }
+
+    #[test]
+    fn unsubscribe_serializes_expected_shape() {
+        let req = TickerRequest::unsubscribe(vec![42]);
+        let v: Value = serde_json::from_str(&req.to_string()).unwrap();
+
+        assert_eq!(v["a"], "unsubscribe");
+        assert_eq!(v["v"], json!([42]));
+    }
+
+    #[test]
+    fn subscribe_with_mode_serializes_expected_shape() {
+        let req = TickerRequest::subscribe_with_mode(vec![408065, 884737], Mode::Full);
+        let v: Value = serde_json::from_str(&req.to_string()).unwrap();
+
+        assert_eq!(v["a"], "mode");
+        assert_eq!(v["v"][0], "full");
+        assert_eq!(v["v"][1], json!([408065, 884737]));
+    }
+}

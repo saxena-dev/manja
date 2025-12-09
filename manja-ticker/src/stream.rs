@@ -208,3 +208,67 @@ impl Stream for SubscriptionStream {
     }
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn stream_state_to_uri_from_parts() {
+        let state = StreamState::from_parts(
+            "wss://example.test/ticker",
+            "TEST_API_KEY",
+            "TEST_ACCESS_TOKEN",
+        );
+        let uri = state.to_uri();
+        assert!(
+            uri == "wss://example.test/ticker?api_key=TEST_API_KEY&access_token=TEST_ACCESS_TOKEN"
+                || uri == "wss://example.test/ticker?access_token=TEST_ACCESS_TOKEN&api_key=TEST_API_KEY"
+        );
+    }
+
+    #[test]
+    fn stream_state_to_uri_from_credentials_uses_env_api_base() {
+        std::env::set_var("KITECONNECT_WSS_API_BASE", "wss://example-env.test");
+        let creds = KiteStreamCredentials::from_parts("ENV_API_KEY", "ENV_ACCESS_TOKEN");
+        let state = StreamState::from_credentials(creds);
+        let uri = state.to_uri();
+        assert!(
+            uri == "wss://example-env.test?api_key=ENV_API_KEY&access_token=ENV_ACCESS_TOKEN"
+                || uri == "wss://example-env.test?access_token=ENV_ACCESS_TOKEN&api_key=ENV_API_KEY"
+        );
+        // Clean up for other tests.
+        std::env::remove_var("KITECONNECT_WSS_API_BASE");
+    }
+
+    #[test]
+    fn subscription_stream_emits_ticker_requests() {
+        let state = StreamState::from_parts(
+            "wss://example.test/ticker",
+            "TEST_API_KEY",
+            "TEST_ACCESS_TOKEN",
+        )
+        .subscribe_token(Mode::Full, 408065)
+        .subscribe_token(Mode::Quote, 884737);
+
+        let mut stream = SubscriptionStream::from(state);
+
+        let mut cx = Context::from_waker(futures_util::task::noop_waker_ref());
+        let mut pinned = Pin::new(&mut stream);
+
+        let first = pinned.as_mut().poll_next(&mut cx);
+        let second = pinned.as_mut().poll_next(&mut cx);
+
+        let first_msg = match first {
+            Poll::Ready(Some(Ok(Message::Text(json)))) => json,
+            other => panic!("unexpected first poll result: {:?}", other),
+        };
+        let second_msg = match second {
+            Poll::Ready(Some(Ok(Message::Text(json)))) => json,
+            other => panic!("unexpected second poll result: {:?}", other),
+        };
+
+        // Ensure the payloads are valid JSON ticker requests.
+        serde_json::from_str::<serde_json::Value>(&first_msg).unwrap();
+        serde_json::from_str::<serde_json::Value>(&second_msg).unwrap();
+    }
+}
