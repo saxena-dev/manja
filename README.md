@@ -59,6 +59,30 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
  
 - [x] **WebDriver** integration for retrieving `request token` from the redirect URL after successfully authenticating with the Kite platform.
 
+### Advanced WebDriver login usage
+
+For most applications, enabling the `webdriver-login` feature on the `manja` facade crate is sufficient and exposes helpers under `manja::kite::login`. If you want more control over the WebDriver runtime (for example, custom configs or direct composition with your own async flows), you can depend on the `manja-extras` crate directly:
+
+```toml
+[dependencies]
+manja = { version = "0.3", default-features = false } # or your chosen feature set
+manja-extras = { version = "0.3" }
+```
+
+Then call the extras login helpers directly:
+
+```rust ignore
+use manja_extras::browser_login_flow;
+use manja_core::traits::CoreConfig;
+
+async fn login_with_extras<C>(config: C) -> Result<String, manja_extras::login::LoginError>
+where
+    C: CoreConfig + Send,
+{
+    browser_login_flow(config).await
+}
+```
+
 
 
 ## Kite Connect 3.0 API: Supported Endpoints

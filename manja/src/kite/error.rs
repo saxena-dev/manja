@@ -1,19 +1,5 @@
-//! Error types.
-//!
-//! This module defines custom error types and handling mechanisms for the
-//! `manja` crate. The primary error type is [`ManjaError`], which consolidates
-//! all possible errors that can occur when interacting with the Kite Connect
-//! API and related services.
-//!
-//! Transport-agnostic API error description types such as
-//! [`KiteApiError`](manja_core::error::KiteApiError) and
-//! [`KiteApiException`](manja_core::error::KiteApiException) live in the
-//! `manja-core` crate and are re-used here.
-
 use std::env::VarError;
 
-#[cfg(feature = "webdriver-login")]
-use fantoccini::error::{CmdError, NewSessionError};
 use manja_core::error::KiteApiError;
 use reqwest::header::InvalidHeaderValue;
 use thiserror::Error;
@@ -45,12 +31,12 @@ pub enum ManjaError {
     #[cfg(feature = "webdriver-login")]
     /// Represents errors related to starting a new WebDriver session.
     #[error("WebDriver new session error: {0}")]
-    WebDriverNewSessionError(#[from] NewSessionError),
+    WebDriverNewSessionError(String),
 
     #[cfg(feature = "webdriver-login")]
     /// Represents general WebDriver errors.
     #[error("WebDriver error: {0}")]
-    WebDriverError(#[from] CmdError),
+    WebDriverError(String),
 
     /// Represents errors that occur during JSON deserialization of Kite API
     /// responses.
@@ -95,4 +81,28 @@ pub use manja_core::error::KiteApiException;
 pub(crate) fn map_deserialization_error(e: serde_json::Error, json_str: &str) -> ManjaError {
     tracing::error!("failed deserialization of: {}", json_str);
     ManjaError::JSONDeserialize(e)
+}
+
+#[cfg(feature = "webdriver-login")]
+impl From<manja_extras::login::LoginError> for ManjaError {
+    fn from(value: manja_extras::login::LoginError) -> Self {
+        use manja_extras::login::LoginError;
+
+        match value {
+            LoginError::EnvVarError(e) => ManjaError::EnvVarError(e),
+            LoginError::WebDriverNewSessionError(e) => {
+                ManjaError::WebDriverNewSessionError(e.to_string())
+            }
+            LoginError::WebDriverError(e) => ManjaError::WebDriverError(e.to_string()),
+            LoginError::TotpError(msg) => ManjaError::TotpError(msg),
+            LoginError::InvalidRedirectUrl(url) => ManjaError::Internal(format!(
+                "cannot parse Kite redirect url - `{}`",
+                url
+            )),
+            LoginError::Timeout => {
+                ManjaError::Internal("Timed out waiting for redirect URL".to_string())
+            }
+            LoginError::Internal(msg) => ManjaError::Internal(msg),
+        }
+    }
 }
