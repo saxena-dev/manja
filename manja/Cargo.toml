@@ -58,7 +58,7 @@ webdriver-login = [
 ]
 
 # Enable backoff-based retry logic for HTTP APIs.
-backoff = ["dep:backoff"]
+backoff = ["dep:backoff", "manja-http/backoff"]
 
 # Enable dotenv-based configuration loading (e.g. in test helpers or examples).
 dotenv-config = ["dep:dotenv"]

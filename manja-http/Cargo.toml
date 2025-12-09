@@ -21,7 +21,7 @@ csv = "1.3.0"
 manja-core = { path = "../manja-core" }
 
 [features]
-default = ["backoff"]
+default = []
 backoff = ["dep:backoff"]
 
 [dev-dependencies]

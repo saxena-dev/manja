@@ -23,6 +23,12 @@ jobs:
             cargo-flags: "--no-default-features --features websocket"
           - name: http-webdriver-login
             cargo-flags: "--no-default-features --features webdriver-login"
+          - name: http-backoff
+            cargo-flags: "--no-default-features --features backoff"
+          - name: http-websocket-backoff
+            cargo-flags: "--no-default-features --features websocket,backoff"
+          - name: http-webdriver-login-backoff
+            cargo-flags: "--no-default-features --features webdriver-login,backoff"
 
     steps:
       - name: Checkout repository
