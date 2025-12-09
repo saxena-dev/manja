@@ -23,6 +23,12 @@ jobs:
             cargo-flags: "--no-default-features --features websocket"
           - name: http-webdriver-login
             cargo-flags: "--no-default-features --features webdriver-login"
+          - name: http-backoff
+            cargo-flags: "--no-default-features --features backoff"
+          - name: http-websocket-backoff
+            cargo-flags: "--no-default-features --features websocket,backoff"
+          - name: http-webdriver-login-backoff
+            cargo-flags: "--no-default-features --features webdriver-login,backoff"
 
     steps:
       - name: Checkout repository
@@ -37,10 +43,10 @@ jobs:
         run: rustc -V && cargo -V
 
       - name: Build
-        run: cargo build ${{ matrix.profile['cargo-flags'] }}
+        run: cargo build -p manja ${{ matrix.profile['cargo-flags'] }}
 
       - name: Test (unit and integration)
-        run: cargo test ${{ matrix.profile['cargo-flags'] }} -- --nocapture
+        run: cargo test -p manja ${{ matrix.profile['cargo-flags'] }} -- --nocapture
 
       - name: Test (doctests)
-        run: cargo test ${{ matrix.profile['cargo-flags'] }} --doc
+        run: cargo test -p manja ${{ matrix.profile['cargo-flags'] }} --doc

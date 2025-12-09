@@ -7,6 +7,8 @@ This crate provides a Rust client library for [Zerodha](https://zerodha.com/)'s 
 
 The primary entrypoint is the `ManjaClient` facade, which wraps the lower-level HTTP client and exposes typed API groups for Kite domains (user, session, orders, portfolio, market, margins, etc.).
 
+`manja` lives inside a multi-crate workspace that also includes `manja-core` (shared models and errors), `manja-http` (HTTP transport), `manja-ticker` (WebSocket ticker), and `manja-extras` (WebDriver/TOTP helpers). Most users only need the `manja` facade crate; advanced users can depend on the inner crates directly when they need lower-level control or to reuse models in other services. See `ARCHITECTURE.md` for a detailed overview.
+
 ## Quickstart
 
 ```rust ignore
@@ -34,6 +36,21 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 }
 ```
 
+### Running Examples in the Workspace
+
+From the workspace root:
+
+```bash
+# Basic HTTP login + profile/margins
+cargo run -p manja --example basic_http
+
+# Market quotes example
+cargo run -p manja --example quotes
+
+# Ticker streaming (requires `websocket` feature and valid credentials)
+cargo run -p manja --example ticker --features websocket
+```
+
 ## `manja` Features
 
 `manja` strives to improve the developer experience by providing better support in IDEs with features like auto-completion, type-inference, and inline documentation.
@@ -58,6 +75,30 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     - *Auto-reconnect Mechanism*: `manja` provides a reliable async WebSocket client with a configurable exponential backoff retry mechanism.
  
 - [x] **WebDriver** integration for retrieving `request token` from the redirect URL after successfully authenticating with the Kite platform.
+
+### Advanced WebDriver login usage
+
+For most applications, enabling the `webdriver-login` feature on the `manja` facade crate is sufficient and exposes helpers under `manja::kite::login`. If you want more control over the WebDriver runtime (for example, custom configs or direct composition with your own async flows), you can depend on the `manja-extras` crate directly:
+
+```toml
+[dependencies]
+manja = { version = "0.3", default-features = false } # or your chosen feature set
+manja-extras = { version = "0.3" }
+```
+
+Then call the extras login helpers directly:
+
+```rust ignore
+use manja_extras::browser_login_flow;
+use manja_core::traits::CoreConfig;
+
+async fn login_with_extras<C>(config: C) -> Result<String, manja_extras::login::LoginError>
+where
+    C: CoreConfig + Send,
+{
+    browser_login_flow(config).await
+}
+```
 
 
 
