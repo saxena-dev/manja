@@ -6,7 +6,7 @@
 
 This crate provides a Rust client library for [Zerodha](https://zerodha.com/)'s [Kite Connect](https://kite.trade/) trading APIs (a set of REST-like HTTP APIs).
 
-The primary entrypoint is the `ManjaClient` facade, which wraps the lower-level HTTP client and exposes typed API groups for Kite domains (user, session, orders, portfolio, market, margins, GTT, alerts, etc.).
+The primary entrypoint is the `ManjaClient` facade, which wraps the lower-level HTTP client and exposes typed API groups for Kite domains (user, session, orders, portfolio, market, margins, GTT, alerts, historical data, mutual funds, etc.).
 
 `manja` lives inside a multi-crate workspace that also includes `manja-core` (shared models and errors), `manja-http` (HTTP transport), `manja-ticker` (WebSocket ticker), and `manja-extras` (WebDriver/TOTP helpers). Most users only need the `manja` facade crate; advanced users can depend on the inner crates directly when they need lower-level control or to reuse models in other services. See `ARCHITECTURE.md` for a detailed overview.
 
@@ -148,15 +148,15 @@ where
 - [ ] **Mutual funds**
   - [ ] POST `/mf/orders` Place a buy or sell order
   - [ ] DELETE `/mf/orders/:order_id` Cancel an open or pending order
-  - [ ] GET `/mf/orders` Retrieve the list of all orders (open and executed) over the last 7 days
-  - [ ] GET `/mf/orders/:order_id` Retrieve an individual order
+  - [x] GET `/mf/orders` Retrieve the list of all orders (open and executed) over the last 7 days
+  - [x] GET `/mf/orders/:order_id` Retrieve an individual order
   - [ ] POST `/mf/sips` Place a SIP order
   - [ ] PUT `/mf/sips/:order_id` Modify an open SIP order
   - [ ] DELETE `/mf/sips/:order_id` Cancel an open SIP order
-  - [ ] GET `/mf/sips` Retrieve the list of all open SIP orders
+  - [x] GET `/mf/sips` Retrieve the list of all open SIP orders
   - [ ] GET `/mf/sips/:order_id` Retrieve an individual SIP order
-  - [ ] GET `/mf/holdings` Retrieve the list of mutual fund holdings available in the DEMAT
-  - [ ] GET `/mf/instruments` Retrieve the master list of all mutual funds available on the platform
+  - [x] GET `/mf/holdings` Retrieve the list of mutual fund holdings available in the DEMAT
+  - [x] GET `/mf/instruments` Retrieve the master list of all mutual funds available on the platform
 - [x] **Margin calculation**
 
   - [x] POST `/margins/orders` Calculates margins for each order considering the existing positions and open orders
