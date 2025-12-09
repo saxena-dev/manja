@@ -6,7 +6,7 @@
 
 This crate provides a Rust client library for [Zerodha](https://zerodha.com/)'s [Kite Connect](https://kite.trade/) trading APIs (a set of REST-like HTTP APIs).
 
-The primary entrypoint is the `ManjaClient` facade, which wraps the lower-level HTTP client and exposes typed API groups for Kite domains (user, session, orders, portfolio, market, margins, etc.).
+The primary entrypoint is the `ManjaClient` facade, which wraps the lower-level HTTP client and exposes typed API groups for Kite domains (user, session, orders, portfolio, market, margins, GTT, alerts, etc.).
 
 `manja` lives inside a multi-crate workspace that also includes `manja-core` (shared models and errors), `manja-http` (HTTP transport), `manja-ticker` (WebSocket ticker), and `manja-extras` (WebDriver/TOTP helpers). Most users only need the `manja` facade crate; advanced users can depend on the inner crates directly when they need lower-level control or to reuse models in other services. See `ARCHITECTURE.md` for a detailed overview.
 
@@ -124,6 +124,13 @@ where
   - [x] GET `/gtt/triggers/:id` Retrieve an individual trigger
   - [x] PUT `/gtt/triggers/:id` Modify an active GTT
   - [x] DELETE `/gtt/triggers/:id` Delete an active GTT
+- [x] **Alerts**
+  - [x] POST `/alerts` Create a new alert (simple or ATO)
+  - [x] GET `/alerts` List alerts, optionally filtered by status and pagination
+  - [x] GET `/alerts/:uuid` Retrieve an individual alert
+  - [x] PUT `/alerts/:uuid` Modify an existing alert
+  - [x] DELETE `/alerts` Delete one or more alerts (via `uuid` query parameter)
+  - [x] GET `/alerts/:uuid/history` Retrieve trigger history for a given alert
 - [x] **Portfolio**
   - [x] GET `/portfolio/holdings` Retrieve the list of long term equity holdings
   - [x] GET `/portfolio/positions` Retrieve the list of short term positions

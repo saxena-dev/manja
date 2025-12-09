@@ -128,6 +128,11 @@ impl HTTPClient {
         crate::kite::connect::api::Gtt::new(self)
     }
 
+    /// To call [Alerts] related APIs using this client.
+    pub fn alerts(&mut self) -> crate::kite::connect::api::Alerts<'_> {
+        crate::kite::connect::api::Alerts::new(self)
+    }
+
     // --- [ HTTP verb functions ] ---
 
     /// Make a GET request to {path} and return the response body.

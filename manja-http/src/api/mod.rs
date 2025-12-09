@@ -52,6 +52,10 @@ pub use margins::{Charges, Margins};
 mod gtt;
 pub use gtt::Gtt;
 
+// Manages the `/alerts/` API group for price and ATO alerts.
+mod alerts;
+pub use alerts::Alerts;
+
 /// Creates a backoff policy with a specified rate limit.
 ///
 /// When the `backoff` feature is disabled, this returns a unit value.

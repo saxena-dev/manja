@@ -111,3 +111,12 @@ pub use gtt::{
     GttCondition, GttOrderExecutionResult, GttOrderParams, GttOrderResult, GttStatus, GttTrigger,
     GttTriggerId, GttTriggerRequest, GttType,
 };
+
+/// Models for price and ATO alerts.
+mod alerts;
+#[allow(unused_imports)]
+pub use alerts::{
+    Alert, AlertBasket, AlertBasketGttMeta, AlertBasketItem, AlertBasketParams, AlertHistoryEntry,
+    AlertHistoryMeta, AlertHistoryOhlc, AlertListFilter, AlertOperator, AlertRequest,
+    AlertRhsType, AlertStatus, AlertType,
+};

@@ -22,7 +22,7 @@ pub mod utils;
 pub mod test_utils;
 
 pub use crate::api::{
-    BackoffPolicy, Charges, Gtt, Margins, Market, Orders, Portfolio, Session, User,
+    Alerts, BackoffPolicy, Charges, Gtt, Margins, Market, Orders, Portfolio, Session, User,
 };
 pub use crate::client::HTTPClient;
 pub use crate::config::Config;
