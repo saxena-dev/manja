@@ -120,3 +120,8 @@ pub use alerts::{
     AlertHistoryMeta, AlertHistoryOhlc, AlertListFilter, AlertOperator, AlertRequest,
     AlertRhsType, AlertStatus, AlertType,
 };
+
+/// Models for historical OHLCV(+OI) data.
+mod historical;
+#[allow(unused_imports)]
+pub use historical::{HistoricalCandle, HistoricalData, HistoricalInterval};

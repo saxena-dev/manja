@@ -53,6 +53,65 @@
 //! }
 //! ```
 //!
+//! ## Example: Fetching historical candles
+//!
+//! The [`ManjaClient::historical`] API group provides typed access to
+//! `/instruments/historical/:instrument_token/:interval` and returns
+//! [`HistoricalData`] (a sequence of [`HistoricalCandle`] values).
+//!
+//! ```ignore
+//! use chrono::{NaiveDate, NaiveDateTime};
+//! use manja::ManjaClient;
+//! use manja::{HistoricalData, HistoricalInterval, KiteApiResponse};
+//!
+//! #[tokio::main]
+//! async fn main() -> Result<(), Box<dyn std::error::Error>> {
+//!     // Create a client using environment-based configuration and perform your
+//!     // preferred login flow to establish a session (omitted here).
+//!     let mut client = ManjaClient::from_env();
+//!
+//!     // Define the time window in exchange-local time.
+//!     let from: NaiveDateTime = NaiveDate::from_ymd_opt(2019, 12, 4)
+//!         .unwrap()
+//!         .and_hms_opt(9, 15, 0)
+//!         .unwrap();
+//!     let to: NaiveDateTime = NaiveDate::from_ymd_opt(2019, 12, 4)
+//!         .unwrap()
+//!         .and_hms_opt(9, 20, 0)
+//!         .unwrap();
+//!
+//!     // Fetch minute candles with OI for a given instrument token.
+//!     let response: KiteApiResponse<HistoricalData> = client
+//!         .historical()
+//!         .candles(
+//!             12517890,                      // instrument_token
+//!             HistoricalInterval::Minute,    // interval
+//!             from,
+//!             to,
+//!             false,                         // continuous
+//!             true,                          // oi
+//!         )
+//!         .await?;
+//!
+//!     if let Some(data) = response.data {
+//!         for candle in data.candles {
+//!             println!(
+//!                 "{} O:{:.2} H:{:.2} L:{:.2} C:{:.2} V:{} OI:{:?}",
+//!                 candle.timestamp,
+//!                 candle.open,
+//!                 candle.high,
+//!                 candle.low,
+//!                 candle.close,
+//!                 candle.volume,
+//!                 candle.oi,
+//!             );
+//!         }
+//!     }
+//!
+//!     Ok(())
+//! }
+//! ```
+//!
 //! For WebSocket streaming or WebDriver-assisted login flows, refer to the
 //! module-level documentation under [`kite::ticker`] and [`kite::login`].
 //!
@@ -79,11 +138,11 @@ pub use crate::kite::connect::models::{
     AlertHistoryMeta, AlertHistoryOhlc, AlertOperator, AlertRequest, AlertRhsType, AlertStatus,
     AlertType, Auction, Available, BasketMargin, Charges, Exchange, FullQuote, GST, GttCondition,
     GttOrderExecutionResult, GttOrderParams, GttOrderResult, GttStatus, GttTrigger, GttTriggerId,
-    GttTriggerRequest, GttType, Holding, Instrument, KiteApiResponse, LTPQuote, OHLCQuote, Order,
-    OrderCharges, OrderChargesRequest, OrderMargin, OrderMarginRequest, OrderReceipt, OrderStatus,
-    OrderType, OrderValidity, OrderVariety, PNL, Position, PositionConversionRequest, ProductType,
-    QuoteMode, Segment, SegmentKind, Trade, TransactionType, UserMargins, UserProfile, UserSession,
-    Utilised,
+    GttTriggerRequest, GttType, HistoricalCandle, HistoricalData, HistoricalInterval, Holding,
+    Instrument, KiteApiResponse, LTPQuote, OHLCQuote, Order, OrderCharges, OrderChargesRequest,
+    OrderMargin, OrderMarginRequest, OrderReceipt, OrderStatus, OrderType, OrderValidity,
+    OrderVariety, PNL, Position, PositionConversionRequest, ProductType, QuoteMode, Segment,
+    SegmentKind, Trade, TransactionType, UserMargins, UserProfile, UserSession, Utilised,
 };
 
 pub mod kite;

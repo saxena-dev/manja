@@ -16,10 +16,10 @@ use serde::{de::DeserializeOwned, Serialize};
 
 use crate::kite::{
     connect::{
-        api::{BackoffPolicy, Charges, Margins, Market, Orders, Session, User},
+        api::{BackoffPolicy, Charges, Historical, Margins, Market, Orders, Session, User},
         config::Config,
         credentials::KiteCredentials,
-        models::{KiteApiResponse, UserSession},
+        models::{HistoricalData, HistoricalInterval, KiteApiResponse, UserSession},
     },
     error::{map_deserialization_error, KiteApiException, ManjaError, Result},
     traits::KiteConfig,
@@ -113,6 +113,11 @@ impl HTTPClient {
         Market::new(self)
     }
 
+    /// To call [Historical] related APIs using this client.
+    pub fn historical(&mut self) -> Historical<'_> {
+        Historical::new(self)
+    }
+
     /// To call [Margins] related APIs using this client.
     pub fn margins(&mut self) -> Margins<'_> {
         Margins::new(self)
@@ -150,6 +155,26 @@ impl HTTPClient {
         Model: DeserializeOwned,
     {
         self.map_http_result(self.inner.get(path, backoff).await, |v| v)
+    }
+
+    /// Internal helper used by the facade Historical API group to call the
+    /// transport-layer historical endpoint while preserving facade error types.
+    pub(crate) async fn inner_historical_candles(
+        &self,
+        instrument_token: u32,
+        interval: HistoricalInterval,
+        from: chrono::NaiveDateTime,
+        to: chrono::NaiveDateTime,
+        continuous: bool,
+        oi: bool,
+    ) -> Result<KiteApiResponse<HistoricalData>> {
+        self.map_http_result(
+            self.inner
+                .historical()
+                .candles(instrument_token, interval, from, to, continuous, oi)
+                .await,
+            |v| v,
+        )
     }
 
     /// Make a GET request to {path} with given query and deserialize the response body.

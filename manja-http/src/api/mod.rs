@@ -43,6 +43,10 @@ pub use portfolio::Portfolio;
 mod market;
 pub use market::Market;
 
+// Manages the `/instruments/historical/` API group, providing historical OHLCV(+OI) data.
+mod historical;
+pub use historical::Historical;
+
 // Manages the `/margins/` and `/charges/` API group, dealing with margin
 // requirements and charges.
 mod margins;

@@ -12,7 +12,9 @@ use std::time::Duration;
 use secrecy::{ExposeSecret, Secret};
 use serde::{de::DeserializeOwned, Serialize};
 
-use crate::api::{Alerts, BackoffPolicy, Charges, Gtt, Margins, Market, Orders, Session, User};
+use crate::api::{
+    Alerts, BackoffPolicy, Charges, Gtt, Historical, Margins, Market, Orders, Session, User,
+};
 use crate::config::Config;
 use crate::error::{map_deserialization_error, Error, Result};
 use manja_core::error::{KiteApiError, KiteApiException};
@@ -122,6 +124,11 @@ impl HTTPClient {
     /// To call [Market] related APIs using this client.
     pub fn market(&mut self) -> Market<'_> {
         Market::new(self)
+    }
+
+    /// To call [Historical] related APIs using this client.
+    pub fn historical(&self) -> Historical<'_> {
+        Historical::new(self)
     }
 
     /// To call [Margins] related APIs using this client.
