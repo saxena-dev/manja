@@ -1,16 +1,14 @@
-//! Asynchronous WebSocket client.
+//! Asynchronous WebSocket client for the Kite Connect ticker stream.
 //!
-//! This module provides functionality for establishing and managing WebSocket
-//! connections to Kite Connect streaming API. It includes the `TickerStream`
-//! struct for handling the WebSocket stream and the `WebSocketClient` struct
-//! for managing the connection and interaction with the WebSocket.
-//!
+//! This module is extracted from the `manja` facade crate and provides
+//! the underlying WebSocket runtime used by `manja::kite::ticker`.
+
 use std::future::Future;
 use std::io;
 use std::pin::Pin;
 use std::task::Poll;
 
-use crate::kite::ticker::stream::{StreamState, SubscriptionStream};
+use crate::stream::{StreamState, SubscriptionStream};
 
 use futures_util::{SinkExt, Stream, StreamExt};
 use stubborn_io::tokio::{StubbornIo, UnderlyingIo};
@@ -23,7 +21,6 @@ use tungstenite::client::IntoClientRequest;
 ///
 /// This struct holds the WebSocket stream and its state, allowing for interaction
 /// with the KiteConnect ticker API.
-///
 pub struct TickerStream {
     /// WebSocket stream
     pub ws_stream: WebSocketStream<MaybeTlsStream<TcpStream>>,
@@ -40,15 +37,6 @@ where
     ///
     /// This function takes the stream state, establishes a connection using
     /// WebSocket, and returns a `TickerStream` instance.
-    ///
-    /// # Arguments
-    ///
-    /// * `stream_state` - The state of the stream to be established.
-    ///
-    /// # Returns
-    ///
-    /// A pinned future that resolves to an `io::Result` containing a `TickerStream` instance.
-    ///
     fn establish(
         stream_state: StreamState,
     ) -> Pin<Box<dyn Future<Output = io::Result<Self>> + Send>> {
@@ -61,7 +49,6 @@ where
                 Ok((mut ws_stream, response)) => {
                     info!("ticker.connect.success (status: {})", response.status());
                     info!("Response contains the following headers:");
-                    info!("Response contains the following headers:");
                     for (header, value) in response.headers() {
                         info!("* {}: {:?}", header, value);
                     }
@@ -70,19 +57,18 @@ where
                         match maybe_msg {
                             Ok(msg) => {
                                 debug!("Ticker request: {}", msg);
-                                match ws_stream.send(msg).await {
-                                    Ok(_) => (),
-                                    Err(e) => error!("Error sending a ticker request: {}", e),
+                                if let Err(e) = ws_stream.send(msg).await {
+                                    error!("Error sending a ticker request: {}", e);
                                 }
                             }
                             Err(e) => {
-                                error!("Error serializing TickerRequest: {}", e)
+                                error!("Error serializing TickerRequest: {}", e);
                             }
                         }
                     }
                     Ok(TickerStream {
                         ws_stream,
-                        stream_state: stream_state,
+                        stream_state,
                     })
                 }
                 Err(e) => {
@@ -101,7 +87,6 @@ where
 ///
 /// This struct manages the WebSocket connection and provides methods to
 /// interact with the WebSocket stream.
-///
 pub struct WebSocketClient(StubbornIo<TickerStream, StreamState>);
 
 impl WebSocketClient {
@@ -109,33 +94,6 @@ impl WebSocketClient {
     ///
     /// This function establishes a persistent WebSocket connection using the
     /// given stream state.
-    ///
-    /// # Arguments
-    ///
-    /// * `stream_state` - The state of the stream to be connected.
-    ///
-    /// # Returns
-    ///
-    /// An `io::Result` containing a `WebSocketClient` instance.
-    ///
-    /// # Example
-    ///
-    /// ```ignore
-    /// use futures_util::stream::StreamExt;
-    ///
-    /// let stream_state = StreamState::from_credentials(stream_creds)
-    ///     .subscribe_token(Mode::Full, 408065)    // INFY
-    ///     .subscribe_token(Mode::Full, 884737);   // TATAMOTORS
-    /// if let Ok(mut ticker) = WebSocketClient::connect(stream_state).await {
-    ///     if let Some(maybe_msg) = ticker.next().await {
-    ///         match maybe_msg {
-    ///             Ok(msg) => info!("Message: {}", msg),
-    ///             Err(e) => error!("Error: {}", e),
-    ///         }
-    ///     }
-    /// }
-    /// ```
-    ///
     pub async fn connect(stream_state: StreamState) -> io::Result<Self> {
         match StubbornIo::connect(stream_state).await {
             Ok(stubborn) => Ok(WebSocketClient(stubborn)),
@@ -158,3 +116,4 @@ impl Stream for WebSocketClient {
         Pin::new(&mut self.0.ws_stream).poll_next(cx)
     }
 }
+
