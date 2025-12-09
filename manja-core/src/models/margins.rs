@@ -5,8 +5,8 @@
 //! margins and charges, along with detailed structures for GST and other applicable
 //! charges.
 //!
-use crate::kite::connect::models::exchange::Exchange;
-use crate::kite::connect::models::{OrderType, OrderVariety, ProductType, TransactionType};
+use crate::models::exchange::Exchange;
+use crate::models::{OrderType, OrderVariety, ProductType, TransactionType};
 
 use serde::{Deserialize, Serialize};
 

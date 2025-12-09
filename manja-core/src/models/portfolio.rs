@@ -6,7 +6,7 @@
 //! position conversion requests, making it easier to manage and process
 //! portfolio activities.
 //!
-use crate::kite::connect::models::{
+use crate::models::{
     exchange::Exchange,
     order_enums::{ProductType, TransactionType},
 };

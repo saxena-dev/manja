@@ -45,6 +45,7 @@ tracing = "0.1.40"
 tracing-subscriber = "0.3.18"
 tungstenite = { version = "0.23.0", optional = true }
 url = "2.5.0"
+manja-core = { path = "../manja-core" }
 
 [features]
 default = ["websocket", "backoff", "dotenv-config", "webdriver-login"]
@@ -74,4 +75,3 @@ log = "0.4.22"
 mockito = "1.4.0"
 tokio-test = "0.4.2"
 futures = "0.3.30"
-

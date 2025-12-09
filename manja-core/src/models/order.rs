@@ -7,9 +7,7 @@
 use chrono::{DateTime, FixedOffset, NaiveDateTime, TimeZone};
 use serde::{Deserialize, Deserializer, Serialize};
 
-use crate::kite::connect::models::order_enums::{
-    OrderStatus, OrderType, ProductType, TransactionType,
-};
+use crate::models::order_enums::{OrderStatus, OrderType, ProductType, TransactionType};
 
 use super::order_enums::OrderVariety;
 

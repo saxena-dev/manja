@@ -8,7 +8,7 @@
 //! different modes of market quotes. These types are used for managing and
 //! processing trading instruments and their market data within the application.
 //!
-use crate::kite::connect::models::exchange::Exchange;
+use crate::models::exchange::Exchange;
 
 use chrono::NaiveDate;
 use serde::de::DeserializeOwned;
@@ -186,7 +186,7 @@ pub enum QuoteMode {
 /// Trait for types that can be used as kite market quotes.
 ///
 #[allow(unused)]
-pub(crate) trait KiteQuote: DeserializeOwned {
+pub trait KiteQuote: DeserializeOwned {
     fn mode() -> QuoteMode;
 }
 

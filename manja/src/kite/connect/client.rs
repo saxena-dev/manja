@@ -43,9 +43,10 @@ use crate::kite::{
         config::Config,
         models::{KiteApiResponse, UserSession},
     },
-    error::{map_deserialization_error, KiteApiError, KiteApiException, ManjaError, Result},
+    error::{map_deserialization_error, KiteApiException, ManjaError, Result},
     traits::KiteConfig,
 };
+use manja_core::error::KiteApiError;
 
 /// An asynchronous Kite Connect client to make HTTP requests with.
 ///
@@ -514,14 +515,28 @@ pub mod test_utils {
     use crate::kite::connect::config::{Config, KITECONNECT_API_LOGIN, KITECONNECT_API_REDIRECT};
     use crate::kite::connect::credentials::KiteCredentials;
 
+    pub fn resolve_fixture_path(relative: &str) -> std::path::PathBuf {
+        let root = std::env::var("CARGO_MANIFEST_DIR").unwrap_or_else(|_| ".".to_string());
+        let candidate = std::path::Path::new(&root).join(relative);
+        if candidate.exists() {
+            return candidate;
+        }
+
+        // When running in a workspace, fixture files may live at the workspace
+        // root (one level up from the crate).
+        let workspace_candidate = std::path::Path::new(&root).join("..").join(relative);
+        if workspace_candidate.exists() {
+            return workspace_candidate;
+        }
+
+        candidate
+    }
+
     pub fn read_to_object<M>(path: &str) -> Result<M>
     where
         M: DeserializeOwned,
     {
-        // Resolve fixture paths relative to the crate root so tests behave
-        // consistently regardless of the current working directory.
-        let root = std::env::var("CARGO_MANIFEST_DIR").unwrap_or_else(|_| ".".to_string());
-        let full_path = std::path::Path::new(&root).join(path);
+        let full_path = resolve_fixture_path(path);
         let contents = std::fs::read_to_string(&full_path).unwrap_or_else(|err| {
             panic!("failed to read fixture at {}: {}", full_path.display(), err)
         });
@@ -540,9 +555,7 @@ pub mod test_utils {
     ) -> ServerGuard {
         let mut mocks = Vec::new();
         for ((method, api_endpoint), response_path) in mock_map {
-            let root =
-                std::env::var("CARGO_MANIFEST_DIR").unwrap_or_else(|_| ".".to_string());
-            let full_path = std::path::Path::new(&root).join(response_path);
+            let full_path = resolve_fixture_path(response_path);
             let response_json = std::fs::read_to_string(&full_path).unwrap_or_else(|err| {
                 panic!("failed to read fixture at {}: {}", full_path.display(), err)
             });
