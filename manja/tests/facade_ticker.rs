@@ -1,3 +1,5 @@
+#![cfg(feature = "websocket")]
+
 use manja::UserSession;
 use manja_ticker::{KiteStreamCredentials, Mode, StreamState};
 
