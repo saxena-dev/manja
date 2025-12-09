@@ -34,6 +34,21 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 }
 ```
 
+### Running Examples in the Workspace
+
+From the workspace root:
+
+```bash
+# Basic HTTP login + profile/margins
+cargo run -p manja --example basic_http
+
+# Market quotes example
+cargo run -p manja --example quotes
+
+# Ticker streaming (requires `websocket` feature and valid credentials)
+cargo run -p manja --example ticker --features websocket
+```
+
 ## `manja` Features
 
 `manja` strives to improve the developer experience by providing better support in IDEs with features like auto-completion, type-inference, and inline documentation.

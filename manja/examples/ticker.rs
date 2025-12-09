@@ -67,7 +67,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 fn main() {
     eprintln!(
         "This example requires the `websocket` feature.\n\
-         Rebuild with: cargo run --example ticker --features manja/websocket"
+         Rebuild with:\n\
+           cargo run -p manja --example ticker --features websocket"
     );
 }
-
