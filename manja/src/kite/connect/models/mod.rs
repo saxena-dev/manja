@@ -11,11 +11,11 @@ pub use manja_core::models::{
     AlertStatus, AlertType, Auction, Available, BasketMargin, Charges, Exchange, FullQuote,
     GST, GttCondition, GttOrderExecutionResult, GttOrderParams, GttOrderResult, GttStatus,
     GttTrigger, GttTriggerId, GttTriggerRequest, GttType, HistoricalCandle, HistoricalData,
-    HistoricalInterval, Holding, Instrument, KiteApiResponse, LTPQuote, OHLCQuote, Order,
-    OrderCharges, OrderChargesRequest, OrderMargin, OrderMarginRequest, OrderReceipt, OrderStatus,
-    OrderType, OrderValidity, OrderVariety, PNL, Position, PositionConversionRequest, ProductType,
-    QuoteMode, Segment, SegmentKind, Trade, TransactionType, UserMargins, UserProfile,
-    UserSession, Utilised,
+    HistoricalInterval, Holding, Instrument, KiteApiResponse, LTPQuote, MfHolding, MfInstrument,
+    MfOrder, MfSip, OHLCQuote, Order, OrderCharges, OrderChargesRequest, OrderMargin,
+    OrderMarginRequest, OrderReceipt, OrderStatus, OrderType, OrderValidity, OrderVariety, PNL,
+    Position, PositionConversionRequest, ProductType, QuoteMode, Segment, SegmentKind, Trade,
+    TransactionType, UserMargins, UserProfile, UserSession, Utilised,
 };
 
 // Internal helper trait used by HTTP client and API groups.

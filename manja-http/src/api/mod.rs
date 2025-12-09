@@ -60,6 +60,10 @@ pub use gtt::Gtt;
 mod alerts;
 pub use alerts::Alerts;
 
+// Manages the `/mf/` API group for mutual fund (Coin) operations.
+mod mutual_funds;
+pub use mutual_funds::MutualFunds;
+
 /// Creates a backoff policy with a specified rate limit.
 ///
 /// When the `backoff` feature is disabled, this returns a unit value.

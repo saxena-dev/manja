@@ -125,3 +125,8 @@ pub use alerts::{
 mod historical;
 #[allow(unused_imports)]
 pub use historical::{HistoricalCandle, HistoricalData, HistoricalInterval};
+
+/// Models for mutual funds (Coin) APIs.
+mod mutual_funds;
+#[allow(unused_imports)]
+pub use mutual_funds::{MfHolding, MfInstrument, MfOrder, MfSip};

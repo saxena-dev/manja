@@ -13,7 +13,8 @@ use secrecy::{ExposeSecret, Secret};
 use serde::{de::DeserializeOwned, Serialize};
 
 use crate::api::{
-    Alerts, BackoffPolicy, Charges, Gtt, Historical, Margins, Market, Orders, Session, User,
+    Alerts, BackoffPolicy, Charges, Gtt, Historical, Margins, Market, MutualFunds, Orders,
+    Session, User,
 };
 use crate::config::Config;
 use crate::error::{map_deserialization_error, Error, Result};
@@ -149,6 +150,11 @@ impl HTTPClient {
     /// To call [Alerts] related APIs using this client.
     pub fn alerts(&mut self) -> Alerts<'_> {
         Alerts::new(self)
+    }
+
+    /// To call Mutual Funds related APIs using this client.
+    pub fn mutual_funds(&self) -> MutualFunds<'_> {
+        MutualFunds::new(self)
     }
 
     // --- [ HTTP verb functions ] ---

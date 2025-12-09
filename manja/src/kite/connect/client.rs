@@ -16,10 +16,15 @@ use serde::{de::DeserializeOwned, Serialize};
 
 use crate::kite::{
     connect::{
-        api::{BackoffPolicy, Charges, Historical, Margins, Market, Orders, Session, User},
+        api::{
+            BackoffPolicy, Charges, Historical, Margins, Market, MutualFunds, Orders, Session,
+            User,
+        },
         config::Config,
         credentials::KiteCredentials,
-        models::{HistoricalData, HistoricalInterval, KiteApiResponse, UserSession},
+        models::{
+            HistoricalData, HistoricalInterval, KiteApiResponse, MfInstrument, UserSession,
+        },
     },
     error::{map_deserialization_error, KiteApiException, ManjaError, Result},
     traits::KiteConfig,
@@ -138,6 +143,11 @@ impl HTTPClient {
         crate::kite::connect::api::Alerts::new(self)
     }
 
+    /// To call Mutual Funds related APIs using this client.
+    pub fn mutual_funds(&mut self) -> MutualFunds<'_> {
+        MutualFunds::new(self)
+    }
+
     // --- [ HTTP verb functions ] ---
 
     /// Make a GET request to {path} and return the response body.
@@ -175,6 +185,12 @@ impl HTTPClient {
                 .await,
             |v| v,
         )
+    }
+
+    /// Internal helper used by the facade Mutual Funds API group to call the
+    /// transport-layer MF instruments endpoint while preserving facade error types.
+    pub(crate) async fn inner_mutual_funds_instruments(&self) -> Result<Vec<MfInstrument>> {
+        self.map_http_result(self.inner.mutual_funds().instruments().await, |v| v)
     }
 
     /// Make a GET request to {path} with given query and deserialize the response body.

@@ -53,6 +53,30 @@
 //! }
 //! ```
 //!
+//! ## Example: Fetching mutual fund orders
+//!
+//! ```ignore
+//! use manja::ManjaClient;
+//! use manja::{KiteApiResponse, MfOrder};
+//!
+//! #[tokio::main]
+//! async fn main() -> Result<(), Box<dyn std::error::Error>> {
+//!     let mut client = ManjaClient::from_env();
+//!
+//!     // Fetch the latest mutual fund orders (last 7 days).
+//!     let response: KiteApiResponse<Vec<MfOrder>> =
+//!         client.mutual_funds().orders().await?;
+//!
+//!     if let Some(orders) = response.data {
+//!         for order in orders {
+//!             println!("MF order {}: {} {}", order.order_id, order.tradingsymbol, order.status.unwrap_or_default());
+//!         }
+//!     }
+//!
+//!     Ok(())
+//! }
+//! ```
+//!
 //! ## Example: Fetching historical candles
 //!
 //! The [`ManjaClient::historical`] API group provides typed access to
@@ -139,10 +163,11 @@ pub use crate::kite::connect::models::{
     AlertType, Auction, Available, BasketMargin, Charges, Exchange, FullQuote, GST, GttCondition,
     GttOrderExecutionResult, GttOrderParams, GttOrderResult, GttStatus, GttTrigger, GttTriggerId,
     GttTriggerRequest, GttType, HistoricalCandle, HistoricalData, HistoricalInterval, Holding,
-    Instrument, KiteApiResponse, LTPQuote, OHLCQuote, Order, OrderCharges, OrderChargesRequest,
-    OrderMargin, OrderMarginRequest, OrderReceipt, OrderStatus, OrderType, OrderValidity,
-    OrderVariety, PNL, Position, PositionConversionRequest, ProductType, QuoteMode, Segment,
-    SegmentKind, Trade, TransactionType, UserMargins, UserProfile, UserSession, Utilised,
+    Instrument, KiteApiResponse, LTPQuote, MfHolding, MfInstrument, MfOrder, MfSip, OHLCQuote,
+    Order, OrderCharges, OrderChargesRequest, OrderMargin, OrderMarginRequest, OrderReceipt,
+    OrderStatus, OrderType, OrderValidity, OrderVariety, PNL, Position, PositionConversionRequest,
+    ProductType, QuoteMode, Segment, SegmentKind, Trade, TransactionType, UserMargins,
+    UserProfile, UserSession, Utilised,
 };
 
 pub mod kite;
