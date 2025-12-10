@@ -50,3 +50,10 @@ jobs:
 
       - name: Test (doctests)
         run: cargo test -p manja ${{ matrix.profile['cargo-flags'] }} --doc
+
+      - name: Workspace tests (all crates, all features)
+        # Run full workspace tests once under the default profile
+        # to keep CI runtime reasonable while ensuring all crates
+        # are exercised together.
+        if: matrix.profile.name == 'default'
+        run: cargo test --workspace --all-features -- --nocapture
