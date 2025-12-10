@@ -351,66 +351,98 @@ impl HTTPClient {
         RB: Fn() -> Fut,
         Fut: Future<Output = Result<reqwest::Request>>,
     {
-        let client = self.http_client();
-
         #[cfg(feature = "backoff")]
         {
             use backoff::future::retry;
 
-            retry(backoff.clone(), || async {
-                let request = request_baker().await.map_err(backoff::Error::Permanent)?;
-                let method = request.method().to_string();
-                let path = request.url().path().to_string();
-                let span = tracing::info_span!("http.request", %method, %path);
-                let _enter = span.enter();
+            let client = self.http_client();
+            let mut attempt: u32 = 0;
 
-                tracing::trace!("sending HTTP request");
-                let response = client
-                    .execute(request)
-                    .await
-                    .map_err(Error::from)
-                    .map_err(backoff::Error::Permanent)?;
-                let status = response.status();
-                let json_response = response
-                    .text()
-                    .await
-                    .map_err(Error::from)
-                    .map_err(backoff::Error::Permanent)?;
-                if !status.is_success() {
-                    let kite_response: KiteApiResponse<Option<String>> =
-                        serde_json::from_str(&json_response)
-                            .map_err(|e| map_deserialization_error(e, &json_response))
-                            .map_err(backoff::Error::Permanent)?;
-                    let kite_error = KiteApiError {
-                        endpoint: path.clone(),
-                        status_code: status.as_u16(),
-                        message: kite_response.message,
-                        error_type: kite_response
-                            .error_type
-                            .and_then(|error_type| Some(KiteApiException::from(error_type.as_str())))
-                            .unwrap(),
-                    };
-                    tracing::error!(
-                        status = status.as_u16(),
-                        error_type = %kite_error.error_type.as_str(),
-                        "Kite API error at {}",
-                        path
+            retry(backoff.clone(), || {
+                attempt += 1;
+                let attempt_no = attempt;
+                let request_fut = request_baker();
+
+                async move {
+                    let request =
+                        request_fut.await.map_err(backoff::Error::Permanent)?;
+                    let method = request.method().to_string();
+                    let path = request.url().path().to_string();
+                    let span = tracing::info_span!(
+                        "http.request",
+                        %method,
+                        %path,
+                        attempt = attempt_no
                     );
-                    if status.as_u16() == 429 {
-                        tracing::warn!("Rate limited at endpoint: {}", path);
-                        return Err(backoff::Error::transient(Error::from(kite_error)));
-                    }
-                    return Err(backoff::Error::Permanent(Error::from(kite_error)));
-                }
+                    let _enter = span.enter();
 
-                tracing::debug!(status = status.as_u16(), "HTTP request succeeded");
-                Ok(json_response)
+                    tracing::trace!("sending HTTP request");
+                    let response = client
+                        .execute(request)
+                        .await
+                        .map_err(|err| {
+                            tracing::error!(error = %err, "HTTP transport error");
+                            Error::from(err)
+                        })
+                        .map_err(backoff::Error::Permanent)?;
+                    let status = response.status();
+                    let json_response = response
+                        .text()
+                        .await
+                        .map_err(|err| {
+                            tracing::error!(error = %err, "HTTP body read error");
+                            Error::from(err)
+                        })
+                        .map_err(backoff::Error::Permanent)?;
+                    if !status.is_success() {
+                        let kite_response: KiteApiResponse<Option<String>> =
+                            serde_json::from_str(&json_response)
+                                .map_err(|e| map_deserialization_error(e, &json_response))
+                                .map_err(backoff::Error::Permanent)?;
+                        let kite_error = KiteApiError {
+                            endpoint: path.clone(),
+                            status_code: status.as_u16(),
+                            message: kite_response.message,
+                            error_type: kite_response
+                                .error_type
+                                .and_then(|error_type| {
+                                    Some(KiteApiException::from(error_type.as_str()))
+                                })
+                                .unwrap(),
+                        };
+                        tracing::error!(
+                            status = status.as_u16(),
+                            error_type = %kite_error.error_type.as_str(),
+                            attempt = attempt_no,
+                            "Kite API error at {}",
+                            path
+                        );
+                        if status.as_u16() == 429 {
+                            tracing::warn!(
+                                status = status.as_u16(),
+                                attempt = attempt_no,
+                                "Rate limited at endpoint: {} (retrying with backoff)",
+                                path
+                            );
+                            return Err(backoff::Error::transient(Error::from(kite_error)));
+                        }
+                        return Err(backoff::Error::Permanent(Error::from(kite_error)));
+                    }
+
+                    tracing::debug!(
+                        status = status.as_u16(),
+                        attempt = attempt_no,
+                        "HTTP request succeeded"
+                    );
+                    Ok(json_response)
+                }
             })
             .await
         }
 
         #[cfg(not(feature = "backoff"))]
         {
+            let client = self.http_client();
             let request = request_baker().await?;
             let method = request.method().to_string();
             let path = request.url().path().to_string();
@@ -418,9 +450,18 @@ impl HTTPClient {
             let _enter = span.enter();
 
             tracing::trace!("sending HTTP request");
-            let response = client.execute(request).await.map_err(Error::from)?;
+            let response = client
+                .execute(request)
+                .await
+                .map_err(|err| {
+                    tracing::error!(error = %err, "HTTP transport error");
+                    Error::from(err)
+                })?;
             let status = response.status();
-            let json_response = response.text().await.map_err(Error::from)?;
+            let json_response = response.text().await.map_err(|err| {
+                tracing::error!(error = %err, "HTTP body read error");
+                Error::from(err)
+            })?;
             if !status.is_success() {
                 let kite_response: KiteApiResponse<Option<String>> =
                     serde_json::from_str(&json_response)
@@ -435,18 +476,28 @@ impl HTTPClient {
                         .unwrap(),
                 };
                 tracing::error!(
+                    attempt = 1_u32,
                     status = status.as_u16(),
                     error_type = %kite_error.error_type.as_str(),
                     "Kite API error at {}",
                     path
                 );
                 if status.as_u16() == 429 {
-                    tracing::warn!("Rate limited at endpoint: {}", path);
+                    tracing::warn!(
+                        status = status.as_u16(),
+                        attempt = 1_u32,
+                        "Rate limited at endpoint: {}",
+                        path
+                    );
                 }
                 return Err(Error::from(kite_error));
             }
 
-            tracing::debug!(status = status.as_u16(), "HTTP request succeeded");
+            tracing::debug!(
+                status = status.as_u16(),
+                attempt = 1_u32,
+                "HTTP request succeeded"
+            );
             Ok(json_response)
         }
     }

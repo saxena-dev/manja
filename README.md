@@ -96,6 +96,41 @@ cargo run -p manja --example ticker --features websocket
   - _Reduce Downtime_: with real-time insights and quick access to logs, identify and resolve issues faster, minimizing downtime.
   - _Enhance User Experience_: quickly address errors and performance bottlenecks to provide a better experience for your users.
 
+  #### Observability & Metrics
+
+  A typical setup enabling structured HTTP/ticker spans and wiring in a metrics layer looks like:
+
+  ```rust ignore
+  use manja::observability;
+  use manja::ManjaClient;
+  use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
+
+  #[tokio::main]
+  async fn main() -> Result<(), Box<dyn std::error::Error>> {
+      // Initialize a default `tracing` subscriber (respects `RUST_LOG`).
+      observability::init_tracing_from_env("info");
+
+      // If you have a metrics layer (e.g. from OpenTelemetry or `metrics`),
+      // you can register it alongside the formatting layer:
+      /*
+      let filter = tracing_subscriber::EnvFilter::try_from_default_env()
+          .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info"));
+      let metrics_layer = /* your metrics layer here */;
+
+      tracing_subscriber::registry()
+          .with(filter)
+          .with(tracing_subscriber::fmt::layer())
+          .with(metrics_layer)
+          .init();
+      */
+
+      let mut client = ManjaClient::from_env();
+      let _profile = client.user().profile().await?;
+
+      Ok(())
+  }
+  ```
+
 - [x] **WebSocket** support for streaming binary market data.
 
   - _Auto-reconnect Mechanism_: `manja` provides a reliable async WebSocket client with a configurable exponential backoff retry mechanism.

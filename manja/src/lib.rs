@@ -20,6 +20,7 @@
 //!    - *Streamline Development*: facilitate smoother development cycles with better debugging and faster issue resolution.
 //!    - *Reduce Downtime*: with real-time insights and quick access to logs, identify and resolve issues faster, minimizing downtime.
 //!    - *Enhance User Experience*: quickly address errors and performance bottlenecks to provide a better experience for your users.
+//!    - *Observability Hooks*: use [`crate::observability::init_tracing_from_env`] to enable structured HTTP and ticker spans, and extend the `tracing_subscriber` registry with your own metrics layer if desired.
 //!
 //! - **WebSocket** support for streaming binary market data (via a feature-gated ticker client).
 //!    - *Auto-reconnect Mechanism*: `manja` provides a reliable and stateful async WebSocket client with a configurable exponential backoff retry mechanism.
@@ -209,6 +210,7 @@
 #![allow(private_interfaces, unused)]
 
 mod client;
+pub mod observability;
 
 pub use client::ManjaClient;
 

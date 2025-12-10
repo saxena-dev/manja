@@ -10,6 +10,7 @@ use std::task::{Context, Poll};
 use futures_util::Stream;
 use manja_core::models::UserSession;
 use secrecy::{ExposeSecret, Secret};
+use tracing::debug;
 use tungstenite::{client::IntoClientRequest, Message};
 
 use crate::models::{Mode, TickerRequest};
@@ -111,10 +112,19 @@ impl StreamState {
 
     /// Subscribes to an instrument token with a specified mode.
     pub fn subscribe_token(mut self, mode: Mode, token: u32) -> Self {
-        if let Some(vec) = self.subscription.get_mut(&mode) {
+        let mode_key = mode.clone();
+        if let Some(vec) = self.subscription.get_mut(&mode_key) {
             vec.push(token);
         } else {
-            self.subscription.insert(mode, vec![token]);
+            self.subscription.insert(mode_key.clone(), vec![token]);
+        }
+        if let Some(tokens) = self.subscription.get(&mode_key) {
+            debug!(
+                mode = ?mode_key,
+                token,
+                token_count = tokens.len(),
+                "ticker.subscription.update"
+            );
         }
         self
     }
@@ -191,6 +201,8 @@ impl Stream for SubscriptionStream {
             // Create a `TickerRequest` for the current mode and tokens.
             let ticker_request =
                 TickerRequest::subscribe_with_mode(tokens.clone(), current_key.clone());
+
+            debug!(mode = ?current_key, token_count = tokens.len(), "ticker.subscription.request");
 
             // Serialize the `TickerRequest` to JSON and wrap it in a `Message::Text`.
             match serde_json::to_string(&ticker_request) {
