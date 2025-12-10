@@ -126,6 +126,14 @@ mod historical;
 #[allow(unused_imports)]
 pub use historical::{HistoricalCandle, HistoricalData, HistoricalInterval};
 
+/// Models and helpers for order postbacks (webhooks/WebSocket).
+mod postbacks;
+#[allow(unused_imports)]
+pub use postbacks::{
+    compute_postback_checksum, parse_http_postback, parse_websocket_order_postback,
+    verify_postback_checksum, OrderPostback, WebSocketPostbackEnvelope,
+};
+
 /// Models for mutual funds (Coin) APIs.
 mod mutual_funds;
 #[allow(unused_imports)]

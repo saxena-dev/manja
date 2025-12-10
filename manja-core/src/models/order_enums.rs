@@ -17,7 +17,7 @@ use serde::{Deserialize, Serialize};
 ///
 /// This enum contains several constant values used for placing different types of orders.
 ///
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, Clone)]
 pub enum OrderVariety {
     /// Regular order.
     #[serde(rename = "regular")]
@@ -64,7 +64,7 @@ impl fmt::Display for OrderVariety {
 /// instantly passes through several stages before reaching its end state. Some
 /// of these are highlighted below.
 ///
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, Clone)]
 pub enum OrderStatus {
     /// The order has been placed and is currently open.
     #[serde(rename = "OPEN")]
@@ -146,7 +146,7 @@ impl fmt::Display for OrderStatus {
 /// This enum contains several constant values used for placing different types
 /// of orders.
 ///
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, Clone)]
 pub enum OrderType {
     /// Market order.
     #[serde(rename = "MARKET")]
@@ -182,7 +182,7 @@ impl fmt::Display for OrderType {
 ///
 /// This enum contains several constant values used for specifying the product type.
 ///
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, Clone)]
 pub enum ProductType {
     /// Cash & Carry for equity.
     #[serde(rename = "CNC")]
@@ -218,7 +218,7 @@ impl fmt::Display for ProductType {
 ///
 /// This enum contains several constant values used for specifying the order validity.
 ///
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, Clone)]
 pub enum OrderValidity {
     /// Regular order.
     #[serde(rename = "DAY")]
@@ -249,7 +249,7 @@ impl fmt::Display for OrderValidity {
 /// This enum contains constant values used for specifying the order transaction
 /// type.
 ///
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, Clone)]
 pub enum TransactionType {
     /// Buy.
     #[serde(rename = "BUY")]

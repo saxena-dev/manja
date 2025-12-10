@@ -15,7 +15,8 @@ pub use manja_core::models::{
     MfOrder, MfSip, OHLCQuote, Order, OrderCharges, OrderChargesRequest, OrderMargin,
     OrderMarginRequest, OrderReceipt, OrderStatus, OrderType, OrderValidity, OrderVariety, PNL,
     Position, PositionConversionRequest, ProductType, QuoteMode, Segment, SegmentKind, Trade,
-    TransactionType, UserMargins, UserProfile, UserSession, Utilised,
+    TransactionType, UserMargins, UserProfile, UserSession, Utilised, parse_http_postback,
+    verify_postback_checksum,
 };
 
 // Internal helper trait used by HTTP client and API groups.

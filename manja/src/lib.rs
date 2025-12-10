@@ -139,6 +139,31 @@
 //! For WebSocket streaming or WebDriver-assisted login flows, refer to the
 //! module-level documentation under [`kite::ticker`] and [`kite::login`].
 //!
+//! ## Example: Handling order postbacks (webhooks/WebSocket)
+//!
+//! ```ignore
+//! use manja::{OrderPostback, Result};
+//! use manja::kite::connect::models::{
+//!     parse_http_postback, verify_postback_checksum,
+//! };
+//!
+//! fn handle_postback(body: &str, api_secret: &str) -> Result<OrderPostback> {
+//!     // Parse the raw JSON payload into a typed postback.
+//!     let postback = parse_http_postback(body)?;
+//!
+//!     // Verify the checksum using your Kite API secret.
+//!     if !verify_postback_checksum(&postback, api_secret) {
+//!         // Reject or log suspicious payloads.
+//!         return Err(manja::ManjaError::Other(
+//!             "invalid postback checksum".into(),
+//!         ));
+//!     }
+//!
+//!     // Proceed with your business logic (update order state, etc.).
+//!     Ok(postback)
+//! }
+//! ```
+//!
 //! # Disclaimer
 //!
 //! **Important Notice**:
@@ -163,11 +188,12 @@ pub use crate::kite::connect::models::{
     AlertType, Auction, Available, BasketMargin, Charges, Exchange, FullQuote, GST, GttCondition,
     GttOrderExecutionResult, GttOrderParams, GttOrderResult, GttStatus, GttTrigger, GttTriggerId,
     GttTriggerRequest, GttType, HistoricalCandle, HistoricalData, HistoricalInterval, Holding,
-    Instrument, KiteApiResponse, LTPQuote, MfHolding, MfInstrument, MfOrder, MfSip, OHLCQuote,
-    Order, OrderCharges, OrderChargesRequest, OrderMargin, OrderMarginRequest, OrderReceipt,
-    OrderStatus, OrderType, OrderValidity, OrderVariety, PNL, Position, PositionConversionRequest,
-    ProductType, QuoteMode, Segment, SegmentKind, Trade, TransactionType, UserMargins,
-    UserProfile, UserSession, Utilised,
+    Instrument, KiteApiResponse, LTPQuote, MfHolding, MfInstrument, MfOrder, MfSip,
+    OHLCQuote, Order, OrderCharges, OrderChargesRequest, OrderMargin, OrderMarginRequest,
+    OrderReceipt, OrderStatus, OrderType, OrderValidity, OrderVariety, PNL, Position,
+    PositionConversionRequest, ProductType, QuoteMode, Segment, SegmentKind, Trade,
+    TransactionType, UserMargins, UserProfile, UserSession, Utilised, parse_http_postback,
+    verify_postback_checksum,
 };
 
 pub mod kite;
