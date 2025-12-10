@@ -3,6 +3,22 @@
 //! An asynchronous client library for [Zerodha](https://zerodha.com/)'s [Kite Connect](https://kite.trade/)
 //! trading APIs (a set of REST-like HTTP APIs).
 //!
+//! # Crates & Support Tiers
+//!
+//! This crate (`manja`) is the Tier‑1 facade of the workspace and the
+//! canonical SDK crate that most applications should depend on.
+//!
+//! - **Tier‑1:** `manja` (facade) and `manja-core` (shared models, errors, traits).
+//! - **Tier‑2:** `manja-http` and `manja-ticker` for advanced/low-level HTTP and ticker control;
+//!   these are exposed via `manja::kite::connect` and `manja::kite::ticker` when the relevant
+//!   features are enabled.
+//! - **Tier‑3:** `manja-extras` for optional WebDriver/TOTP-based login automation, available
+//!   behind the `webdriver-login` feature and re-exported under `manja::kite::login`.
+//!
+//! For a full architectural overview and guidance on when to depend directly
+//! on the inner crates, see the workspace-level `ARCHITECTURE.md` in the
+//! repository root.
+//!
 //! # `manja` Features
 //!
 //! - **Type safe**
@@ -198,6 +214,17 @@
 //!     Ok(postback)
 //! }
 //! ```
+//!
+//! ## Stability & Versioning
+//!
+//! The `manja` workspace is currently on the **0.3.x pre‑1.0 line**. In the
+//! 0.x series, minor and patch releases may introduce occasional breaking
+//! changes as the SDK converges toward a stable 1.0.
+//!
+//! Once 1.0 is released, Tier‑1 crates (`manja`, `manja-core`) are intended
+//! to follow strong semver guarantees, while Tier‑2 (`manja-http`,
+//! `manja-ticker`) and Tier‑3 (`manja-extras`) crates will remain supported
+//! but retain more flexibility to evolve.
 //!
 //! # Disclaimer
 //!

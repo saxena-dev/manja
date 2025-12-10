@@ -24,7 +24,7 @@ provided for advanced or highly specialized use‑cases.
 
 ## Crates and Responsibilities
 
-- `manja`
+- `manja` (Tier‑1 facade)
 
   - Public facade crate published to crates.io.
   - Re‑exports core types (models, errors) from `manja-core`.
@@ -37,7 +37,7 @@ provided for advanced or highly specialized use‑cases.
   - Builds the `manja` binary (`manja/src/main.rs`), which demonstrates a
     full login + REST + ticker flow using all features together.
 
-- `manja-core`
+- `manja-core` (Tier‑1 shared types)
 
   - Hosts shared, transport‑agnostic domain models and enums under
     `manja_core::models::*`.
@@ -47,7 +47,7 @@ provided for advanced or highly specialized use‑cases.
   - Has no dependency on async runtimes, HTTP clients, WebSockets, or
     WebDriver; suitable for reuse in non‑async or non‑networked code.
 
-- `manja-http`
+- `manja-http` (Tier‑2 transport)
 
   - Hosts the HTTP transport layer for the SDK.
   - Provides the `HTTPClient` type and per‑domain API groups
@@ -57,17 +57,17 @@ provided for advanced or highly specialized use‑cases.
   - Used internally by the `manja` facade and can be depended on directly
     by advanced consumers who want more control than `ManjaClient` offers.
 
-- `manja-ticker`
+- `manja-ticker` (Tier‑2 ticker runtime)
 
   - Hosts the async WebSocket ticker runtime and streaming types:
     `WebSocketClient`, `TickerStream`, `StreamState`, `KiteStreamCredentials`,
     ticker `Mode` and `TickerRequest`.
   - Depends on `tokio-tungstenite`, `tungstenite`, `stubborn-io`, etc.
-  - Intended primarily as an implementation crate; most users should go
+  - Intended primarily as an advanced, low‑level runtime; most users should go
     through `manja::kite::ticker`, which re‑exports these types from the
     facade crate when the `websocket` feature is enabled.
 
-- `manja-extras`
+- `manja-extras` (Tier‑3 extras)
   - Hosts optional WebDriver + TOTP login helpers used to automate
     interactive Kite login flows.
   - Provides:
@@ -77,6 +77,53 @@ provided for advanced or highly specialized use‑cases.
   - Depends on heavier runtime dependencies like `fantoccini` and `totp-rs`.
   - Used by the `manja` facade when the `webdriver-login` feature is
     enabled, and also usable directly by advanced consumers.
+
+## Crate Strategy & Support Tiers
+
+The workspace distinguishes between core, advanced, and extra crates so users
+can pick the right level of abstraction and understand long‑term stability
+expectations:
+
+- **Tier‑1 (core, high stability after 1.0)**
+
+  - `manja` – the canonical broker SDK crate.
+    - Primary entrypoint for most applications.
+    - Exposes `ManjaClient`, high‑level workflows, and a curated set of
+      re‑exported models and error types.
+  - `manja-core` – shared models, errors, and traits.
+    - Suitable for reuse by other services that need the data types or error
+      descriptions without pulling in HTTP/WebSocket runtimes.
+
+- **Tier‑2 (advanced / low‑level)**
+
+  - `manja-http` – transport crate for advanced consumers.
+    - Provides the HTTP client and domain API groups for users who want to
+      build custom facades or integrate with existing architectures.
+  - `manja-ticker` – ticker runtime crate.
+    - Exposes the WebSocket ticker client and streaming types for users who
+      want to integrate the ticker into bespoke async pipelines.
+
+  These crates are published and supported, but they are considered more
+  low‑level than the `manja` facade and may evolve more quickly as transport
+  and runtime requirements change.
+
+- **Tier‑3 (extras / optional automation)**
+
+  - `manja-extras` – WebDriver/TOTP login automation.
+    - Provides helpers for browser‑driven login flows and TOTP generation.
+    - Pulled in via the `webdriver-login` feature on the `manja` facade.
+
+  This crate is intentionally optional and environment‑dependent. It is useful
+  for certain automation scenarios, but it is not part of the core HTTP or
+  ticker API surface and may iterate more rapidly while the pre‑1.0 line
+  matures.
+
+In the current **0.3.x pre‑1.0 series**, all crates may still see occasional
+breaking changes as the SDK converges toward a stable 1.0. Once 1.0 is
+released, the intent is to treat `manja` and `manja-core` as the most stable
+public surface, with `manja-http` and `manja-ticker` kept reasonably stable
+but allowed more flexibility, and `manja-extras` treated as an optional
+add‑on.
 
 ## Facade vs Direct Dependencies
 

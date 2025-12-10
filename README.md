@@ -10,6 +10,14 @@ The primary entrypoint is the `ManjaClient` facade, which wraps the lower-level 
 
 `manja` lives inside a multi-crate workspace that also includes `manja-core` (shared models and errors), `manja-http` (HTTP transport), `manja-ticker` (WebSocket ticker), and `manja-extras` (WebDriver/TOTP helpers). Most users only need the `manja` facade crate; advanced users can depend on the inner crates directly when they need lower-level control or to reuse models in other services. See `ARCHITECTURE.md` for a detailed overview.
 
+## Crates & Support Tiers
+
+- `manja` is the **canonical Tier‑1 SDK facade** that most applications should depend on; it exposes `ManjaClient`, high-level workflows, and a curated set of re-exported models and error types.
+- `manja-core` is a **Tier‑1 shared types crate** (models, errors, traits) with no async/runtime dependencies, suitable for reuse in other services.
+- `manja-http` and `manja-ticker` are **Tier‑2 advanced/low-level crates** for power users who need direct access to the HTTP client or ticker runtime; they are published and supported but may evolve more quickly than the facade.
+- `manja-extras` is a **Tier‑3 optional extras crate** for WebDriver/TOTP-based login automation, pulled in via the `webdriver-login` feature on `manja` and maintained on a best-effort basis.
+- The workspace is currently on the **0.3.x pre‑1.0 line**; 0.x releases may introduce occasional breaking changes as the SDK converges toward a stable 1.0, after which Tier‑1 crates (`manja`, `manja-core`) will follow strong semver guarantees and Tier‑2/3 crates will retain more flexibility.
+
 ## Quickstart
 
 ```rust ignore
