@@ -4,6 +4,13 @@ This repository is a Cargo workspace that hosts the `manja` facade crate and
 several internal crates. Together they form a layered SDK for the
 Zerodha Kite Connect APIs.
 
+## Rust Toolchain & Edition
+
+All crates in the workspace target the Rust 2024 edition:
+
+- Each crate’s `Cargo.toml` sets `edition = "2024"`.
+- The workspace is expected to be built with a stable Rust toolchain that supports the 2024 edition.
+
 The top‑level workspace manifest (`Cargo.toml`) lists:
 
 - `manja` – facade crate and example binary
@@ -18,6 +25,7 @@ provided for advanced or highly specialized use‑cases.
 ## Crates and Responsibilities
 
 - `manja`
+
   - Public facade crate published to crates.io.
   - Re‑exports core types (models, errors) from `manja-core`.
   - Wraps the lower‑level HTTP client from `manja-http` behind
@@ -30,6 +38,7 @@ provided for advanced or highly specialized use‑cases.
     full login + REST + ticker flow using all features together.
 
 - `manja-core`
+
   - Hosts shared, transport‑agnostic domain models and enums under
     `manja_core::models::*`.
   - Hosts core error types under `manja_core::error::*`.
@@ -39,6 +48,7 @@ provided for advanced or highly specialized use‑cases.
     WebDriver; suitable for reuse in non‑async or non‑networked code.
 
 - `manja-http`
+
   - Hosts the HTTP transport layer for the SDK.
   - Provides the `HTTPClient` type and per‑domain API groups
     (`Session`, `User`, `Orders`, `Portfolio`, `Market`, `Margins`,
@@ -48,6 +58,7 @@ provided for advanced or highly specialized use‑cases.
     by advanced consumers who want more control than `ManjaClient` offers.
 
 - `manja-ticker`
+
   - Hosts the async WebSocket ticker runtime and streaming types:
     `WebSocketClient`, `TickerStream`, `StreamState`, `KiteStreamCredentials`,
     ticker `Mode` and `TickerRequest`.
@@ -82,8 +93,7 @@ This gives you:
 
 - `ManjaClient` as a high‑level async client.
 - Re‑exported models and error types (e.g. `UserProfile`, `KiteApiResponse`).
-- Optional WebSocket ticker and WebDriver login flows via feature flags
-  (see below).
+- Optional WebSocket ticker and WebDriver login flows via feature flags (see below).
 
 ### Minimal HTTP‑only usage
 
@@ -173,16 +183,19 @@ The main feature flags are defined on the `manja` facade crate
 (`manja/Cargo.toml`):
 
 - `websocket`
+
   - Enables WebSocket‑based ticker support.
   - Pulls in the `manja-ticker` crate and exposes its types under
     `manja::kite::ticker`.
 
 - `webdriver-login`
+
   - Enables WebDriver/TOTP‑based login helpers.
   - Pulls in the `manja-extras` crate and exposes helpers under
     `manja::kite::login`.
 
 - `backoff`
+
   - Enables `backoff`‑based retry logic for HTTP APIs.
   - Used in conjunction with `manja-http`’s own `backoff` feature.
 
@@ -205,4 +218,3 @@ which corresponds to:
 
 For more details on usage patterns and code examples, see `README.md` and
 the examples under `manja/examples`.
-

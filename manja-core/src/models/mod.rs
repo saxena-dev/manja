@@ -80,7 +80,10 @@ pub use order_enums::{
 /// Models for the `/portfolio/` API group, managing holdings and positions.
 ///
 mod portfolio;
-pub use portfolio::{Auction, Holding, Position, PositionConversionRequest};
+pub use portfolio::{
+    Auction, Holding, HoldingAuthorisationItem, HoldingsAuthorisationResponse, Position,
+    PositionConversionRequest, Positions,
+};
 
 /// Models for the `/instruments/` and `/quote/` API group, providing market
 /// data and instrument information.
@@ -103,3 +106,82 @@ pub use margins::{
 /// Enumerations for exchanges supported by Kite Connect API.
 mod exchange;
 pub use exchange::Exchange;
+
+/// Models for GTT (Good Till Triggered) orders.
+mod gtt;
+#[allow(unused_imports)]
+pub use gtt::{
+    GttCondition, GttOrderExecutionResult, GttOrderParams, GttOrderResult, GttStatus, GttTrigger,
+    GttTriggerId, GttTriggerRequest, GttType,
+};
+
+/// Models for price and ATO alerts.
+mod alerts;
+#[allow(unused_imports)]
+pub use alerts::{
+    Alert, AlertBasket, AlertBasketGttMeta, AlertBasketItem, AlertBasketParams, AlertHistoryEntry,
+    AlertHistoryMeta, AlertHistoryOhlc, AlertListFilter, AlertOperator, AlertRequest,
+    AlertRhsType, AlertStatus, AlertType,
+};
+
+/// Models for historical OHLCV(+OI) data.
+mod historical;
+#[allow(unused_imports)]
+pub use historical::{HistoricalCandle, HistoricalData, HistoricalInterval};
+
+/// Models and helpers for order postbacks (webhooks/WebSocket).
+mod postbacks;
+#[allow(unused_imports)]
+pub use postbacks::{
+    compute_postback_checksum, parse_http_postback, parse_websocket_order_postback,
+    verify_postback_checksum, OrderPostback, WebSocketPostbackEnvelope,
+};
+
+/// Models for mutual funds (Coin) APIs.
+mod mutual_funds;
+#[allow(unused_imports)]
+pub use mutual_funds::{
+    MfHolding, MfInstrument, MfOrder, MfOrderId, MfOrderRequest, MfSip, MfSipCreateRequest,
+    MfSipId, MfSipModifyRequest,
+};
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use proptest::prelude::*;
+
+    #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+    struct TestPayload {
+        value: i64,
+        note: Option<String>,
+    }
+
+    proptest! {
+        #[test]
+        fn kite_api_response_serde_roundtrip(
+            status in any::<String>(),
+            data in proptest::option::of(
+                (any::<i64>(), proptest::option::of(any::<String>()))
+                    .prop_map(|(value, note)| TestPayload { value, note })
+            ),
+            message in proptest::option::of(any::<String>()),
+            error_type in proptest::option::of(any::<String>()),
+        ) {
+            let response = KiteApiResponse {
+                status: status.clone(),
+                data: data.clone(),
+                message: message.clone(),
+                error_type: error_type.clone(),
+            };
+
+            let json = serde_json::to_string(&response).expect("serialize KiteApiResponse");
+            let decoded: KiteApiResponse<TestPayload> =
+                serde_json::from_str(&json).expect("deserialize KiteApiResponse");
+
+            prop_assert_eq!(decoded.status, status);
+            prop_assert_eq!(decoded.data, data);
+            prop_assert_eq!(decoded.message, message);
+            prop_assert_eq!(decoded.error_type, error_type);
+        }
+    }
+}

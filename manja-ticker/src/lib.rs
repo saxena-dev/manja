@@ -30,6 +30,13 @@
 //! }
 //! # Ok(()) }
 //! ```
+//!
+//! # Lifecycle semantics
+//!
+//! The current expectations around connection, disconnect, and cancellation
+//! behavior for the ticker WebSocket client are exercised and documented in
+//! `tests/lifecycle.rs`. Future changes to reconnect or shutdown semantics
+//! should keep those tests in sync.
 
 pub mod client;
 pub mod models;
@@ -38,4 +45,3 @@ pub mod stream;
 pub use crate::client::{TickerStream, WebSocketClient};
 pub use crate::models::{Mode, TickerRequest};
 pub use crate::stream::{KiteStreamCredentials, StreamState};
-

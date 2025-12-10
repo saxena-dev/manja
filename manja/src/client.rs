@@ -1,5 +1,8 @@
 use crate::kite::connect::{
-    api::{Charges, Market, Margins, Orders, Portfolio, Session, User},
+    api::{
+        Alerts, Charges, Gtt, Historical, Market, Margins, MutualFunds, Orders, Portfolio,
+        Session, User,
+    },
     client::HTTPClient,
     config::Config,
 };
@@ -73,6 +76,11 @@ impl ManjaClient {
         self.http.market()
     }
 
+    /// Access historical data HTTP APIs.
+    pub fn historical(&mut self) -> Historical<'_> {
+        self.http.historical()
+    }
+
     /// Access margins-related HTTP APIs.
     pub fn margins(&mut self) -> Margins<'_> {
         self.http.margins()
@@ -81,5 +89,20 @@ impl ManjaClient {
     /// Access charges-related HTTP APIs.
     pub fn charges(&mut self) -> Charges<'_> {
         self.http.charges()
+    }
+
+    /// Access GTT-related HTTP APIs.
+    pub fn gtt(&mut self) -> Gtt<'_> {
+        self.http.gtt()
+    }
+
+    /// Access Alerts-related HTTP APIs.
+    pub fn alerts(&mut self) -> Alerts<'_> {
+        self.http.alerts()
+    }
+
+    /// Access Mutual Funds-related HTTP APIs.
+    pub fn mutual_funds(&mut self) -> MutualFunds<'_> {
+        self.http.mutual_funds()
     }
 }

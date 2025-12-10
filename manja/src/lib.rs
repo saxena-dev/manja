@@ -20,6 +20,7 @@
 //!    - *Streamline Development*: facilitate smoother development cycles with better debugging and faster issue resolution.
 //!    - *Reduce Downtime*: with real-time insights and quick access to logs, identify and resolve issues faster, minimizing downtime.
 //!    - *Enhance User Experience*: quickly address errors and performance bottlenecks to provide a better experience for your users.
+//!    - *Observability Hooks*: use [`crate::observability::init_tracing_from_env`] to enable structured HTTP and ticker spans, and extend the `tracing_subscriber` registry with your own metrics layer if desired.
 //!
 //! - **WebSocket** support for streaming binary market data (via a feature-gated ticker client).
 //!    - *Auto-reconnect Mechanism*: `manja` provides a reliable and stateful async WebSocket client with a configurable exponential backoff retry mechanism.
@@ -53,8 +54,150 @@
 //! }
 //! ```
 //!
+//! ## Example: Using high-level workflows
+//!
+//! For common tasks like placing a simple cash-equity market order, you can
+//! use the high-level helpers in [`crate::workflows`] instead of manually
+//! constructing an [`Order`] payload:
+//!
+//! ```ignore
+//! use manja::{
+//!     Exchange, KiteApiResponse, ManjaClient, OrderReceipt, ProductType,
+//!     TransactionType,
+//! };
+//! use manja::workflows;
+//!
+//! #[tokio::main]
+//! async fn main() -> manja::Result<()> {
+//!     let mut client = ManjaClient::from_env();
+//!
+//!     let response: KiteApiResponse<OrderReceipt> =
+//!         workflows::place_cash_market_order(
+//!             &mut client,
+//!             Exchange::NSE,
+//!             "INFY".to_string(),
+//!             1,
+//!             TransactionType::BUY,
+//!             ProductType::CashAndCarry,
+//!             Some("demo-order".to_string()),
+//!         )
+//!         .await?;
+//!
+//!     println!("Placed order with id: {:?}", response.data);
+//!     Ok(())
+//! }
+//! ```
+//!
+//! ## Example: Fetching mutual fund orders
+//!
+//! ```ignore
+//! use manja::ManjaClient;
+//! use manja::{KiteApiResponse, MfOrder};
+//!
+//! #[tokio::main]
+//! async fn main() -> Result<(), Box<dyn std::error::Error>> {
+//!     let mut client = ManjaClient::from_env();
+//!
+//!     // Fetch the latest mutual fund orders (last 7 days).
+//!     let response: KiteApiResponse<Vec<MfOrder>> =
+//!         client.mutual_funds().orders().await?;
+//!
+//!     if let Some(orders) = response.data {
+//!         for order in orders {
+//!             println!("MF order {}: {} {}", order.order_id, order.tradingsymbol, order.status.unwrap_or_default());
+//!         }
+//!     }
+//!
+//!     Ok(())
+//! }
+//! ```
+//!
+//! ## Example: Fetching historical candles
+//!
+//! The [`ManjaClient::historical`] API group provides typed access to
+//! `/instruments/historical/:instrument_token/:interval` and returns
+//! [`HistoricalData`] (a sequence of [`HistoricalCandle`] values).
+//!
+//! ```ignore
+//! use chrono::{NaiveDate, NaiveDateTime};
+//! use manja::ManjaClient;
+//! use manja::{HistoricalData, HistoricalInterval, KiteApiResponse};
+//!
+//! #[tokio::main]
+//! async fn main() -> Result<(), Box<dyn std::error::Error>> {
+//!     // Create a client using environment-based configuration and perform your
+//!     // preferred login flow to establish a session (omitted here).
+//!     let mut client = ManjaClient::from_env();
+//!
+//!     // Define the time window in exchange-local time.
+//!     let from: NaiveDateTime = NaiveDate::from_ymd_opt(2019, 12, 4)
+//!         .unwrap()
+//!         .and_hms_opt(9, 15, 0)
+//!         .unwrap();
+//!     let to: NaiveDateTime = NaiveDate::from_ymd_opt(2019, 12, 4)
+//!         .unwrap()
+//!         .and_hms_opt(9, 20, 0)
+//!         .unwrap();
+//!
+//!     // Fetch minute candles with OI for a given instrument token.
+//!     let response: KiteApiResponse<HistoricalData> = client
+//!         .historical()
+//!         .candles(
+//!             12517890,                      // instrument_token
+//!             HistoricalInterval::Minute,    // interval
+//!             from,
+//!             to,
+//!             false,                         // continuous
+//!             true,                          // oi
+//!         )
+//!         .await?;
+//!
+//!     if let Some(data) = response.data {
+//!         for candle in data.candles {
+//!             println!(
+//!                 "{} O:{:.2} H:{:.2} L:{:.2} C:{:.2} V:{} OI:{:?}",
+//!                 candle.timestamp,
+//!                 candle.open,
+//!                 candle.high,
+//!                 candle.low,
+//!                 candle.close,
+//!                 candle.volume,
+//!                 candle.oi,
+//!             );
+//!         }
+//!     }
+//!
+//!     Ok(())
+//! }
+//! ```
+//!
 //! For WebSocket streaming or WebDriver-assisted login flows, refer to the
 //! module-level documentation under [`kite::ticker`] and [`kite::login`].
+//!
+//! ## Example: Handling order postbacks (webhooks/WebSocket)
+//!
+//! ```ignore
+//! use manja::{OrderPostback, Result};
+//! use manja::kite::connect::models::{
+//!     parse_http_postback, verify_postback_checksum,
+//! };
+//!
+//! fn handle_postback(body: &str, api_secret: &str) -> Result<OrderPostback> {
+//!     // Parse the raw JSON payload into a typed postback.
+//!     let postback = parse_http_postback(body)?;
+//!
+//!     // Verify the checksum using your Kite API secret.
+//!     if !verify_postback_checksum(&postback, api_secret) {
+//!         // Reject or log suspicious payloads.
+//!         return Err(manja::ManjaError::Other(
+//!             "invalid postback checksum".into(),
+//!         ));
+//!     }
+//!
+//!     // Proceed with your business logic (update order state, etc.).
+//!     Ok(postback)
+//! }
+//! ```
 //!
 //! # Disclaimer
 //!
@@ -67,19 +210,29 @@
 #![allow(private_interfaces, unused)]
 
 mod client;
+pub mod observability;
 
 pub use client::ManjaClient;
+
+/// High-level workflow helpers built on top of the `ManjaClient` facade.
+pub mod workflows;
 
 // Core error types and result alias.
 pub use crate::kite::error::{KiteApiException, ManjaError, Result};
 
 // Primary HTTP models and enums.
 pub use crate::kite::connect::models::{
-    Auction, Available, BasketMargin, Charges, Exchange, FullQuote, GST, Holding, Instrument,
-    KiteApiResponse, LTPQuote, OHLCQuote, Order, OrderCharges, OrderChargesRequest, OrderMargin,
-    OrderMarginRequest, OrderReceipt, OrderStatus, OrderType, OrderValidity, OrderVariety, PNL,
-    Position, PositionConversionRequest, ProductType, QuoteMode, Segment, SegmentKind, Trade,
-    TransactionType, UserMargins, UserProfile, UserSession, Utilised,
+    Alert, AlertBasket, AlertBasketGttMeta, AlertBasketItem, AlertBasketParams, AlertHistoryEntry,
+    AlertHistoryMeta, AlertHistoryOhlc, AlertOperator, AlertRequest, AlertRhsType, AlertStatus,
+    AlertType, Auction, Available, BasketMargin, Charges, Exchange, FullQuote, GST, GttCondition,
+    GttOrderExecutionResult, GttOrderParams, GttOrderResult, GttStatus, GttTrigger, GttTriggerId,
+    GttTriggerRequest, GttType, HistoricalCandle, HistoricalData, HistoricalInterval, Holding,
+    Instrument, KiteApiResponse, LTPQuote, MfHolding, MfInstrument, MfOrder, MfSip,
+    OHLCQuote, Order, OrderCharges, OrderChargesRequest, OrderMargin, OrderMarginRequest,
+    OrderReceipt, OrderStatus, OrderType, OrderValidity, OrderVariety, PNL, Position,
+    PositionConversionRequest, Positions, ProductType, QuoteMode, Segment, SegmentKind, Trade,
+    TransactionType, UserMargins, UserProfile, UserSession, Utilised, parse_http_postback,
+    verify_postback_checksum,
 };
 
 pub mod kite;

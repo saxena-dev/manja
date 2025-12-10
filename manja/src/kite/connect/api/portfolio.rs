@@ -12,7 +12,10 @@
 use crate::kite::connect::api::{create_backoff_policy, BackoffPolicy};
 use crate::kite::connect::{
     client::HTTPClient,
-    models::{Auction, Holding, KiteApiResponse, Position, PositionConversionRequest},
+    models::{
+        Auction, Holding, HoldingAuthorisationItem, HoldingsAuthorisationResponse, KiteApiResponse,
+        PositionConversionRequest, Positions,
+    },
 };
 use crate::kite::error::Result;
 
@@ -90,7 +93,7 @@ impl<'c> Portfolio<'c> {
     /// of the buying and selling activity for that particular day. This is
     /// useful for computing intraday profits and losses for trading strategies.
     ///
-    pub async fn get_positions(&self) -> Result<KiteApiResponse<Vec<Position>>> {
+    pub async fn get_positions(&self) -> Result<KiteApiResponse<Positions>> {
         self.client
             .get(&format!("/portfolio/positions"), &self.backoff)
             .await
@@ -127,19 +130,28 @@ impl<'c> Portfolio<'c> {
             .await
     }
 
-    // TODO!
-    // Initiating authorisation
-    //
-    // curl --request POST https://api.kite.trade/portfolio/holdings/authorise
-    // -H "X-Kite-Version: 3" \
-    // -H "Authorization: token api_key:access_token" \
-    // -d "isin=INE002A01018" -d "quantity=50" \
-    // -d "isin=INE009A01021" -d "quantity=50"
-    //
-    // {
-    // "status": "success",
-    // "data": {
-    // "request_id": "na8QgCeQm05UHG6NL9sAGRzdfSF64UdB"
-    // }
-    // }
+    /// Initiate holdings authorisation at the depository.
+    ///
+    /// When a sell order requires depository authorisation, this endpoint can
+    /// be used to initiate an electronic authorisation flow. The `items`
+    /// slice contains optional ISIN/quantity pairs to scope the
+    /// authorisation; when empty, the broker may present the entire holdings
+    /// portfolio for authorisation.
+    pub async fn authorise_holdings(
+        &self,
+        items: &[HoldingAuthorisationItem],
+    ) -> Result<KiteApiResponse<HoldingsAuthorisationResponse>> {
+        let mut form: Vec<(String, String)> = Vec::new();
+        for item in items {
+            form.push(("isin".to_string(), item.isin.clone()));
+            form.push((
+                "quantity".to_string(),
+                item.quantity.to_string(),
+            ));
+        }
+
+        self.client
+            .post_form("/portfolio/holdings/authorise", &form, &self.backoff)
+            .await
+    }
 }

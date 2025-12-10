@@ -46,10 +46,26 @@ pub use portfolio::Portfolio;
 mod market;
 pub use market::Market;
 
+// Manages the `/instruments/historical/` API group, providing historical OHLCV(+OI) data.
+mod historical;
+pub use historical::Historical;
+
 // Manages the `/margins/` and `/charges/` API group, dealing with margin
 // requirements and charges.
 mod margins;
 pub use margins::{Charges, Margins};
+
+// Manages the `/gtt/` API group for Good Till Triggered orders.
+mod gtt;
+pub use gtt::Gtt;
+
+// Manages the `/alerts/` API group for price and ATO alerts.
+mod alerts;
+pub use alerts::Alerts;
+
+// Manages the `/mf/` API group for mutual fund (Coin) operations.
+mod mutual_funds;
+pub use mutual_funds::MutualFunds;
 
 /// Creates a backoff policy with a specified rate limit.
 ///

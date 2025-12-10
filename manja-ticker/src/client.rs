@@ -14,7 +14,7 @@ use futures_util::{SinkExt, Stream, StreamExt};
 use stubborn_io::tokio::{StubbornIo, UnderlyingIo};
 use tokio::net::TcpStream;
 use tokio_tungstenite::{MaybeTlsStream, WebSocketStream};
-use tracing::{debug, error, info};
+use tracing::{debug, error, info, span, Level};
 use tungstenite::client::IntoClientRequest;
 
 /// Represents a WebSocket stream to Kite Connect streaming API.
@@ -43,26 +43,37 @@ where
         Box::pin(async move {
             // TODO: Fix `unwrap`
             let request = stream_state.clone().into_client_request().unwrap();
-            let kite_uri = format!("{}", request.uri());
-            info!(uri = %kite_uri, "ticker.connect.start");
-            match tokio_tungstenite::connect_async(kite_uri).await {
+            let uri = request.uri().clone();
+            let scheme = uri.scheme_str().unwrap_or("wss").to_string();
+            let host = uri.host().unwrap_or_default().to_string();
+            let path = uri.path().to_string();
+
+            let span = span!(
+                Level::INFO,
+                "ticker.connect",
+                %scheme,
+                %host,
+                %path
+            );
+            let _enter = span.enter();
+
+            info!("ticker.connect.start");
+
+            let connect_uri = uri.to_string();
+            match tokio_tungstenite::connect_async(connect_uri).await {
                 Ok((mut ws_stream, response)) => {
-                    info!("ticker.connect.success (status: {})", response.status());
-                    info!("Response contains the following headers:");
-                    for (header, value) in response.headers() {
-                        info!("* {}: {:?}", header, value);
-                    }
+                    info!(status = %response.status(), "ticker.connect.success");
                     let mut subscribe_stream = SubscriptionStream::from(stream_state.clone());
                     while let Some(maybe_msg) = subscribe_stream.next().await {
                         match maybe_msg {
                             Ok(msg) => {
-                                debug!("Ticker request: {}", msg);
+                                debug!(payload = %msg, "ticker.subscription.send");
                                 if let Err(e) = ws_stream.send(msg).await {
-                                    error!("Error sending a ticker request: {}", e);
+                                    error!(error = %e, "ticker.subscription.send_error");
                                 }
                             }
                             Err(e) => {
-                                error!("Error serializing TickerRequest: {}", e);
+                                error!(error = %e, "ticker.subscription.serialize_error");
                             }
                         }
                     }
@@ -72,7 +83,7 @@ where
                     })
                 }
                 Err(e) => {
-                    error!("ticker.connect.error: {}", e);
+                    error!(error = %e, "ticker.connect.error");
                     Err(io::Error::new(
                         io::ErrorKind::Other,
                         format!("Big problem := {}", e),
@@ -116,4 +127,3 @@ impl Stream for WebSocketClient {
         Pin::new(&mut self.0.ws_stream).poll_next(cx)
     }
 }
-

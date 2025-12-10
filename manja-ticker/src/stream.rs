@@ -10,6 +10,7 @@ use std::task::{Context, Poll};
 use futures_util::Stream;
 use manja_core::models::UserSession;
 use secrecy::{ExposeSecret, Secret};
+use tracing::debug;
 use tungstenite::{client::IntoClientRequest, Message};
 
 use crate::models::{Mode, TickerRequest};
@@ -111,10 +112,19 @@ impl StreamState {
 
     /// Subscribes to an instrument token with a specified mode.
     pub fn subscribe_token(mut self, mode: Mode, token: u32) -> Self {
-        if let Some(vec) = self.subscription.get_mut(&mode) {
+        let mode_key = mode.clone();
+        if let Some(vec) = self.subscription.get_mut(&mode_key) {
             vec.push(token);
         } else {
-            self.subscription.insert(mode, vec![token]);
+            self.subscription.insert(mode_key.clone(), vec![token]);
+        }
+        if let Some(tokens) = self.subscription.get(&mode_key) {
+            debug!(
+                mode = ?mode_key,
+                token,
+                token_count = tokens.len(),
+                "ticker.subscription.update"
+            );
         }
         self
     }
@@ -192,6 +202,8 @@ impl Stream for SubscriptionStream {
             let ticker_request =
                 TickerRequest::subscribe_with_mode(tokens.clone(), current_key.clone());
 
+            debug!(mode = ?current_key, token_count = tokens.len(), "ticker.subscription.request");
+
             // Serialize the `TickerRequest` to JSON and wrap it in a `Message::Text`.
             match serde_json::to_string(&ticker_request) {
                 Ok(json) => Poll::Ready(Some(Ok(Message::Text(json)))),
@@ -211,6 +223,7 @@ impl Stream for SubscriptionStream {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use temp_env;
 
     #[test]
     fn stream_state_to_uri_from_parts() {
@@ -228,16 +241,21 @@ mod tests {
 
     #[test]
     fn stream_state_to_uri_from_credentials_uses_env_api_base() {
-        std::env::set_var("KITECONNECT_WSS_API_BASE", "wss://example-env.test");
-        let creds = KiteStreamCredentials::from_parts("ENV_API_KEY", "ENV_ACCESS_TOKEN");
-        let state = StreamState::from_credentials(creds);
-        let uri = state.to_uri();
-        assert!(
-            uri == "wss://example-env.test?api_key=ENV_API_KEY&access_token=ENV_ACCESS_TOKEN"
-                || uri == "wss://example-env.test?access_token=ENV_ACCESS_TOKEN&api_key=ENV_API_KEY"
+        temp_env::with_var(
+            "KITECONNECT_WSS_API_BASE",
+            Some("wss://example-env.test"),
+            || {
+                let creds =
+                    KiteStreamCredentials::from_parts("ENV_API_KEY", "ENV_ACCESS_TOKEN");
+                let state = StreamState::from_credentials(creds);
+                let uri = state.to_uri();
+                assert!(
+                    uri == "wss://example-env.test?api_key=ENV_API_KEY&access_token=ENV_ACCESS_TOKEN"
+                        || uri
+                            == "wss://example-env.test?access_token=ENV_ACCESS_TOKEN&api_key=ENV_API_KEY"
+                );
+            },
         );
-        // Clean up for other tests.
-        std::env::remove_var("KITECONNECT_WSS_API_BASE");
     }
 
     #[test]

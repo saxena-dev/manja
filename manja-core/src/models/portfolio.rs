@@ -276,6 +276,20 @@ pub struct Position {
     pub day_sell_value: f64,
 }
 
+/// Wrapper type for the positions payload returned by the Kite Connect
+/// `/portfolio/positions` endpoint.
+///
+/// The API returns two sets of positions:
+/// - `net`: the actual, current net position portfolio.
+/// - `day`: a snapshot of the buying and selling activity for that particular day.
+#[derive(Debug, Serialize, Deserialize)]
+pub struct Positions {
+    /// Net positions portfolio.
+    pub net: Vec<Position>,
+    /// Intraday positions for the current day.
+    pub day: Vec<Position>,
+}
+
 /// Represents the variety of an order, either overnight or day positions.
 ///
 /// This enum contains constant values used for placing different types of
@@ -318,4 +332,28 @@ pub struct PositionConversionRequest {
 
     /// Margin product to convert to.
     pub new_product: ProductType,
+}
+
+/// A single ISIN + quantity pair used when initiating holdings authorisation.
+///
+/// When executing sell transactions on equity holdings, users may need to
+/// electronically authorise the debit of shares from their demat account.
+/// The `/portfolio/holdings/authorise` endpoint accepts one or more such
+/// pairs to scope the authorisation request.
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct HoldingAuthorisationItem {
+    /// The ISIN of the holding to authorise.
+    pub isin: String,
+    /// Quantity to authorise for sale.
+    pub quantity: i64,
+}
+
+/// Response payload returned when initiating holdings authorisation.
+///
+/// The `request_id` can be used to construct the CDSL authorisation URL as
+/// described in the Kite Connect portfolio documentation.
+#[derive(Debug, Serialize, Deserialize)]
+pub struct HoldingsAuthorisationResponse {
+    /// Identifier for the holdings authorisation request.
+    pub request_id: String,
 }
