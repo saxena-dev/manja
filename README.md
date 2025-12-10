@@ -194,7 +194,7 @@ where
   - [x] GET `/portfolio/positions` Retrieve the list of short term positions
   - [x] PUT `/portfolio/positions` Convert the margin product of an open position
   - [x] GET `/portfolio/holdings/auctions` Retrieve the list of auctions that are currently being held
-  - [ ] POST `/portfolio/holdings/authorise` Place an electronic authorisation to debit shares and settle the transactions
+  - [x] POST `/portfolio/holdings/authorise` Place an electronic authorisation to debit shares and settle the transactions
 - [x] **Market quotes and instruments**
   - [x] GET `/instruments` Retrieve the CSV dump of all tradable instruments
   - [x] GET `/instruments/:exchange` Retrieve the CSV dump of instruments in the particular exchange
@@ -204,15 +204,15 @@ where
 - [x] **Historical candle data**
   - [x] GET `/instruments/historical/:instrument_token/:interval` Retrieve historical candle records for a given instrument
 - [ ] **Mutual funds**
-  - [ ] POST `/mf/orders` Place a buy or sell order
-  - [ ] DELETE `/mf/orders/:order_id` Cancel an open or pending order
+  - [x] POST `/mf/orders` Place a buy or sell order
+  - [x] DELETE `/mf/orders/:order_id` Cancel an open or pending order
   - [x] GET `/mf/orders` Retrieve the list of all orders (open and executed) over the last 7 days
   - [x] GET `/mf/orders/:order_id` Retrieve an individual order
-  - [ ] POST `/mf/sips` Place a SIP order
-  - [ ] PUT `/mf/sips/:order_id` Modify an open SIP order
-  - [ ] DELETE `/mf/sips/:order_id` Cancel an open SIP order
+  - [x] POST `/mf/sips` Place a SIP order
+  - [x] PUT `/mf/sips/:order_id` Modify an open SIP order
+  - [x] DELETE `/mf/sips/:order_id` Cancel an open SIP order
   - [x] GET `/mf/sips` Retrieve the list of all open SIP orders
-  - [ ] GET `/mf/sips/:order_id` Retrieve an individual SIP order
+  - [x] GET `/mf/sips/:order_id` Retrieve an individual SIP order
   - [x] GET `/mf/holdings` Retrieve the list of mutual fund holdings available in the DEMAT
   - [x] GET `/mf/instruments` Retrieve the master list of all mutual funds available on the platform
 - [x] **Margin calculation**

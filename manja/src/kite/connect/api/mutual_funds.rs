@@ -6,7 +6,10 @@
 use crate::kite::connect::api::{create_backoff_policy, BackoffPolicy};
 use crate::kite::connect::{
     client::HTTPClient,
-    models::{KiteApiResponse, MfHolding, MfInstrument, MfOrder, MfSip},
+    models::{
+        KiteApiResponse, MfHolding, MfInstrument, MfOrder, MfOrderId, MfOrderRequest, MfSip,
+        MfSipCreateRequest, MfSipId, MfSipModifyRequest,
+    },
 };
 use crate::kite::error::Result;
 
@@ -47,9 +50,63 @@ impl<'c> MutualFunds<'c> {
         self.client.get(&path, &self.backoff).await
     }
 
+    /// Place a new mutual fund order (BUY or SELL).
+    pub async fn place_order(
+        &self,
+        req: &MfOrderRequest,
+    ) -> Result<KiteApiResponse<MfOrderId>> {
+        self.client
+            .post_form("/mf/orders", req, &self.backoff)
+            .await
+    }
+
+    /// Cancel an open or pending mutual fund order.
+    pub async fn cancel_order(
+        &self,
+        order_id: &str,
+    ) -> Result<KiteApiResponse<MfOrderId>> {
+        let path = format!("/mf/orders/{}", order_id);
+        self.client.delete(&path, false, &self.backoff).await
+    }
+
     /// Retrieve all active and paused MF SIPs.
     pub async fn sips(&self) -> Result<KiteApiResponse<Vec<MfSip>>> {
         self.client.get("/mf/sips", &self.backoff).await
+    }
+
+    /// Create a new mutual fund SIP.
+    pub async fn create_sip(
+        &self,
+        req: &MfSipCreateRequest,
+    ) -> Result<KiteApiResponse<MfSipId>> {
+        self.client
+            .post_form("/mf/sips", req, &self.backoff)
+            .await
+    }
+
+    /// Modify an existing mutual fund SIP.
+    pub async fn modify_sip(
+        &self,
+        sip_id: &str,
+        req: &MfSipModifyRequest,
+    ) -> Result<KiteApiResponse<MfSipId>> {
+        let path = format!("/mf/sips/{}", sip_id);
+        self.client.put(&path, req, &self.backoff).await
+    }
+
+    /// Cancel an existing mutual fund SIP.
+    pub async fn cancel_sip(
+        &self,
+        sip_id: &str,
+    ) -> Result<KiteApiResponse<MfSipId>> {
+        let path = format!("/mf/sips/{}", sip_id);
+        self.client.delete(&path, false, &self.backoff).await
+    }
+
+    /// Retrieve the configuration for a single mutual fund SIP.
+    pub async fn sip(&self, sip_id: &str) -> Result<KiteApiResponse<MfSip>> {
+        let path = format!("/mf/sips/{}", sip_id);
+        self.client.get(&path, &self.backoff).await
     }
 
     /// Retrieve MF holdings available in the DEMAT.
@@ -70,4 +127,3 @@ impl<'c> MutualFunds<'c> {
         self.client.inner_mutual_funds_instruments().await
     }
 }
-

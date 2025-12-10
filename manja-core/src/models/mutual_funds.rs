@@ -3,11 +3,48 @@
 //! This module defines typed representations for the Kite Connect
 //! mutual funds (Coin) APIs: orders, SIPs, holdings, and instruments.
 //! The HTTP transport layer in `manja-http` and the facade in `manja`
-//! re-use these types for JSON and CSV payloads.
+//! re-use these types for JSON and CSV payloads, including the request
+//! models used for placing and managing MF orders and SIPs.
 
 use std::collections::HashMap;
 
+use crate::models::TransactionType;
+
 use serde::{Deserialize, Serialize};
+
+/// Request payload for placing a mutual fund order via `POST /mf/orders`.
+///
+/// The Kite Connect MF order placement API accepts a set of form-encoded
+/// parameters describing a BUY or SELL transaction. This struct provides a
+/// typed representation of those parameters.
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct MfOrderRequest {
+    /// ISIN of the fund.
+    pub tradingsymbol: String,
+    /// Transaction side (`BUY` or `SELL`).
+    pub transaction_type: TransactionType,
+    /// Amount to invest (for BUY orders). Either `amount` or `quantity`
+    /// must be supplied as per Kite MF order rules.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub amount: Option<f64>,
+    /// Quantity of units to redeem (for SELL orders). Either `amount` or
+    /// `quantity` must be supplied as per Kite MF order rules.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub quantity: Option<f64>,
+    /// Optional client tag to identify the order.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tag: Option<String>,
+}
+
+/// Wrapper for create/cancel MF order responses.
+///
+/// When an MF order is placed or cancelled, the API returns an object
+/// containing the `order_id` of the affected order.
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct MfOrderId {
+    /// Unique order id of the MF order.
+    pub order_id: String,
+}
 
 /// Mutual fund order as returned by `/mf/orders` and `/mf/orders/:order_id`.
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -117,6 +154,64 @@ pub struct MfSip {
     pub fund_source: Option<String>,
 }
 
+/// Request payload for creating a mutual fund SIP via `POST /mf/sips`.
+///
+/// The create SIP API accepts a set of configuration parameters that closely
+/// mirror the fields on [`MfSip`], but focused on instalment amount, schedule,
+/// and basic metadata.
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct MfSipCreateRequest {
+    /// ISIN of the fund.
+    pub tradingsymbol: String,
+    /// Amount per instalment.
+    pub amount: f64,
+    /// Frequency of instalments (e.g. `weekly`, `monthly`, `quarterly`).
+    pub frequency: String,
+    /// Day of instalment for monthly/quarterly SIPs.
+    pub instalment_day: i32,
+    /// Total number of instalments; use `-1` for perpetual SIPs.
+    pub instalments: i32,
+    /// Optional initial lump-sum amount to invest along with SIP setup.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub initial_amount: Option<f64>,
+    /// Optional client tag for this SIP.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tag: Option<String>,
+}
+
+/// Request payload for modifying an existing mutual fund SIP via
+/// `PUT /mf/sips/:sip_id`.
+///
+/// All fields are optional; only the provided values will be updated.
+#[derive(Debug, Serialize, Deserialize, Clone, Default)]
+pub struct MfSipModifyRequest {
+    /// Updated instalment amount, if any.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub amount: Option<f64>,
+    /// Updated SIP status (`ACTIVE`, `PAUSED`, etc.), if any.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub status: Option<String>,
+    /// Updated total number of instalments, if any.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub instalments: Option<i32>,
+    /// Updated frequency (`weekly`, `monthly`, `quarterly`, etc.), if any.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub frequency: Option<String>,
+    /// Updated instalment day for monthly/quarterly SIPs, if any.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub instalment_day: Option<i32>,
+}
+
+/// Wrapper for create/modify/cancel MF SIP responses.
+///
+/// The MF SIP management APIs commonly return an object containing only
+/// the `sip_id` of the affected SIP when the operation succeeds.
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct MfSipId {
+    /// Unique SIP id.
+    pub sip_id: String,
+}
+
 /// Mutual fund holding as returned by `/mf/holdings`.
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct MfHolding {
@@ -180,4 +275,3 @@ pub struct MfInstrument {
     /// Date for which last NAV is available.
     pub last_price_date: String,
 }
-
