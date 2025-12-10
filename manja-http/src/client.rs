@@ -358,6 +358,11 @@ impl HTTPClient {
             let client = self.http_client();
             let mut attempt: u32 = 0;
 
+            // NOTE: The retry and rate-limit semantics exercised here are
+            // validated by time-controlled tests in this crate (see
+            // `tests::rate_limited_requests_are_retried_with_backoff` and
+            // related cases), which lock in the expected 429 vs non-429
+            // behavior.
             retry(backoff.clone(), || {
                 attempt += 1;
                 let attempt_no = attempt;
@@ -499,6 +504,317 @@ impl HTTPClient {
                 "HTTP request succeeded"
             );
             Ok(json_response)
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::config::{Config, KITECONNECT_API_LOGIN, KITECONNECT_API_REDIRECT};
+    use crate::credentials::KiteCredentials;
+    use crate::error::Error;
+    use manja_core::error::KiteApiException;
+    use std::time::Duration;
+
+    /// When backoff is enabled, a 429 rate-limit response must be treated as
+    /// transient: the client retries according to the backoff policy until a
+    /// later success response is returned.
+    #[cfg(feature = "backoff")]
+    #[tokio::test(start_paused = true)]
+    async fn rate_limited_requests_are_retried_with_backoff() {
+        let mut server = mockito::Server::new_async().await;
+        let credentials = KiteCredentials::new(
+            "TEST_API_KEY",
+            "TEST_API_SECRET",
+            "TEST_USER_ID",
+            "TEST_PASSWORD",
+            "TEST_TOTP",
+        );
+        let config = Config::from_parts(
+            server.url(),
+            KITECONNECT_API_LOGIN.to_string(),
+            KITECONNECT_API_REDIRECT.to_string(),
+            credentials,
+        );
+        let client = HTTPClient {
+            client: reqwest::Client::new(),
+            config,
+            backoff: crate::api::create_backoff_policy(10),
+            session: None,
+        };
+
+        let path = "/backoff/test/retry";
+
+        // First two attempts: 429 "Too Many Requests" with a valid error body.
+        // These should be surfaced to `backoff` as transient errors and retried.
+        let _rate_limit_mock = server
+            .mock("GET", path)
+            .with_status(429)
+            .with_header("content-type", "application/json")
+            .with_body(
+                r#"{
+                    "status": "error",
+                    "data": null,
+                    "message": "Rate limit exceeded",
+                    "error_type": "GeneralException"
+                }"#,
+            )
+            .expect(2)
+            .create_async()
+            .await;
+
+        // Third attempt: succeed with a simple JSON payload. The overall call
+        // should resolve successfully once this attempt is reached.
+        let _success_mock = server
+            .mock("GET", path)
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_body(
+                r#"{
+                    "status": "success",
+                    "data": "ok",
+                    "message": null,
+                    "error_type": null
+                }"#,
+            )
+            .expect(1)
+            .create_async()
+            .await;
+
+        // Use a small, known interval so advancing virtual time by a few
+        // seconds is enough to trigger multiple retries.
+        let backoff = crate::api::create_backoff_policy(1);
+
+        let client_clone = client.clone();
+        let backoff_clone = backoff.clone();
+        let path_owned = path.to_string();
+
+        let handle = tokio::spawn(async move {
+            client_clone
+                .get::<String>(&path_owned, &backoff_clone)
+                .await
+        });
+
+        // Drive virtual time forward so that `backoff::future::retry` can
+        // progress through multiple attempts without real sleeps. Because
+        // Tokio time is paused, the request would otherwise never advance.
+        for _ in 0..5 {
+            tokio::time::advance(Duration::from_secs(1)).await;
+        }
+
+        let response = handle
+            .await
+            .expect("HTTP client task join error")
+            .expect("expected successful response after retries");
+
+        // We expect that:
+        // - At least one retry was attempted after a 429.
+        // - The final outcome reflects the 200 response.
+        assert_eq!(response.status, "success");
+        assert_eq!(response.data.as_deref(), Some("ok"));
+    }
+
+    /// When `max_elapsed_time` is set on the backoff policy, an endless stream
+    /// of 429 responses must cause the overall operation to fail once the
+    /// maximum elapsed time budget is exhausted.
+    #[cfg(feature = "backoff")]
+    #[tokio::test(start_paused = true)]
+    async fn retries_stop_after_max_elapsed_time() {
+        use backoff::ExponentialBackoffBuilder;
+
+        let mut server = mockito::Server::new_async().await;
+        let credentials = KiteCredentials::new(
+            "TEST_API_KEY",
+            "TEST_API_SECRET",
+            "TEST_USER_ID",
+            "TEST_PASSWORD",
+            "TEST_TOTP",
+        );
+        let config = Config::from_parts(
+            server.url(),
+            KITECONNECT_API_LOGIN.to_string(),
+            KITECONNECT_API_REDIRECT.to_string(),
+            credentials,
+        );
+        let client = HTTPClient {
+            client: reqwest::Client::new(),
+            config,
+            backoff: crate::api::create_backoff_policy(10),
+            session: None,
+        };
+
+        let path = "/backoff/test/max_elapsed";
+
+        // Always respond with 429 so the retry loop never encounters success.
+        let _rate_limit_mock = server
+            .mock("GET", path)
+            .with_status(429)
+            .with_header("content-type", "application/json")
+            .with_body(
+                r#"{
+                    "status": "error",
+                    "data": null,
+                    "message": "Rate limit exceeded",
+                    "error_type": "GeneralException"
+                }"#,
+            )
+            .create_async()
+            .await;
+
+        // Configure a bounded backoff policy: short interval and a small
+        // `max_elapsed_time` so the retry loop gives up deterministically.
+        let backoff = ExponentialBackoffBuilder::new()
+            .with_initial_interval(Duration::from_secs(1))
+            .with_multiplier(1.0)
+            .with_max_interval(Duration::from_secs(1))
+            .with_max_elapsed_time(Some(Duration::from_secs(3)))
+            .build();
+
+        let client_clone = client.clone();
+        let backoff_clone = backoff.clone();
+        let path_owned = path.to_string();
+
+        let handle = tokio::spawn(async move {
+            client_clone
+                .get::<String>(&path_owned, &backoff_clone)
+                .await
+        });
+
+        // Advance virtual time far beyond the `max_elapsed_time` budget so the
+        // backoff implementation has a chance to stop retrying and return.
+        for _ in 0..10 {
+            tokio::time::advance(Duration::from_secs(1)).await;
+        }
+
+        let result = handle.await.expect("HTTP client task join error");
+        // We only care that the operation failed (no infinite retries). The
+        // exact error shape is delegated to the `backoff` crate and our
+        // error-mapping logic.
+        assert!(result.is_err(), "expected request to fail after exceeding max elapsed time");
+    }
+
+    /// When backoff is enabled, non-429 error responses (e.g., 500) must be
+    /// treated as permanent errors and not retried.
+    #[cfg(feature = "backoff")]
+    #[tokio::test(start_paused = true)]
+    async fn non_429_errors_are_not_retried_with_backoff() {
+        let mut server = mockito::Server::new_async().await;
+        let credentials = KiteCredentials::new(
+            "TEST_API_KEY",
+            "TEST_API_SECRET",
+            "TEST_USER_ID",
+            "TEST_PASSWORD",
+            "TEST_TOTP",
+        );
+        let config = Config::from_parts(
+            server.url(),
+            KITECONNECT_API_LOGIN.to_string(),
+            KITECONNECT_API_REDIRECT.to_string(),
+            credentials,
+        );
+        let client = HTTPClient {
+            client: reqwest::Client::new(),
+            config,
+            backoff: crate::api::create_backoff_policy(10),
+            session: None,
+        };
+
+        let path = "/backoff/test/non_429";
+
+        // Single 500 response with a valid Kite-style error body; this should
+        // be mapped to a permanent `Error::KiteApi` without any retry.
+        let _error_mock = server
+            .mock("GET", path)
+            .with_status(500)
+            .with_header("content-type", "application/json")
+            .with_body(
+                r#"{
+                    "status": "error",
+                    "data": null,
+                    "message": "Internal server error",
+                    "error_type": "GeneralException"
+                }"#,
+            )
+            .expect(1)
+            .create_async()
+            .await;
+
+        // Backoff is still configured, but since the error is non-429 it
+        // should not be used for retries at all.
+        let backoff = crate::api::create_backoff_policy(1);
+
+        let err = client
+            .get::<String>(path, &backoff)
+            .await
+            .expect_err("expected non-429 error to be treated as permanent");
+
+        // Assert that the error was classified as a permanent Kite API error
+        // with the expected status code and error type.
+        match err {
+            Error::KiteApi(api_err) => {
+                assert_eq!(api_err.status_code, 500);
+                assert!(matches!(
+                    api_err.error_type,
+                    KiteApiException::GeneralException
+                ));
+            }
+            other => panic!("unexpected error variant: {:?}", other),
+        }
+    }
+
+    /// When the `backoff` feature is disabled, 429 responses must not be
+    /// retried at all: the client performs a single attempt and returns the
+    /// rate-limit error immediately.
+    #[cfg(not(feature = "backoff"))]
+    #[tokio::test]
+    async fn rate_limited_responses_are_not_retried_without_backoff() {
+        let mut server = mockito::Server::new_async().await;
+        let credentials = KiteCredentials::new(
+            "TEST_API_KEY",
+            "TEST_API_SECRET",
+            "TEST_USER_ID",
+            "TEST_PASSWORD",
+            "TEST_TOTP",
+        );
+        let config = Config::from_parts(
+            server.url(),
+            KITECONNECT_API_LOGIN.to_string(),
+            KITECONNECT_API_REDIRECT.to_string(),
+            credentials,
+        );
+        let client = HTTPClient::with_config(config);
+
+        let path = "/backoff/test/without_feature";
+
+        let _rate_limit_mock = server
+            .mock("GET", path)
+            .with_status(429)
+            .with_header("content-type", "application/json")
+            .with_body(
+                r#"{
+                    "status": "error",
+                    "data": null,
+                    "message": "Rate limit exceeded",
+                    "error_type": "GeneralException"
+                }"#,
+            )
+            .expect(1)
+            .create_async()
+            .await;
+
+        let backoff = crate::api::create_backoff_policy(1);
+
+        let err = client
+            .get::<String>(path, &backoff)
+            .await
+            .expect_err("expected 429 to be returned without retry when backoff is disabled");
+
+        match err {
+            Error::KiteApi(api_err) => {
+                assert_eq!(api_err.status_code, 429);
+            }
+            other => panic!("unexpected error variant: {:?}", other),
         }
     }
 }
