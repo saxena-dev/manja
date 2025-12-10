@@ -4,6 +4,20 @@
 //! represent the various structures used in API requests and responses, making
 //! it easier to work with Kite Connect API in a type-safe manner.
 //!
+//! At the workspace level, the `manja` facade re-exports a **smaller, curated
+//! subset** of these types at its crate root (`manja::*`) – primarily
+//! [`KiteApiResponse`], user/session models, core order types, and a handful of
+//! commonly used market, margin, and mutual fund types.
+//!
+//! The full set of HTTP models, including advanced/rarely used types (for
+//! example, alert/GTT payloads and postback helpers), remains available here
+//! under [`manja_core::models`] and is also re-exported under
+//! [`manja::kite::connect::models`]. When in doubt:
+//!
+//! - Use types from `manja`'s crate root for common workflows.
+//! - Import additional or specialised types directly from `manja_core::models`
+//!   or `manja::kite::connect::models`.
+//!
 //! [`KiteApiResponse<T>`] is the wrapper struct that represents a response from
 //! Kite Connect API and is a good starting point to dig deeper. The generic type
 //! `T` is the specific data structure returned from an API endpoint. For example,

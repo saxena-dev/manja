@@ -120,7 +120,12 @@
 //!
 //!     if let Some(orders) = response.data {
 //!         for order in orders {
-//!             println!("MF order {}: {} {}", order.order_id, order.tradingsymbol, order.status.unwrap_or_default());
+//!             println!(
+//!                 "MF order {}: {} {}",
+//!                 order.order_id,
+//!                 order.tradingsymbol,
+//!                 order.status.unwrap_or_default()
+//!             );
 //!         }
 //!     }
 //!
@@ -132,7 +137,8 @@
 //!
 //! The [`ManjaClient::historical`] API group provides typed access to
 //! `/instruments/historical/:instrument_token/:interval` and returns
-//! [`HistoricalData`] (a sequence of [`HistoricalCandle`] values).
+//! [`HistoricalData`] (a sequence of
+//! [`kite::connect::models::HistoricalCandle`] values).
 //!
 //! ```ignore
 //! use chrono::{NaiveDate, NaiveDateTime};
@@ -193,9 +199,9 @@
 //! ## Example: Handling order postbacks (webhooks/WebSocket)
 //!
 //! ```ignore
-//! use manja::{OrderPostback, Result};
+//! use manja::Result;
 //! use manja::kite::connect::models::{
-//!     parse_http_postback, verify_postback_checksum,
+//!     parse_http_postback, verify_postback_checksum, OrderPostback,
 //! };
 //!
 //! fn handle_postback(body: &str, api_secret: &str) -> Result<OrderPostback> {
@@ -233,6 +239,36 @@
 //! * The `manja` crate is currently in development and should be considered unstable. The API is subject to change without notice, and breaking changes are likely to occur.
 //!
 //! * The software is provided "as-is" without any warranties, express or implied. The author and contributors of this SDK do not take responsibility for any financial losses, damages, or other issues that may arise from the use of this project.
+//!
+//! # Core vs Advanced Types
+//!
+//! The crate root (`manja::*`) exposes a **small, stable set of core types**
+//! that are used throughout the quickstart, examples, and high-level
+//! workflows:
+//!
+//! - `ManjaClient`, `Result`, `ManjaError`, `KiteApiException`
+//! - Core HTTP models: [`KiteApiResponse`], [`UserProfile`], [`UserSession`],
+//!   [`UserMargins`]
+//! - Common trading and market models such as [`Exchange`], [`Instrument`],
+//!   [`FullQuote`], [`Order`], [`OrderReceipt`], [`BasketMargin`],
+//!   [`HistoricalData`], and mutual fund types like [`MfHolding`] and
+//!   [`MfOrder`]
+//!
+//! **Advanced or rarely used types** (for example, detailed alert/GTT structs,
+//! postback helpers, and specialised enums) remain available via:
+//!
+//! - [`kite::connect::models`] – the facade view of HTTP models.
+//! - [`manja_core::models`] – the shared, transport-agnostic types crate.
+//!
+//! When you need additional models that are not exported at the crate root,
+//! prefer importing them from `kite::connect::models`:
+//!
+//! ```ignore
+//! use manja::kite::connect::models::{AlertRequest, AlertType};
+//! ```
+//!
+//! This separation keeps the long-term semver surface of the facade manageable
+//! while still providing access to the full model set when needed.
 #![warn(rust_2018_idioms)]
 #![allow(private_interfaces, unused)]
 
@@ -244,22 +280,70 @@ pub use client::ManjaClient;
 /// High-level workflow helpers built on top of the `ManjaClient` facade.
 pub mod workflows;
 
-// Core error types and result alias.
+// Core error types and result alias re-exported at the crate root.
 pub use crate::kite::error::{KiteApiException, ManjaError, Result};
 
-// Primary HTTP models and enums.
+/// Core HTTP models and enums exposed at the crate root.
+///
+/// This set is intentionally small and focused on the most commonly used
+/// types in examples, documentation, and high‑level workflows. Advanced or
+/// rarely used types (for example, detailed alert/GTT structs, postback
+/// helpers, and internal enums) are available via:
+///
+/// - [`crate::kite::connect::models`]
+/// - or directly from the shared types crate: [`manja_core::models`]
+///
+/// When you need additional models that are not listed here, prefer importing
+/// them from `kite::connect::models`:
+///
+/// ```ignore
+/// use manja::kite::connect::models::OrderPostback;
+/// ```
 pub use crate::kite::connect::models::{
-    Alert, AlertBasket, AlertBasketGttMeta, AlertBasketItem, AlertBasketParams, AlertHistoryEntry,
-    AlertHistoryMeta, AlertHistoryOhlc, AlertOperator, AlertRequest, AlertRhsType, AlertStatus,
-    AlertType, Auction, Available, BasketMargin, Charges, Exchange, FullQuote, GST, GttCondition,
-    GttOrderExecutionResult, GttOrderParams, GttOrderResult, GttStatus, GttTrigger, GttTriggerId,
-    GttTriggerRequest, GttType, HistoricalCandle, HistoricalData, HistoricalInterval, Holding,
-    Instrument, KiteApiResponse, LTPQuote, MfHolding, MfInstrument, MfOrder, MfSip,
-    OHLCQuote, Order, OrderCharges, OrderChargesRequest, OrderMargin, OrderMarginRequest,
-    OrderReceipt, OrderStatus, OrderType, OrderValidity, OrderVariety, PNL, Position,
-    PositionConversionRequest, Positions, ProductType, QuoteMode, Segment, SegmentKind, Trade,
-    TransactionType, UserMargins, UserProfile, UserSession, Utilised, parse_http_postback,
-    verify_postback_checksum,
+    // Response wrapper
+    KiteApiResponse,
+    // User/session
+    UserProfile,
+    UserSession,
+    UserMargins,
+    // Market/instruments
+    Exchange,
+    Instrument,
+    FullQuote,
+    LTPQuote,
+    OHLCQuote,
+    // Portfolio
+    Holding,
+    Position,
+    Positions,
+    PositionConversionRequest,
+    // Orders and trading
+    Order,
+    OrderReceipt,
+    OrderStatus,
+    OrderType,
+    OrderValidity,
+    OrderVariety,
+    ProductType,
+    TransactionType,
+    // Margins and charges
+    BasketMargin,
+    OrderMarginRequest,
+    OrderMargin,
+    Charges,
+    OrderCharges,
+    OrderChargesRequest,
+    PNL,
+    GST,
+    // Historical data
+    HistoricalCandle,
+    HistoricalData,
+    HistoricalInterval,
+    // Mutual funds
+    MfHolding,
+    MfInstrument,
+    MfOrder,
+    MfSip,
 };
 
 pub mod kite;
