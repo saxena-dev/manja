@@ -1,0 +1,52 @@
+name: CI
+
+on:
+  push:
+    branches: [develop, main]
+  pull_request:
+    branches: [develop, main]
+
+jobs:
+  rust-ci:
+    name: Rust CI (${{ matrix.profile.name }})
+    runs-on: ubuntu-latest
+
+    strategy:
+      fail-fast: false
+      matrix:
+        profile:
+          - name: default
+            cargo-flags: ""
+          - name: no-default-features
+            cargo-flags: "--no-default-features"
+          - name: http-websocket
+            cargo-flags: "--no-default-features --features websocket"
+          - name: http-webdriver-login
+            cargo-flags: "--no-default-features --features webdriver-login"
+          - name: http-backoff
+            cargo-flags: "--no-default-features --features backoff"
+          - name: http-websocket-backoff
+            cargo-flags: "--no-default-features --features websocket,backoff"
+          - name: http-webdriver-login-backoff
+            cargo-flags: "--no-default-features --features webdriver-login,backoff"
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Setup Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Show toolchain version
+        run: rustc -V && cargo -V
+
+      - name: Build
+        run: cargo build -p manja ${{ matrix.profile['cargo-flags'] }}
+
+      - name: Test (unit and integration)
+        run: cargo test -p manja ${{ matrix.profile['cargo-flags'] }} -- --nocapture
+
+      - name: Test (doctests)
+        run: cargo test -p manja ${{ matrix.profile['cargo-flags'] }} --doc
