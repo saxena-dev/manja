@@ -201,8 +201,8 @@ where
   - [x] GET `/quote` Retrieve the full market quotes for one or more instruments
   - [x] GET `/quote/ohlc` Retrieve OHLC quotes for one or more instruments
   - [x] GET `/quote/ltp` Retrieve LTP quotes for one or more instruments
-- [ ] **Historical candle data**
-  - [ ] GET `/instruments/historical/:instrument_token/:interval` Retrieve historical candle records for a given instrument
+- [x] **Historical candle data**
+  - [x] GET `/instruments/historical/:instrument_token/:interval` Retrieve historical candle records for a given instrument
 - [ ] **Mutual funds**
   - [ ] POST `/mf/orders` Place a buy or sell order
   - [ ] DELETE `/mf/orders/:order_id` Cancel an open or pending order
