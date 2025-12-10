@@ -134,3 +134,78 @@ impl<'de> Deserialize<'de> for UserSession {
         })
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use proptest::prelude::*;
+
+    proptest! {
+        #[test]
+        fn user_session_serde_roundtrip(
+            user_type in any::<String>(),
+            email in any::<String>(),
+            user_name in any::<String>(),
+            user_shortname in any::<String>(),
+            broker in any::<String>(),
+            exchanges in proptest::collection::vec(any::<String>(), 0..4),
+            products in proptest::collection::vec(any::<String>(), 0..4),
+            order_types in proptest::collection::vec(any::<String>(), 0..4),
+            avatar_url in proptest::option::of(any::<String>()),
+            user_id in any::<String>(),
+            api_key in any::<String>(),
+            access_token in any::<String>(),
+            public_token in any::<String>(),
+            refresh_token in any::<String>(),
+            enctoken in any::<String>(),
+            login_time in any::<String>(),
+            meta_demat_consent in proptest::option::of(any::<String>()),
+        ) {
+            let meta = meta_demat_consent.clone().map(|demat_consent| Meta { demat_consent });
+
+            let session = UserSession {
+                user_type: user_type.clone(),
+                email: email.clone(),
+                user_name: user_name.clone(),
+                user_shortname: user_shortname.clone(),
+                broker: broker.clone(),
+                exchanges: exchanges.clone(),
+                products: products.clone(),
+                order_types: order_types.clone(),
+                avatar_url: avatar_url.clone(),
+                user_id: user_id.clone(),
+                api_key: Secret::new(api_key.clone()),
+                access_token: Secret::new(access_token.clone()),
+                public_token: Secret::new(public_token.clone()),
+                refresh_token: Secret::new(refresh_token.clone()),
+                enctoken: Secret::new(enctoken.clone()),
+                login_time: login_time.clone(),
+                meta: meta.clone(),
+            };
+
+            let json = serde_json::to_string(&session).expect("serialize UserSession");
+            let decoded: UserSession = serde_json::from_str(&json).expect("deserialize UserSession");
+
+            prop_assert_eq!(decoded.user_type, user_type);
+            prop_assert_eq!(decoded.email, email);
+            prop_assert_eq!(decoded.user_name, user_name);
+            prop_assert_eq!(decoded.user_shortname, user_shortname);
+            prop_assert_eq!(decoded.broker, broker);
+            prop_assert_eq!(decoded.exchanges, exchanges);
+            prop_assert_eq!(decoded.products, products);
+            prop_assert_eq!(decoded.order_types, order_types);
+            prop_assert_eq!(decoded.avatar_url, avatar_url);
+            prop_assert_eq!(decoded.user_id, user_id);
+            prop_assert_eq!(decoded.api_key.expose_secret(), &api_key);
+            prop_assert_eq!(decoded.access_token.expose_secret(), &access_token);
+            prop_assert_eq!(decoded.public_token.expose_secret(), &public_token);
+            prop_assert_eq!(decoded.refresh_token.expose_secret(), &refresh_token);
+            prop_assert_eq!(decoded.enctoken.expose_secret(), &enctoken);
+            prop_assert_eq!(decoded.login_time, login_time);
+            prop_assert_eq!(
+                decoded.meta.as_ref().map(|m| &m.demat_consent),
+                meta_demat_consent.as_ref()
+            );
+        }
+    }
+}

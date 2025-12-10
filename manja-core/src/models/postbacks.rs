@@ -153,6 +153,7 @@ pub fn verify_postback_checksum(postback: &OrderPostback, api_secret: &str) -> b
 #[cfg(test)]
 mod tests {
     use super::*;
+    use proptest::prelude::*;
 
     fn sample_postback() -> String {
         // This JSON mirrors `kiteconnect-mocks/postback.json`.
@@ -253,5 +254,55 @@ mod tests {
         assert_eq!(postback.order_id, "220303000308932");
         assert_eq!(postback.tradingsymbol, "SBIN");
     }
-}
 
+    proptest! {
+        #[test]
+        fn checksum_roundtrip_holds_for_generated_inputs(
+            order_id in any::<String>(),
+            order_timestamp in any::<String>(),
+            api_secret in any::<String>(),
+        ) {
+            let checksum = compute_postback_checksum(&order_id, &order_timestamp, &api_secret);
+
+            let postback = OrderPostback {
+                user_id: "U".to_string(),
+                placed_by: "U".to_string(),
+                app_id: 1,
+                checksum: checksum.clone(),
+                order_id: order_id.clone(),
+                exchange_order_id: None,
+                parent_order_id: None,
+                status: OrderStatus::Complete,
+                status_message: None,
+                status_message_raw: None,
+                order_timestamp: order_timestamp.clone(),
+                exchange_update_timestamp: None,
+                exchange_timestamp: None,
+                variety: OrderVariety::Regular,
+                exchange: "NSE".to_string(),
+                tradingsymbol: "SYMB".to_string(),
+                instrument_token: 1,
+                order_type: OrderType::Market,
+                transaction_type: TransactionType::BUY,
+                validity: OrderValidity::Day,
+                product: ProductType::CashAndCarry,
+                quantity: 1,
+                disclosed_quantity: 0,
+                price: 0.0,
+                trigger_price: 0.0,
+                average_price: 0.0,
+                filled_quantity: 0,
+                unfilled_quantity: 0,
+                pending_quantity: 0,
+                cancelled_quantity: 0,
+                market_protection: 0,
+                meta: serde_json::Value::Null,
+                tag: None,
+                guid: "guid".to_string(),
+            };
+
+            prop_assert!(verify_postback_checksum(&postback, &api_secret));
+            prop_assert!(!verify_postback_checksum(&postback, "different_secret"));
+        }
+    }
+}
