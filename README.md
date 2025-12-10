@@ -203,7 +203,7 @@ where
   - [x] GET `/quote/ltp` Retrieve LTP quotes for one or more instruments
 - [x] **Historical candle data**
   - [x] GET `/instruments/historical/:instrument_token/:interval` Retrieve historical candle records for a given instrument
-- [ ] **Mutual funds**
+- [x] **Mutual funds**
   - [x] POST `/mf/orders` Place a buy or sell order
   - [x] DELETE `/mf/orders/:order_id` Cancel an open or pending order
   - [x] GET `/mf/orders` Retrieve the list of all orders (open and executed) over the last 7 days
