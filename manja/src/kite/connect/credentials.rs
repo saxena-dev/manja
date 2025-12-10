@@ -172,29 +172,46 @@ mod test {
     use secrecy::ExposeSecret;
 
     use super::*;
-    use std::env;
+    use temp_env;
+
+    fn with_kite_env<F: FnOnce()>(f: F) {
+        temp_env::with_vars(
+            [
+                ("KITECONNECT_API_KEY", Some("notanapikey42")),
+                (
+                    "KITECONNECT_API_SECRET",
+                    Some("thatreallylongsupersecret42"),
+                ),
+                ("KITECONNECT_USER_ID", Some("XY12345")),
+                ("KITECONNECT_PASSWORD", Some("ohsosecret")),
+                (
+                    "KITECONNECT_TOTP_KEY",
+                    Some("JBSWY3DPEHPK3PXPZVZSWIDGNJQXGZLE"),
+                ),
+            ],
+            f,
+        );
+    }
 
     #[test]
     fn test_kite_credentials_default() {
-        // Setup env vars
-        env::set_var("KITECONNECT_API_KEY", "notanapikey42");
-        env::set_var("KITECONNECT_API_SECRET", "thatreallylongsupersecret42");
-        env::set_var("KITECONNECT_USER_ID", "XY12345");
-        env::set_var("KITECONNECT_PASSWORD", "ohsosecret");
-        env::set_var("KITECONNECT_TOTP_KEY", "JBSWY3DPEHPK3PXPZVZSWIDGNJQXGZLE");
+        with_kite_env(|| {
+            let kc = KiteCredentials::default();
 
-        let kc = KiteCredentials::default();
-
-        assert_eq!(kc.api_key().expose_secret(), &String::from("notanapikey42"));
-        assert_eq!(
-            kc.api_secret().expose_secret(),
-            &String::from("thatreallylongsupersecret42")
-        );
-        assert_eq!(kc.user_id().expose_secret(), &String::from("XY12345"));
-        assert_eq!(kc.user_pwd().expose_secret(), &String::from("ohsosecret"));
-        assert_eq!(
-            kc.totp_key().expose_secret(),
-            &String::from("JBSWY3DPEHPK3PXPZVZSWIDGNJQXGZLE")
-        );
+            assert_eq!(
+                kc.api_key().expose_secret(),
+                &String::from("notanapikey42")
+            );
+            assert_eq!(
+                kc.api_secret().expose_secret(),
+                &String::from("thatreallylongsupersecret42")
+            );
+            assert_eq!(kc.user_id().expose_secret(), &String::from("XY12345"));
+            assert_eq!(kc.user_pwd().expose_secret(), &String::from("ohsosecret"));
+            assert_eq!(
+                kc.totp_key().expose_secret(),
+                &String::from("JBSWY3DPEHPK3PXPZVZSWIDGNJQXGZLE")
+            );
+        });
     }
 }

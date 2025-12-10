@@ -223,6 +223,7 @@ impl Stream for SubscriptionStream {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use temp_env;
 
     #[test]
     fn stream_state_to_uri_from_parts() {
@@ -240,16 +241,21 @@ mod tests {
 
     #[test]
     fn stream_state_to_uri_from_credentials_uses_env_api_base() {
-        std::env::set_var("KITECONNECT_WSS_API_BASE", "wss://example-env.test");
-        let creds = KiteStreamCredentials::from_parts("ENV_API_KEY", "ENV_ACCESS_TOKEN");
-        let state = StreamState::from_credentials(creds);
-        let uri = state.to_uri();
-        assert!(
-            uri == "wss://example-env.test?api_key=ENV_API_KEY&access_token=ENV_ACCESS_TOKEN"
-                || uri == "wss://example-env.test?access_token=ENV_ACCESS_TOKEN&api_key=ENV_API_KEY"
+        temp_env::with_var(
+            "KITECONNECT_WSS_API_BASE",
+            Some("wss://example-env.test"),
+            || {
+                let creds =
+                    KiteStreamCredentials::from_parts("ENV_API_KEY", "ENV_ACCESS_TOKEN");
+                let state = StreamState::from_credentials(creds);
+                let uri = state.to_uri();
+                assert!(
+                    uri == "wss://example-env.test?api_key=ENV_API_KEY&access_token=ENV_ACCESS_TOKEN"
+                        || uri
+                            == "wss://example-env.test?access_token=ENV_ACCESS_TOKEN&api_key=ENV_API_KEY"
+                );
+            },
         );
-        // Clean up for other tests.
-        std::env::remove_var("KITECONNECT_WSS_API_BASE");
     }
 
     #[test]
