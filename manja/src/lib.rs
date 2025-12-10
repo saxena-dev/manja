@@ -53,6 +53,40 @@
 //! }
 //! ```
 //!
+//! ## Example: Using high-level workflows
+//!
+//! For common tasks like placing a simple cash-equity market order, you can
+//! use the high-level helpers in [`crate::workflows`] instead of manually
+//! constructing an [`Order`] payload:
+//!
+//! ```ignore
+//! use manja::{
+//!     Exchange, KiteApiResponse, ManjaClient, OrderReceipt, ProductType,
+//!     TransactionType,
+//! };
+//! use manja::workflows;
+//!
+//! #[tokio::main]
+//! async fn main() -> manja::Result<()> {
+//!     let mut client = ManjaClient::from_env();
+//!
+//!     let response: KiteApiResponse<OrderReceipt> =
+//!         workflows::place_cash_market_order(
+//!             &mut client,
+//!             Exchange::NSE,
+//!             "INFY".to_string(),
+//!             1,
+//!             TransactionType::BUY,
+//!             ProductType::CashAndCarry,
+//!             Some("demo-order".to_string()),
+//!         )
+//!         .await?;
+//!
+//!     println!("Placed order with id: {:?}", response.data);
+//!     Ok(())
+//! }
+//! ```
+//!
 //! ## Example: Fetching mutual fund orders
 //!
 //! ```ignore
@@ -178,6 +212,9 @@ mod client;
 
 pub use client::ManjaClient;
 
+/// High-level workflow helpers built on top of the `ManjaClient` facade.
+pub mod workflows;
+
 // Core error types and result alias.
 pub use crate::kite::error::{KiteApiException, ManjaError, Result};
 
@@ -191,7 +228,7 @@ pub use crate::kite::connect::models::{
     Instrument, KiteApiResponse, LTPQuote, MfHolding, MfInstrument, MfOrder, MfSip,
     OHLCQuote, Order, OrderCharges, OrderChargesRequest, OrderMargin, OrderMarginRequest,
     OrderReceipt, OrderStatus, OrderType, OrderValidity, OrderVariety, PNL, Position,
-    PositionConversionRequest, ProductType, QuoteMode, Segment, SegmentKind, Trade,
+    PositionConversionRequest, Positions, ProductType, QuoteMode, Segment, SegmentKind, Trade,
     TransactionType, UserMargins, UserProfile, UserSession, Utilised, parse_http_postback,
     verify_postback_checksum,
 };

@@ -276,6 +276,20 @@ pub struct Position {
     pub day_sell_value: f64,
 }
 
+/// Wrapper type for the positions payload returned by the Kite Connect
+/// `/portfolio/positions` endpoint.
+///
+/// The API returns two sets of positions:
+/// - `net`: the actual, current net position portfolio.
+/// - `day`: a snapshot of the buying and selling activity for that particular day.
+#[derive(Debug, Serialize, Deserialize)]
+pub struct Positions {
+    /// Net positions portfolio.
+    pub net: Vec<Position>,
+    /// Intraday positions for the current day.
+    pub day: Vec<Position>,
+}
+
 /// Represents the variety of an order, either overnight or day positions.
 ///
 /// This enum contains constant values used for placing different types of

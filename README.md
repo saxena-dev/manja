@@ -37,6 +37,29 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 }
 ```
 
+### High-level workflows
+
+On top of the low-level, typed API groups exposed via `ManjaClient`, the crate
+provides a small set of **high-level workflows** in the `manja::workflows`
+module. These are thin convenience functions that compose existing APIs and
+apply sensible defaults without hiding underlying semantics.
+
+Currently available helpers include:
+
+- `workflows::place_cash_market_order` – build and place a simple cash-equity
+  market order with minimal parameters.
+- `workflows::square_off_position_by_symbol` – fetch positions and place
+  opposite-side market orders to square off a given symbol on a specific
+  exchange (optionally constrained by product type).
+- `workflows::place_order_with_margin_check` – perform a pre-trade margin
+  check (via basket margins) and then place the corresponding order.
+- `workflows::mf_holdings_by_tradingsymbol` – list mutual fund holdings
+  filtered by a specific MF tradingsymbol (ISIN-like code).
+
+These helpers are optional ergonomics layers: for advanced use cases you can
+always drop down to `ManjaClient`’s underlying `orders`, `portfolio`,
+`margins`, `market`, and `mutual_funds` APIs directly.
+
 ### Running Examples in the Workspace
 
 From the workspace root:

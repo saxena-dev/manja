@@ -14,8 +14,8 @@ pub use manja_core::models::{
     HistoricalInterval, Holding, Instrument, KiteApiResponse, LTPQuote, MfHolding, MfInstrument,
     MfOrder, MfSip, OHLCQuote, Order, OrderCharges, OrderChargesRequest, OrderMargin,
     OrderMarginRequest, OrderReceipt, OrderStatus, OrderType, OrderValidity, OrderVariety, PNL,
-    Position, PositionConversionRequest, ProductType, QuoteMode, Segment, SegmentKind, Trade,
-    TransactionType, UserMargins, UserProfile, UserSession, Utilised, parse_http_postback,
+    Position, PositionConversionRequest, Positions, ProductType, QuoteMode, Segment, SegmentKind,
+    Trade, TransactionType, UserMargins, UserProfile, UserSession, Utilised, parse_http_postback,
     verify_postback_checksum,
 };
 

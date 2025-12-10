@@ -6,7 +6,7 @@
 use crate::api::{create_backoff_policy, BackoffPolicy};
 use crate::client::HTTPClient;
 use crate::error::Result;
-use manja_core::models::{Holding, KiteApiResponse, Position};
+use manja_core::models::{Holding, KiteApiResponse, Positions};
 
 /// Portfolio-related API endpoints for holdings and positions.
 pub struct Portfolio<'c> {
@@ -40,7 +40,7 @@ impl<'c> Portfolio<'c> {
     }
 
     /// Fetches the list of positions for the user.
-    pub async fn positions(&self) -> Result<KiteApiResponse<Position>> {
+    pub async fn positions(&self) -> Result<KiteApiResponse<Positions>> {
         self.client
             .get(&"/portfolio/positions", &self.backoff)
             .await

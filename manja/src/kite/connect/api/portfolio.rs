@@ -12,7 +12,7 @@
 use crate::kite::connect::api::{create_backoff_policy, BackoffPolicy};
 use crate::kite::connect::{
     client::HTTPClient,
-    models::{Auction, Holding, KiteApiResponse, Position, PositionConversionRequest},
+    models::{Auction, Holding, KiteApiResponse, PositionConversionRequest, Positions},
 };
 use crate::kite::error::Result;
 
@@ -90,7 +90,7 @@ impl<'c> Portfolio<'c> {
     /// of the buying and selling activity for that particular day. This is
     /// useful for computing intraday profits and losses for trading strategies.
     ///
-    pub async fn get_positions(&self) -> Result<KiteApiResponse<Vec<Position>>> {
+    pub async fn get_positions(&self) -> Result<KiteApiResponse<Positions>> {
         self.client
             .get(&format!("/portfolio/positions"), &self.backoff)
             .await

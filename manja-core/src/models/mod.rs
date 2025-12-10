@@ -80,7 +80,7 @@ pub use order_enums::{
 /// Models for the `/portfolio/` API group, managing holdings and positions.
 ///
 mod portfolio;
-pub use portfolio::{Auction, Holding, Position, PositionConversionRequest};
+pub use portfolio::{Auction, Holding, Position, PositionConversionRequest, Positions};
 
 /// Models for the `/instruments/` and `/quote/` API group, providing market
 /// data and instrument information.
