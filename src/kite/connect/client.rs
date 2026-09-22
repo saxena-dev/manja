@@ -450,21 +450,38 @@ pub mod test_utils {
     use std::collections::HashMap;
 
     use super::*;
+    use crate::kite::connect::credentials::KiteCredentials;
 
-    use mockito::{Mock, ServerGuard};
+    use mockito::ServerGuard;
 
-    pub fn read_to_object<M>(path: &str) -> Result<M>
+    /// Fixture loading, shared with the integration test support crate.
+    pub mod fixtures {
+        include!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/tests/support/fixtures.rs"
+        ));
+    }
+
+    /// Deserialize the `data` field of the official fixture `name`.
+    ///
+    /// Panics with the resolved fixture path if the file is missing, malformed,
+    /// or has no `data` field.
+    pub fn read_to_object<M>(name: &str) -> M
     where
         M: DeserializeOwned,
     {
-        let contents = std::fs::read_to_string(path).unwrap();
-        let obj: KiteApiResponse<M> = serde_json::from_str(&contents)?;
-        obj.data
-            .ok_or(ManjaError::Internal(format!("obj not found")))
+        let response: KiteApiResponse<M> = fixtures::json(name).unwrap();
+        response.data.unwrap_or_else(|| {
+            panic!(
+                "fixture {} has no `data` field",
+                fixtures::mocks_dir().join(name).display()
+            )
+        })
     }
 
     pub type HTTPMethod = &'static str;
     pub type APIEndpoint = &'static str;
+    /// Official fixture file name, served unchanged as the response body.
     pub type TestResponse = &'static str;
 
     pub async fn add_mocks(
@@ -472,8 +489,8 @@ pub mod test_utils {
         mock_map: HashMap<(HTTPMethod, APIEndpoint), TestResponse>,
     ) -> ServerGuard {
         let mut mocks = Vec::new();
-        for ((method, api_endpoint), response_path) in mock_map {
-            let response_json = std::fs::read_to_string(response_path).unwrap();
+        for ((method, api_endpoint), fixture) in mock_map {
+            let response_json = fixtures::json_body(fixture).unwrap();
             let m = server
                 .mock(method, api_endpoint)
                 .with_status(200)
@@ -486,15 +503,29 @@ pub mod test_utils {
         server
     }
 
+    /// A client pointed at its own mock server through per-test configuration.
+    ///
+    /// Reads no `.env` file and mutates no process environment, so tests stay
+    /// independent when run in parallel.
     pub async fn get_manja_test_client() -> (ServerGuard, HTTPClient) {
         let server = mockito::Server::new_async().await;
-        // Load env vars
-        dotenv::dotenv().ok();
-        // Patch the API base url on HTTPClient for testing
-        std::env::set_var("KITECONNECT_API_BASE", &server.url());
-        let session =
-            read_to_object::<UserSession>("./kiteconnect-mocks/generate_session.json").unwrap();
+        let config = Config::from_parts(
+            server.url(),
+            server.url(),
+            server.url(),
+            KiteCredentials::new(
+                "test_api_key",
+                "test_api_secret",
+                "test_user_id",
+                "test_user_pwd",
+                "test_totp_key",
+            ),
+        );
+        let session = read_to_object::<UserSession>("generate_session.json");
 
-        (server, HTTPClient::default().with_user_session(session))
+        (
+            server,
+            HTTPClient::with_config(config).with_user_session(session),
+        )
     }
 }
