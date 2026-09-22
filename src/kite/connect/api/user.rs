@@ -142,11 +142,11 @@ mod tests {
         let mut mmap = HashMap::new();
         mmap.insert(
             ("GET", "/user/profile"),
-            "./kiteconnect-mocks/api_docs/user_profile.json",
+            "./kiteconnect-mocks/profile.json",
         );
         mmap.insert(
             ("GET", "/user/margins"),
-            "./kiteconnect-mocks/api_docs/user_margins.json",
+            "./kiteconnect-mocks/margins.json",
         );
         mmap.insert(
             ("GET", "/user/margins/commodity"),
@@ -165,9 +165,7 @@ mod tests {
         let (_server,) = join!(add_mocks(server, mock_map()));
 
         let response = manja_client.user().profile().await.unwrap();
-        let profile =
-            read_to_object::<UserProfile>("./kiteconnect-mocks/api_docs/user_profile.json")
-                .unwrap();
+        let profile = read_to_object::<UserProfile>("./kiteconnect-mocks/profile.json").unwrap();
         log::debug!("Profile object: {:?}", profile);
         assert_eq!(response.data.unwrap(), profile);
     }
@@ -180,9 +178,7 @@ mod tests {
         let (_server,) = join!(add_mocks(server, mock_map()));
 
         let response = manja_client.user().margins().await.unwrap();
-        let margins =
-            read_to_object::<UserMargins>("./kiteconnect-mocks/api_docs/user_margins.json")
-                .unwrap();
+        let margins = read_to_object::<UserMargins>("./kiteconnect-mocks/margins.json").unwrap();
         log::debug!("Margins object: {:?}", margins);
         assert_eq!(response.data.unwrap(), margins);
     }
