@@ -463,17 +463,21 @@ impl MonotonicElapsed {
 /// [`Self::len`] is the visible length.
 #[derive(Clone, PartialEq, Eq, Hash)]
 pub struct Payload {
-    buf: Arc<[u8]>,
+    // The received buffer itself, shared: taking ownership never copies it.
+    buf: Arc<Vec<u8>>,
     start: usize,
     end: usize,
 }
 
 impl Payload {
-    /// Take ownership of `bytes`.
+    /// Take ownership of `bytes` without copying them.
     pub fn new(bytes: Vec<u8>) -> Self {
-        let buf: Arc<[u8]> = bytes.into();
-        let end = buf.len();
-        Self { buf, start: 0, end }
+        let end = bytes.len();
+        Self {
+            buf: Arc::new(bytes),
+            start: 0,
+            end,
+        }
     }
 
     /// The visible bytes.
@@ -491,9 +495,10 @@ impl Payload {
         self.start == self.end
     }
 
-    /// Bytes of the backing allocation kept alive by this payload.
+    /// Bytes of the backing allocation kept alive by this payload: its
+    /// full capacity, which can exceed the received length.
     pub fn retained_bytes(&self) -> usize {
-        self.buf.len()
+        self.buf.capacity()
     }
 
     /// A sub-range sharing the same allocation, or `None` if out of bounds.
