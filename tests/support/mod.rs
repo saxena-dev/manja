@@ -6,6 +6,8 @@
 // Shared support code: no single test crate uses every helper.
 #![allow(dead_code)]
 
+/// Test-only reader for the vendored capture container.
+pub mod capture;
 /// Fixture loading from `kiteconnect-mocks/`, independent of the working directory.
 pub mod fixtures;
 pub mod http;

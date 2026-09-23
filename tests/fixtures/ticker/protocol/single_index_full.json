@@ -1,0 +1,17 @@
+{
+  "description": "Single index_full packet (32 bytes)",
+  "expected_packets": 1,
+  "expected_type": "IndexFull",
+  "packet": {
+    "kind": "index_full",
+    "raw_len": 32,
+    "instrument_token": 282633,
+    "last_traded_price": 928139,
+    "high_price": 933621,
+    "low_price": 919246,
+    "open_price": 926900,
+    "close_price": 931056,
+    "change": -2917,
+    "exchange_timestamp": 1768996800
+  }
+}

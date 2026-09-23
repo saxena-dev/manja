@@ -1,0 +1,92 @@
+{
+  "description": "Multi-packet frame (2 packets)",
+  "expected_packets": 2,
+  "packets": [
+    {
+      "kind": "full",
+      "raw_len": 184,
+      "instrument_token": 4419329,
+      "last_traded_price": 157610,
+      "last_traded_quantity": 1,
+      "average_traded_price": 154900,
+      "volume_traded_for_day": 96905,
+      "total_buy_quantity": 0,
+      "total_sell_quantity": 358,
+      "open_price": 147900,
+      "high_price": 160200,
+      "low_price": 146410,
+      "close_price": 147950,
+      "last_traded_timestamp": 1768989597,
+      "open_interest": 0,
+      "open_interest_day_high": 0,
+      "open_interest_day_low": 0,
+      "exchange_timestamp": 1769006805,
+      "bid_depth": [
+        {
+          "quantity": 0,
+          "price": 0,
+          "orders": 0
+        },
+        {
+          "quantity": 0,
+          "price": 0,
+          "orders": 0
+        },
+        {
+          "quantity": 0,
+          "price": 0,
+          "orders": 0
+        },
+        {
+          "quantity": 0,
+          "price": 0,
+          "orders": 0
+        },
+        {
+          "quantity": 0,
+          "price": 0,
+          "orders": 0
+        }
+      ],
+      "ask_depth": [
+        {
+          "quantity": 358,
+          "price": 157610,
+          "orders": 6
+        },
+        {
+          "quantity": 0,
+          "price": 0,
+          "orders": 0
+        },
+        {
+          "quantity": 0,
+          "price": 0,
+          "orders": 0
+        },
+        {
+          "quantity": 0,
+          "price": 0,
+          "orders": 0
+        },
+        {
+          "quantity": 0,
+          "price": 0,
+          "orders": 0
+        }
+      ]
+    },
+    {
+      "kind": "index_full",
+      "raw_len": 32,
+      "instrument_token": 282633,
+      "last_traded_price": 928139,
+      "high_price": 933621,
+      "low_price": 919246,
+      "open_price": 926900,
+      "close_price": 931056,
+      "change": -2917,
+      "exchange_timestamp": 1768996800
+    }
+  ]
+}

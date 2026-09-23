@@ -1,0 +1,6 @@
+{
+  "description": "Frame with 2 trailing bytes",
+  "expected_packets": 1,
+  "expected_diagnostic": "TrailingBytes",
+  "trailing_byte_count": 2
+}
