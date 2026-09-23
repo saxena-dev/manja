@@ -123,3 +123,7 @@ required-features = ["ticker"]
 [[test]]
 name = "decoder_framing"
 required-features = ["decoder"]
+
+[[test]]
+name = "decoder_packets"
+required-features = ["decoder"]
