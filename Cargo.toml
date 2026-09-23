@@ -127,3 +127,7 @@ required-features = ["decoder"]
 [[test]]
 name = "decoder_packets"
 required-features = ["decoder"]
+
+[[test]]
+name = "decoder_text"
+required-features = ["decoder"]
