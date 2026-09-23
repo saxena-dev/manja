@@ -1,15 +1,13 @@
-//! Configuration for asynchronous HTTP client.
+//! Configuration for the asynchronous HTTP client.
 //!
-//! This module provides configurations for the async HTTP client, including default
-//! URLs, environment variable handling, and header management for API requests.
+//! [`Config`] holds the API base URL plus, until the `login` module is
+//! removed, the legacy login and redirect URLs and the legacy
+//! [`KiteCredentials`] bundle that module reads.
 //!
-//! # Environment variables:
-//!
-//! The following environment variables can be specified to override the default values:
-//!
-//! - `KITECONNECT_API_BASE`: The base URL for Kite Connect API.
-//! - `KITECONNECT_API_LOGIN`: The login URL for Kite Connect API.
-//! - `KITECONNECT_API_REDIRECT`: The redirect URL for Kite Connect API.
+//! Configuration is always explicit. Nothing here reads environment
+//! variables: [`Config::default`] is the documented production endpoint set
+//! with empty legacy login material, and [`Config::from_parts`] takes every
+//! value from the caller.
 //!
 use reqwest::header::{HeaderMap, HeaderValue};
 use secrecy::{ExposeSecret, Secret};
@@ -31,7 +29,8 @@ pub const KITECONNECT_API_REDIRECT: &str = "https://127.0.0.1/kite-redirect?";
 
 /// Represents the KiteConnect client configurations.
 ///
-/// This struct holds the API base URL, login URL, redirect URL, and user credentials.
+/// This struct holds the API base URL, login URL, redirect URL, and the legacy
+/// login credentials. `Debug` redacts the credentials.
 ///
 #[derive(Clone, Debug)]
 pub struct Config {
@@ -41,49 +40,32 @@ pub struct Config {
     api_login: String,
     /// Redirect URL for the KiteConnect API.
     api_redirect: String,
-    /// User credentials for KiteConnect API.
+    /// Legacy login credentials, read only by the `login` module.
     credentials: KiteCredentials,
 }
 
 impl Default for Config {
-    /// Default implementation of `KiteConfig` picks up values from environment variables.
+    /// The documented production URLs, with empty legacy login credentials.
     ///
-    /// If the environment variables are not set, it falls back to the default values.
-    ///
+    /// No environment variable is consulted.
     fn default() -> Self {
         Self {
-            api_base: std::env::var("KITECONNECT_API_BASE")
-                .unwrap_or_else(|_| KITECONNECT_API_BASE.to_string())
-                .into(),
-            api_login: std::env::var("KITECONNECT_API_LOGIN")
-                .unwrap_or_else(|_| KITECONNECT_API_LOGIN.to_string())
-                .into(),
-            api_redirect: std::env::var("KITECONNECT_API_REDIRECT")
-                .unwrap_or_else(|_| KITECONNECT_API_REDIRECT.to_string())
-                .into(),
-            credentials: KiteCredentials::load_from_env(),
+            api_base: KITECONNECT_API_BASE.to_string(),
+            api_login: KITECONNECT_API_LOGIN.to_string(),
+            api_redirect: KITECONNECT_API_REDIRECT.to_string(),
+            credentials: KiteCredentials::new("", "", "", "", ""),
         }
     }
 }
 
 impl KiteConfig for Config {
-    /// Returns the HTTP headers required for API requests.
+    /// Returns the legacy HTTP headers: `X-Kite-Version: 3` and, when an access
+    /// token is given, an `Authorization` header.
     ///
-    /// If an access token is provided, it is included in the headers.
-    ///
-    /// # Arguments
-    ///
-    /// * `access_token` - An optional access token for authentication.
-    ///
-    /// # Returns
-    ///
-    /// A `HeaderMap` containing the necessary headers for API requests.
-    ///
+    /// Retained for the legacy `KiteConfig` trait; the HTTP client builds its
+    /// headers from a validated `Credentials` snapshot instead.
     fn headers(&self, access_token: Option<Secret<String>>) -> HeaderMap {
         let mut headers = HeaderMap::new();
-        // NOTE: `KiteConfig` currently points to v3.0 of Kite Connect API.
-        // This could be made configurable if Zerodha announces any breaking changes
-        // to the API.
         headers.insert("X-Kite-Version", HeaderValue::from_static("3"));
         if let Some(access_token) = access_token {
             headers.add_auth_header(
@@ -96,7 +78,7 @@ impl KiteConfig for Config {
 
     /// Constructs a URL endpoint given a path.
     ///
-    /// NOTE: The `path` should have a leading backslash.
+    /// NOTE: The `path` should have a leading slash.
     ///
     fn url(&self, path: &str) -> String {
         format!("{}{}", self.api_base, path)
@@ -120,7 +102,7 @@ impl KiteConfig for Config {
         self.api_redirect.as_str()
     }
 
-    /// Returns the user credentials for the KiteConnect API.
+    /// Returns the legacy login credentials.
     fn credentials(&self) -> &KiteCredentials {
         &self.credentials
     }
@@ -134,11 +116,7 @@ impl Config {
     /// * `api_base` - The base URL for the KiteConnect API.
     /// * `api_login` - The login URL for the KiteConnect API.
     /// * `api_redirect` - The redirect URL for the KiteConnect API.
-    /// * `credentials` - The user credentials for the KiteConnect API.
-    ///
-    /// # Returns
-    ///
-    /// A `Config` instance.
+    /// * `credentials` - The legacy login credentials.
     ///
     pub fn from_parts<InS>(
         api_base: InS,
@@ -155,5 +133,30 @@ impl Config {
             api_redirect: api_redirect.into(),
             credentials,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn default_reads_no_environment() {
+        std::env::set_var("KITECONNECT_API_BASE", "http://sentinel.invalid");
+        let config = Config::default();
+        assert_eq!(config.api_base(), KITECONNECT_API_BASE);
+        assert_eq!(config.api_login(), KITECONNECT_API_LOGIN);
+        assert_eq!(config.api_redirect(), KITECONNECT_API_REDIRECT);
+    }
+
+    #[test]
+    fn debug_redacts_legacy_credentials() {
+        let config = Config::from_parts(
+            "http://127.0.0.1:1",
+            "http://127.0.0.1:1",
+            "http://127.0.0.1:1",
+            KiteCredentials::new("k", "SENTINEL", "u", "SENTINEL", "SENTINEL"),
+        );
+        assert!(!format!("{config:?}").contains("SENTINEL"));
     }
 }
