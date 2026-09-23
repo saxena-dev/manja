@@ -1,111 +1,106 @@
 //! Asynchronous HTTP client.
 //!
-//! This module provides an asynchronous HTTP client for interacting with the
-//! KiteConnect API. The `HTTPClient` struct encapsulates a `reqwest::Client`
-//! and includes methods for making HTTP requests to various KiteConnect endpoints.
-//! The client supports retry mechanisms with exponential backoff and handles
-//! user session management.
+//! [`HTTPClient`] owns a pooled HTTP transport, its [`Config`], and an
+//! optional immutable [`Credentials`] snapshot, and hands out the resource
+//! facades (`user()`, `orders()`, …). Cloning a client shares its transport;
+//! [`HTTPClient::with_credentials`] builds a client for different
+//! credentials on the same transport without changing the original.
 //!
-//! # Features
+//! Every response is classified totally and without panicking:
 //!
-//! - **Session Management**: Manages user sessions, including storing and retrieving
-//!   session tokens.
-//! - **Request Handling**: Provides methods for making `GET`, `POST`, `POST form`, and
-//!   `DELETE` requests.
-//! - **Configurable**: Allows configuration via the `Config` struct, which can
-//!   be loaded from environment variables or passed directly.
+//! - success requires a 2xx status **and** a JSON envelope with
+//!   `status = "success"` and a `data` payload that matches the endpoint's
+//!   type (`kite-api-docs/docs/connect/v3/response-structure.md:15`);
+//! - a non-2xx status or `status = "error"` is never `Ok`, whether or not
+//!   `error_type` is present or known (`response-structure.md:28`);
+//! - HTML, malformed or truncated JSON, a missing payload and a body larger
+//!   than its bound are errors that keep the HTTP status.
 //!
-//! # Examples
-//!
-//! ```ignore
-//! use crate::kite::connect::client::HTTPClient;
-//! use crate::kite::connect::config::Config;
-//!
-//! // Create a new client with default settings
-//! let client = HTTPClient::default();
-//!
-//! // Create a new client with a custom configuration
-//! let config = Config::default();
-//! let client = HTTPClient::with_config(config);
-//! ```
-//!
-//! For more information on using Kite Connect API, refer to the official
-//! [documentation](https://kite.trade/docs/connect/v3/).
+//! Failures are [`HttpError`]s with stage evidence; see
+//! [`crate::kite::error`]. Client construction failures are returned, never
+//! replaced by a differently configured transport.
 //!
 use core::future::Future;
+use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::Arc;
 use std::time::Duration;
 
 use backoff::ExponentialBackoff;
-use secrecy::{ExposeSecret, Secret};
+use reqwest::header::{HeaderValue, AUTHORIZATION};
 use serde::{de::DeserializeOwned, Serialize};
+use serde_json::Value;
 
 use crate::kite::{
     connect::{
         api::{Charges, Margins, Market, Orders, Session, User},
         config::Config,
+        credentials::{AccessToken, ApiKey, Credentials},
         models::{KiteApiResponse, UserSession},
     },
-    error::{map_deserialization_error, KiteApiError, KiteApiException, ManjaError, Result},
+    error::{BrokerError, HttpError, HttpErrorKind, KiteApiException, ManjaError, Result},
+    obs::schema::{Endpoint, Method},
+    protocol::Inbound,
     traits::KiteConfig,
 };
 
-/// An asynchronous Kite Connect client to make HTTP requests with.
-///
-/// `Client` is a wrapper over `reqwest::Client` which holds a connection
-/// pool internally. It is advisable to create one and **reuse** it.
-///
-/// You do **not** have to wrap `KiteConnectClient` in an [`std::rc::Rc`] or [`std::sync::Arc`] to
-/// **reuse** it because the `reqwest::Client` used internally already uses an
-/// [`std::sync::Arc`].
-///
-#[derive(Clone)]
-pub struct HTTPClient {
-    client: reqwest::Client,
+/// Attempt timeout applied by the underlying transport.
+const ATTEMPT_TIMEOUT: Duration = Duration::from_secs(10);
+
+struct Transport {
+    http: reqwest::Client,
     config: Config,
-    backoff: backoff::ExponentialBackoff,
-    session: Option<UserSession>,
 }
 
-impl Default for HTTPClient {
-    fn default() -> Self {
-        Self {
-            // Default timeout for I/O operations: 10 seconds
-            client: Self::default_reqwest_client(10),
-            // Default config parameters are loaded from environment variables
-            config: Config::default(),
-            backoff: Default::default(),
-            session: None,
-        }
+/// An asynchronous Kite Connect HTTP client.
+///
+/// Create one and reuse it: it holds a connection pool, and clones share it.
+/// A client's credentials are an immutable snapshot; to use other
+/// credentials, derive a new client with [`Self::with_credentials`].
+#[derive(Clone)]
+pub struct HTTPClient {
+    transport: Arc<Transport>,
+    credentials: Option<Credentials>,
+    backoff: ExponentialBackoff,
+}
+
+impl std::fmt::Debug for HTTPClient {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("HTTPClient")
+            .field("config", &self.transport.config)
+            .field("credentials", &self.credentials)
+            .finish()
     }
 }
 
 impl HTTPClient {
-    // Default `reqwest::Client` with timeout for I/O operations
-    fn default_reqwest_client(timeout_seconds: u64) -> reqwest::Client {
-        reqwest::ClientBuilder::new()
-            .timeout(Duration::from_secs(timeout_seconds))
-            .build()
-            // This should not fail. Fallback to default `reqwest::Client`.
-            .unwrap_or_else(|_| reqwest::Client::new())
-    }
-
-    fn get_access_token(&self) -> Option<Secret<String>> {
-        // Clone and return the access token, if available
-        self.session
-            .as_ref()
-            .map(|user_session| (user_session.access_token).clone())
-    }
-
-    /// Create a default HTTP client with config.
+    /// A client for `config` with no credentials.
     ///
-    pub fn with_config(config: Config) -> Self {
-        Self {
-            // Default timeout for I/O operations: 10 seconds
-            client: Self::default_reqwest_client(10),
-            config,
+    /// Fails with a configuration error if the HTTP transport cannot be
+    /// built.
+    pub fn new(config: Config) -> Result<Self> {
+        let http = reqwest::ClientBuilder::new()
+            .timeout(ATTEMPT_TIMEOUT)
+            .build()
+            .map_err(|e| {
+                HttpError::new(
+                    HttpErrorKind::Configuration,
+                    Method::Get,
+                    Endpoint::Unknown,
+                    crate::kite::error::TransportStage::NotStarted,
+                )
+                .with_detail("the HTTP transport could not be built")
+                .with_source(e.without_url())
+            })?;
+        Ok(Self {
+            transport: Arc::new(Transport { http, config }),
+            credentials: None,
             backoff: Default::default(),
-            session: None,
-        }
+        })
+    }
+
+    /// Same as [`Self::new`].
+    pub fn with_config(config: Config) -> Result<Self> {
+        Self::new(config)
     }
 
     /// Exponential backoff for retrying [rate limited](https://kite.trade/docs/connect/v3/exceptions/#api-rate-limit) requests.
@@ -115,35 +110,36 @@ impl HTTPClient {
         self
     }
 
-    /// Add `UserSession` to the `HTTPClient`.
-    ///
-    pub fn with_user_session(mut self, user_session: UserSession) -> Self {
-        self.session = Some(user_session);
-        self
+    /// A client sharing this client's transport, authenticated with
+    /// `credentials`. The original client is unchanged.
+    pub fn with_credentials(&self, credentials: Credentials) -> Self {
+        Self {
+            credentials: Some(credentials),
+            ..self.clone()
+        }
     }
 
-    /// Set `UserSession` to the `HTTPClient`.
-    ///
-    pub fn set_user_session(&mut self, user_session: Option<UserSession>) {
-        self.session = user_session;
+    /// A client authenticated with the API key and access token of a token
+    /// exchange response. Only those two values are kept.
+    pub fn with_user_session(self, user_session: UserSession) -> Result<Self> {
+        let credentials = credentials_from_session(&user_session)?;
+        Ok(self.with_credentials(credentials))
     }
 
-    /// User session, if it exists.
-    ///
-    pub fn user_session(&self) -> Option<&UserSession> {
-        self.session.as_ref()
+    /// The credential snapshot, if any.
+    pub fn credentials(&self) -> Option<&Credentials> {
+        self.credentials.as_ref()
+    }
+
+    // Used only by the legacy `Session` facade until it is replaced.
+    pub(crate) fn replace_credentials(&mut self, credentials: Option<Credentials>) {
+        self.credentials = credentials;
     }
 
     /// HTTP configurations and Kite user credentials.
     ///
     pub fn http_config(&self) -> &Config {
-        &self.config
-    }
-
-    /// Reqwest HTTP Client.
-    ///
-    pub fn http_client(&self) -> &reqwest::Client {
-        &self.client
+        &self.transport.config
     }
 
     // --- [ API Groups ] ---
@@ -186,23 +182,16 @@ impl HTTPClient {
 
     // --- [ HTTP verb functions ] ---
 
-    /// Make a GET request to {path} and return the response body.
-    ///
+    /// GET `path` and return the raw (CSV) body.
     pub(crate) async fn get_raw(&self, path: &str, backoff: &ExponentialBackoff) -> Result<String> {
-        let request_baker = || async {
-            Ok(self
-                .client
-                .get(self.config.url(path))
-                // Fetch access token for protected endpoints, if available
-                .headers(self.config.headers(self.get_access_token()))
-                .build()?)
-        };
-
-        self.execute_raw(backoff, request_baker).await
+        let (status, body, attempt) = self
+            .execute(reqwest::Method::GET, path, backoff, BodyKind::Csv, |rb| rb)
+            .await?;
+        let (method, endpoint) = labels(&reqwest::Method::GET, path);
+        classify_text(status, &body, method, endpoint).map_err(|e| e.with_attempt(attempt).into())
     }
 
-    /// Make a GET request to {path} and deserialize the response body.
-    ///
+    /// GET `path` and decode the response envelope.
     pub(crate) async fn get<Model>(
         &self,
         path: &str,
@@ -211,20 +200,11 @@ impl HTTPClient {
     where
         Model: DeserializeOwned,
     {
-        let request_baker = || async {
-            Ok(self
-                .client
-                .get(self.config.url(path))
-                // Fetch access token for protected endpoints, if available
-                .headers(self.config.headers(self.get_access_token()))
-                .build()?)
-        };
-
-        self.execute(backoff, request_baker).await
+        self.json(reqwest::Method::GET, path, backoff, |rb| rb)
+            .await
     }
 
-    /// Make a GET request to {path} with given Query and deserialize the response body.
-    ///
+    /// GET `path` with a query and decode the response envelope.
     pub(crate) async fn get_with_query<Q, Model>(
         &self,
         path: &str,
@@ -235,21 +215,11 @@ impl HTTPClient {
         Q: Serialize + ?Sized,
         Model: DeserializeOwned,
     {
-        let request_baker = || async {
-            Ok(self
-                .client
-                .get(self.config.url(path))
-                .query(query)
-                // Fetch access token for protected endpoints, if available
-                .headers(self.config.headers(self.get_access_token()))
-                .build()?)
-        };
-
-        self.execute(backoff, request_baker).await
+        self.json(reqwest::Method::GET, path, backoff, |rb| rb.query(query))
+            .await
     }
 
-    /// Make a POST request to {path} and deserialize the response body.
-    ///
+    /// POST a JSON body to `path` and decode the response envelope.
     pub(crate) async fn post<Model, Payload>(
         &self,
         path: &str,
@@ -260,22 +230,11 @@ impl HTTPClient {
         Model: DeserializeOwned,
         Payload: Serialize,
     {
-        let request_baker = || async {
-            Ok(self
-                .client
-                .post(self.config.url(path))
-                // Fetch access token for protected endpoints, if available
-                .headers(self.config.headers(self.get_access_token()))
-                .json(&data)
-                .build()?)
-        };
-
-        self.execute(backoff, request_baker).await
+        self.json(reqwest::Method::POST, path, backoff, |rb| rb.json(&data))
+            .await
     }
 
-    /// POST a form at {path} and deserialize the response body into the generic
-    /// `Model` type.
-    ///
+    /// POST a form to `path` and decode the response envelope.
     pub(crate) async fn post_form<Model, F>(
         &self,
         path: &str,
@@ -286,21 +245,11 @@ impl HTTPClient {
         Model: DeserializeOwned,
         F: Serialize + ?Sized,
     {
-        let request_baker = || async {
-            Ok(self
-                .client
-                .post(self.config.url(path))
-                // Fetch access token for protected endpoints, if available
-                .headers(self.config.headers(self.get_access_token()))
-                .form(form)
-                .build()?)
-        };
-
-        self.execute(backoff, request_baker).await
+        self.json(reqwest::Method::POST, path, backoff, |rb| rb.form(form))
+            .await
     }
 
-    /// Make a PUT request to {path} and deserialize the response body.
-    ///
+    /// PUT a JSON body to `path` and decode the response envelope.
     pub(crate) async fn put<Model, Payload>(
         &self,
         path: &str,
@@ -311,21 +260,14 @@ impl HTTPClient {
         Model: DeserializeOwned,
         Payload: Serialize,
     {
-        let request_baker = || async {
-            Ok(self
-                .client
-                .put(self.config.url(path))
-                // Fetch access token for protected endpoints, if available
-                .headers(self.config.headers(self.get_access_token()))
-                .json(&data)
-                .build()?)
-        };
-
-        self.execute(backoff, request_baker).await
+        self.json(reqwest::Method::PUT, path, backoff, |rb| rb.json(&data))
+            .await
     }
 
-    /// Make a DELETE request to {path} and deserialize the response body.
-    ///
+    /// DELETE `path` and decode the response envelope. With `with_auth`, the
+    /// API key and access token are also sent as query parameters, as the
+    /// session-logout endpoint documents
+    /// (`kite-api-docs/docs/connect/v3/user.md:321-323`).
     pub(crate) async fn delete<Model>(
         &self,
         path: &str,
@@ -335,112 +277,336 @@ impl HTTPClient {
     where
         Model: DeserializeOwned,
     {
-        let request_baker = || async {
-            let mut http_request_builder = self
-                .client
-                .delete(self.config.url(path))
-                // Fetch access token for protected endpoints, if available
-                .headers(self.config.headers(self.get_access_token()));
-
-            if with_auth {
-                let api_key = self.http_config().credentials().api_key();
-                // Construct Vec<&str, &str> for query construction
-                let query_vec = vec![
-                    ("api_key", api_key.expose_secret().as_str()),
-                    (
-                        "access_token",
-                        self.user_session()
-                            .map(|session| session.access_token.expose_secret().as_str())
-                            .unwrap_or_else(|| "(ﾉﾟ0ﾟ)ﾉ~"),
-                    ),
-                ];
-                http_request_builder = http_request_builder.query(&query_vec);
-            }
-            Ok(http_request_builder.build()?)
+        let query: Vec<(&str, &str)> = match (&self.credentials, with_auth) {
+            (Some(c), true) => vec![
+                ("api_key", c.api_key().as_str()),
+                ("access_token", c.access_token().expose_secret()),
+            ],
+            _ => Vec::new(),
         };
-
-        self.execute(backoff, request_baker).await
-    }
-
-    /// Execute a HTTP request asynchronously with backoff.
-    ///
-    async fn execute<Model, RB, Fut>(
-        &self,
-        backoff: &ExponentialBackoff,
-        request_baker: RB,
-    ) -> Result<KiteApiResponse<Model>>
-    where
-        Model: DeserializeOwned,
-        RB: Fn() -> Fut,
-        Fut: Future<Output = Result<reqwest::Request>>,
-    {
-        let json_response = self.execute_raw::<RB, Fut>(backoff, request_baker).await?;
-
-        let model: KiteApiResponse<Model> = serde_json::from_str(&json_response)
-            .map_err(|e| map_deserialization_error(e, &json_response))?;
-
-        Ok(model)
-    }
-
-    /// Execute a HTTP request asynchronously with backoff.
-    ///
-    async fn execute_raw<RB, Fut>(
-        &self,
-        backoff: &ExponentialBackoff,
-        request_baker: RB,
-    ) -> Result<String>
-    where
-        RB: Fn() -> Fut,
-        Fut: Future<Output = Result<reqwest::Request>>,
-    {
-        let client = self.http_client();
-        // The magic sauce.
-        backoff::future::retry(backoff.clone(), || async {
-            // Bake a fresh request with rate limit
-            let request = request_baker().await.map_err(backoff::Error::Permanent)?;
-            let path = request.url().path().to_string();
-            // Execute the HTTP request against some KiteConnect API endpoint
-            let response = client
-                .execute(request)
-                .await
-                .map_err(ManjaError::Reqwest)
-                .map_err(backoff::Error::Permanent)?;
-            let status = response.status();
-            // Attempt to fetch the string (JSON) response
-            let json_response = response
-                .text()
-                .await
-                .map_err(ManjaError::Reqwest)
-                .map_err(backoff::Error::Permanent)?;
-            if !status.is_success() {
-                // Attempt to JSON deserialize the KiteConnect API response
-                let kite_response: KiteApiResponse<Option<String>> =
-                    serde_json::from_str(&json_response)
-                        .map_err(|e| map_deserialization_error(e, &json_response))
-                        .map_err(backoff::Error::Permanent)?;
-                let kite_error = KiteApiError {
-                    endpoint: path.clone(),
-                    status_code: status.as_u16(),
-                    message: kite_response.message,
-                    error_type: kite_response
-                        .error_type
-                        .map(|error_type| KiteApiException::from(error_type.as_str()))
-                        // This unwrap is safe since From<&str> is implemented for `KiteApiException`.
-                        .unwrap(),
-                };
-                // Check if rate limit was exceeded on the endpoint
-                if status.as_u16() == 429 {
-                    tracing::warn!("Rate limited at endpoint: {}", path);
-                    return Err(backoff::Error::transient(ManjaError::KiteApiError(
-                        kite_error,
-                    )));
-                }
+        self.json(reqwest::Method::DELETE, path, backoff, |rb| {
+            if query.is_empty() {
+                rb
+            } else {
+                rb.query(&query)
             }
-
-            Ok(json_response)
         })
         .await
     }
+
+    async fn json<Model, B>(
+        &self,
+        method: reqwest::Method,
+        path: &str,
+        backoff: &ExponentialBackoff,
+        build: B,
+    ) -> Result<KiteApiResponse<Model>>
+    where
+        Model: DeserializeOwned,
+        B: Fn(reqwest::RequestBuilder) -> reqwest::RequestBuilder,
+    {
+        let (status, body, attempt) = self
+            .execute(method.clone(), path, backoff, BodyKind::Json, build)
+            .await?;
+        let (m, endpoint) = labels(&method, path);
+        classify_json(status, &body, m, endpoint).map_err(|e| e.with_attempt(attempt).into())
+    }
+
+    /// Run attempts under the legacy backoff policy, which retries only
+    /// HTTP 429, and return the final status, body and attempt number.
+    async fn execute<B>(
+        &self,
+        method: reqwest::Method,
+        path: &str,
+        backoff: &ExponentialBackoff,
+        kind: BodyKind,
+        build: B,
+    ) -> Result<(u16, Vec<u8>, u32)>
+    where
+        B: Fn(reqwest::RequestBuilder) -> reqwest::RequestBuilder,
+    {
+        let attempts = AtomicU32::new(0);
+        let (m, endpoint) = labels(&method, path);
+        backoff::future::retry(backoff.clone(), || async {
+            let attempt = attempts.fetch_add(1, Ordering::Relaxed) + 1;
+            let (status, body) = self
+                .attempt(&method, path, kind, &build, m, endpoint, attempt)
+                .await
+                .map_err(|e| backoff::Error::Permanent(ManjaError::from(e)))?;
+            if status == 429 {
+                tracing::warn!(endpoint = endpoint.as_str(), "rate limited");
+                let err = classify_json::<Value>(status, &body, m, endpoint)
+                    .err()
+                    .unwrap_or_else(|| {
+                        HttpError::new(
+                            HttpErrorKind::HttpStatus,
+                            m,
+                            endpoint,
+                            crate::kite::error::TransportStage::ResponseReceived,
+                        )
+                        .with_status(429)
+                    })
+                    .with_attempt(attempt);
+                return Err(backoff::Error::transient(ManjaError::from(err)));
+            }
+            Ok((status, body, attempt))
+        })
+        .await
+    }
+
+    /// One transport attempt: build, send and read a bounded body.
+    // Internal error path; the error is boxed into `ManjaError::Http`.
+    #[allow(clippy::too_many_arguments, clippy::result_large_err)]
+    async fn attempt<B>(
+        &self,
+        method: &reqwest::Method,
+        path: &str,
+        kind: BodyKind,
+        build: &B,
+        m: Method,
+        endpoint: Endpoint,
+        attempt: u32,
+    ) -> std::result::Result<(u16, Vec<u8>), HttpError>
+    where
+        B: Fn(reqwest::RequestBuilder) -> reqwest::RequestBuilder,
+    {
+        use crate::kite::error::TransportStage as Stage;
+        let not_started = |detail: &str| {
+            HttpError::new(HttpErrorKind::Configuration, m, endpoint, Stage::NotStarted)
+                .with_attempt(attempt)
+                .with_detail(detail)
+        };
+        let url = self.transport.config.url(path);
+        let mut rb = self
+            .transport
+            .http
+            .request(method.clone(), url)
+            .header("X-Kite-Version", "3");
+        if let Some(creds) = &self.credentials {
+            let mut value = HeaderValue::from_str(creds.authorization_header().expose())
+                .map_err(|_| not_started("the Authorization header could not be built"))?;
+            value.set_sensitive(true);
+            rb = rb.header(AUTHORIZATION, value);
+        }
+        let request = build(rb).build().map_err(|e| {
+            not_started("the request could not be built").with_source(e.without_url())
+        })?;
+        let mut response = self.transport.http.execute(request).await.map_err(|e| {
+            // A connect failure is affirmative evidence that no request
+            // bytes left the process; anything later is not.
+            let stage = if e.is_connect() {
+                Stage::NotStarted
+            } else {
+                Stage::Started
+            };
+            let err =
+                HttpError::new(HttpErrorKind::Transport, m, endpoint, stage).with_attempt(attempt);
+            let err = if e.is_timeout() {
+                err.with_timeout()
+            } else {
+                err
+            };
+            err.with_source(e.without_url())
+        })?;
+        let status = response.status().as_u16();
+        let limit = match kind {
+            BodyKind::Json => self.transport.config.limits().json_body_bytes(),
+            BodyKind::Csv => self.transport.config.limits().csv_body_bytes(),
+        };
+        let received = |kind: HttpErrorKind| {
+            HttpError::new(kind, m, endpoint, Stage::ResponseReceived)
+                .with_status(status)
+                .with_attempt(attempt)
+        };
+        if response.content_length().is_some_and(|n| n > limit as u64) {
+            return Err(
+                received(HttpErrorKind::Decode).with_detail("response body exceeds its bound")
+            );
+        }
+        let mut body = Vec::new();
+        loop {
+            match response.chunk().await {
+                Ok(Some(chunk)) => {
+                    if body.len() + chunk.len() > limit {
+                        return Err(received(HttpErrorKind::Decode)
+                            .with_detail("response body exceeds its bound"));
+                    }
+                    body.extend_from_slice(&chunk);
+                }
+                Ok(None) => break,
+                Err(e) => {
+                    let err = received(HttpErrorKind::Transport)
+                        .with_detail("the response body was cut off");
+                    let err = if e.is_timeout() {
+                        err.with_timeout()
+                    } else {
+                        err
+                    };
+                    return Err(err.with_source(e.without_url()));
+                }
+            }
+        }
+        Ok((status, body))
+    }
+}
+
+#[derive(Clone, Copy)]
+enum BodyKind {
+    Json,
+    Csv,
+}
+
+pub(crate) fn credentials_from_session(session: &UserSession) -> Result<Credentials> {
+    use secrecy::ExposeSecret;
+    Ok(Credentials::from_parts(
+        ApiKey::new(session.api_key.expose_secret().as_str())?,
+        AccessToken::new(session.access_token.expose_secret().as_str())?,
+    ))
+}
+
+fn labels(method: &reqwest::Method, path: &str) -> (Method, Endpoint) {
+    let m = match *method {
+        reqwest::Method::POST => Method::Post,
+        reqwest::Method::PUT => Method::Put,
+        reqwest::Method::DELETE => Method::Delete,
+        _ => Method::Get,
+    };
+    (m, endpoint_template(m, path))
+}
+
+/// Map a concrete request path to its endpoint template, so no dynamic
+/// segment (variety, order ID, exchange) ever reaches metadata or labels.
+pub(crate) fn endpoint_template(method: Method, path: &str) -> Endpoint {
+    let path = path.split('?').next().unwrap_or(path);
+    let segments: Vec<&str> = path.trim_matches('/').split('/').collect();
+    match segments.as_slice() {
+        ["user", "profile"] => Endpoint::UserProfile,
+        ["user", "margins"] => Endpoint::UserMargins,
+        ["user", "margins", _] => Endpoint::UserMarginsSegment,
+        ["orders"] => Endpoint::Orders,
+        ["orders", _] if method == Method::Post => Endpoint::OrdersVariety,
+        ["orders", _] => Endpoint::OrdersId,
+        ["orders", _, "trades"] if method == Method::Get => Endpoint::OrdersIdTrades,
+        ["orders", _, _] => Endpoint::OrdersVarietyId,
+        ["trades"] => Endpoint::Trades,
+        ["portfolio", "holdings"] => Endpoint::Holdings,
+        ["portfolio", "holdings", "auctions"] => Endpoint::HoldingsAuctions,
+        ["portfolio", "positions"] => Endpoint::Positions,
+        ["instruments"] => Endpoint::Instruments,
+        ["instruments", _] => Endpoint::InstrumentsExchange,
+        ["quote"] => Endpoint::Quote,
+        ["quote", "ohlc"] => Endpoint::QuoteOhlc,
+        ["quote", "ltp"] => Endpoint::QuoteLtp,
+        ["margins", "orders"] => Endpoint::MarginsOrders,
+        ["margins", "basket"] => Endpoint::MarginsBasket,
+        ["charges", "orders"] => Endpoint::ChargesOrders,
+        ["session", "token"] => Endpoint::SessionToken,
+        _ => Endpoint::Unknown,
+    }
+}
+
+fn http_error(kind: HttpErrorKind, status: u16, method: Method, endpoint: Endpoint) -> HttpError {
+    HttpError::new(
+        kind,
+        method,
+        endpoint,
+        crate::kite::error::TransportStage::ResponseReceived,
+    )
+    .with_status(status)
+}
+
+/// Classify an error response (or an error envelope on a 2xx status).
+fn error_response(status: u16, body: &Value, method: Method, endpoint: Endpoint) -> HttpError {
+    let obj = body.as_object();
+    let text = |k: &str| obj.and_then(|o| o.get(k)).and_then(Value::as_str);
+    let is_envelope = text("status") == Some("error")
+        || obj.is_some_and(|o| o.contains_key("error_type") || o.contains_key("message"));
+    if !is_envelope {
+        return http_error(HttpErrorKind::HttpStatus, status, method, endpoint)
+            .with_detail("the error response has no broker error envelope");
+    }
+    let broker = BrokerError::new(text("error_type"), text("message"));
+    let token_rejected = matches!(
+        broker.error_type(),
+        Some(Inbound::Known(KiteApiException::TokenException))
+    );
+    let kind = if token_rejected || status == 403 {
+        HttpErrorKind::AuthRejected
+    } else {
+        HttpErrorKind::Broker
+    };
+    http_error(kind, status, method, endpoint).with_broker(broker)
+}
+
+/// Total classification of a JSON response.
+// Internal error path; the error is boxed into `ManjaError::Http`.
+#[allow(clippy::result_large_err)]
+pub(crate) fn classify_json<T: DeserializeOwned>(
+    status: u16,
+    body: &[u8],
+    method: Method,
+    endpoint: Endpoint,
+) -> std::result::Result<KiteApiResponse<T>, HttpError> {
+    let parsed: std::result::Result<Value, _> = serde_json::from_slice(body);
+    if !(200..300).contains(&status) {
+        return Err(match parsed {
+            Ok(v) => error_response(status, &v, method, endpoint),
+            Err(_) => http_error(HttpErrorKind::HttpStatus, status, method, endpoint)
+                .with_detail(&format!("non-JSON error body of {} bytes", body.len())),
+        });
+    }
+    let decode = |detail: String| {
+        http_error(HttpErrorKind::Decode, status, method, endpoint).with_detail(&detail)
+    };
+    let value = parsed.map_err(|e| decode(format!("malformed JSON success body: {e}")))?;
+    let Some(obj) = value.as_object() else {
+        return Err(decode("the success body is not a JSON object".into()));
+    };
+    match obj.get("status").and_then(Value::as_str) {
+        Some("success") => {}
+        Some("error") => return Err(error_response(status, &value, method, endpoint)),
+        _ => return Err(decode("the envelope lacks status = \"success\"".into())),
+    }
+    let data = match obj.get("data") {
+        None | Some(Value::Null) => return Err(decode("the success envelope has no data".into())),
+        Some(d) => d.clone(),
+    };
+    let data: T = serde_json::from_value(data).map_err(|e| {
+        decode(format!(
+            "the payload does not match the endpoint's type: {e}"
+        ))
+    })?;
+    Ok(KiteApiResponse {
+        status: "success".to_string(),
+        data: Some(data),
+        message: obj
+            .get("message")
+            .and_then(Value::as_str)
+            .map(str::to_string),
+        error_type: None,
+    })
+}
+
+/// Total classification of a text (CSV) response.
+#[allow(clippy::result_large_err)]
+fn classify_text(
+    status: u16,
+    body: &[u8],
+    method: Method,
+    endpoint: Endpoint,
+) -> std::result::Result<String, HttpError> {
+    if !(200..300).contains(&status) {
+        let err = match serde_json::from_slice::<Value>(body) {
+            Ok(v) => error_response(status, &v, method, endpoint),
+            Err(_) => http_error(HttpErrorKind::HttpStatus, status, method, endpoint)
+                .with_detail(&format!("non-JSON error body of {} bytes", body.len())),
+        };
+        return Err(err);
+    }
+    String::from_utf8(body.to_vec()).map_err(|_| {
+        http_error(HttpErrorKind::Decode, status, method, endpoint)
+            .with_detail("the text body is not valid UTF-8")
+    })
 }
 
 #[cfg(test)]
@@ -523,7 +689,43 @@ pub mod test_utils {
 
         (
             server,
-            HTTPClient::with_config(config).with_user_session(session),
+            HTTPClient::with_config(config)
+                .unwrap()
+                .with_user_session(session)
+                .unwrap(),
         )
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn endpoint_templates_hide_dynamic_segments() {
+        use Method::*;
+        let cases = [
+            (Get, "/user/margins/equity", Endpoint::UserMarginsSegment),
+            (Post, "/orders/regular", Endpoint::OrdersVariety),
+            (Get, "/orders/151220000000000", Endpoint::OrdersId),
+            (
+                Put,
+                "/orders/regular/151220000000000",
+                Endpoint::OrdersVarietyId,
+            ),
+            (Delete, "/orders/amo/1", Endpoint::OrdersVarietyId),
+            (Get, "/orders/1/trades", Endpoint::OrdersIdTrades),
+            (Get, "/instruments/NSE", Endpoint::InstrumentsExchange),
+            (
+                Post,
+                "/margins/basket?consider_positions=true",
+                Endpoint::MarginsBasket,
+            ),
+            (Delete, "/session/token", Endpoint::SessionToken),
+            (Get, "/gtt/triggers", Endpoint::Unknown),
+        ];
+        for (m, path, expected) in cases {
+            assert_eq!(endpoint_template(m, path), expected, "{path}");
+        }
     }
 }

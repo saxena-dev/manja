@@ -190,7 +190,7 @@ fn manja_client(base_url: String) -> HTTPClient {
         base_url,
         KiteCredentials::new("test_api_key", "", "", "", ""),
     );
-    HTTPClient::with_config(config)
+    HTTPClient::with_config(config).unwrap()
 }
 
 #[tokio::test]

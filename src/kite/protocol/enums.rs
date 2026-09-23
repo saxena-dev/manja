@@ -154,7 +154,7 @@ impl<'de, T: WireEnum> Deserialize<'de> for Inbound<T> {
 macro_rules! wire_enum {
     ($ty:ident { $($variant:ident => $wire:literal),+ $(,)? }) => {
         impl $crate::kite::protocol::WireEnum for $ty {
-            fn from_wire(s: &str) -> Option<Self> {
+            fn from_wire(s: &str) -> ::std::option::Option<Self> {
                 match s {
                     $($wire => Some(Self::$variant),)+
                     _ => None,
@@ -175,7 +175,7 @@ macro_rules! wire_enum {
         }
 
         impl ::serde::Serialize for $ty {
-            fn serialize<S: ::serde::Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
+            fn serialize<S: ::serde::Serializer>(&self, s: S) -> ::std::result::Result<S::Ok, S::Error> {
                 s.serialize_str($crate::kite::protocol::WireEnum::as_wire(self))
             }
         }
@@ -183,8 +183,8 @@ macro_rules! wire_enum {
         impl<'de> ::serde::Deserialize<'de> for $ty {
             // Strict: unknown text is an error here. Response DTOs use
             // `Inbound<Self>` to preserve unknown values instead.
-            fn deserialize<D: ::serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
-                let s = String::deserialize(d)?;
+            fn deserialize<D: ::serde::Deserializer<'de>>(d: D) -> ::std::result::Result<Self, D::Error> {
+                let s = <::std::string::String as ::serde::Deserialize>::deserialize(d)?;
                 <Self as $crate::kite::protocol::WireEnum>::from_wire(&s).ok_or_else(|| {
                     ::serde::de::Error::custom(concat!("unknown ", stringify!($ty), " value"))
                 })
@@ -194,7 +194,7 @@ macro_rules! wire_enum {
         impl TryFrom<$crate::kite::protocol::Inbound<$ty>> for $ty {
             type Error = $crate::kite::protocol::UnknownValue;
 
-            fn try_from(v: $crate::kite::protocol::Inbound<$ty>) -> Result<Self, Self::Error> {
+            fn try_from(v: $crate::kite::protocol::Inbound<$ty>) -> ::std::result::Result<Self, Self::Error> {
                 match v {
                     $crate::kite::protocol::Inbound::Known(v) => Ok(v),
                     $crate::kite::protocol::Inbound::Unknown(u) => Err(u),

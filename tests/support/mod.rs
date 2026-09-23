@@ -10,5 +10,7 @@
 pub mod capture;
 /// Fixture loading from `kiteconnect-mocks/`, independent of the working directory.
 pub mod fixtures;
+#[cfg(any(feature = "http", feature = "ticker"))]
 pub mod http;
+#[cfg(feature = "ticker")]
 pub mod ws;

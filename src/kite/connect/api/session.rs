@@ -180,8 +180,14 @@ impl<'c> Session<'c> {
             .await;
         match kite_response {
             Ok(kite_response) => {
-                // Set the UserSession object on HTTPClient
-                self.client.set_user_session(kite_response.data.clone());
+                // Legacy behavior, removed by the explicit session resource:
+                // install the returned API key and access token.
+                let credentials = kite_response
+                    .data
+                    .as_ref()
+                    .map(crate::kite::connect::client::credentials_from_session)
+                    .transpose()?;
+                self.client.replace_credentials(credentials);
                 Ok(kite_response)
             }
             Err(err) => Err(err),
@@ -203,8 +209,8 @@ impl<'c> Session<'c> {
             .await
         {
             Ok(kite_response) => {
-                // Remove the UserSession object from the HTTPClient
-                self.client.set_user_session(None);
+                // Legacy behavior: drop this client's credentials.
+                self.client.replace_credentials(None);
                 Ok(kite_response)
             }
             Err(err) => Err(err),

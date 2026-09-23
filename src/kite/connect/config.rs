@@ -4,6 +4,11 @@
 //! removed, the legacy login and redirect URLs and the legacy
 //! [`KiteCredentials`] bundle that module reads.
 //!
+//! [`HttpLimits`] holds the validated runtime bounds of the SDK contract
+//! (`B-HTTP-*`). Every bound has a default, a minimum and a maximum; building
+//! limits outside those ranges is a configuration error, and no bound means
+//! "unlimited".
+//!
 //! Configuration is always explicit. Nothing here reads environment
 //! variables: [`Config::default`] is the documented production endpoint set
 //! with empty legacy login material, and [`Config::from_parts`] takes every
@@ -42,6 +47,95 @@ pub struct Config {
     api_redirect: String,
     /// Legacy login credentials, read only by the `login` module.
     credentials: KiteCredentials,
+    /// Runtime bounds.
+    limits: HttpLimits,
+}
+
+/// A bound was outside its permitted range.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct LimitError {
+    /// Contract identifier of the bound, e.g. `B-HTTP-08`.
+    pub bound: &'static str,
+    /// Human-readable permitted range.
+    pub range: String,
+}
+
+impl std::fmt::Display for LimitError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{} must be in {}", self.bound, self.range)
+    }
+}
+
+impl std::error::Error for LimitError {}
+
+fn check_range<T: PartialOrd + std::fmt::Debug>(
+    bound: &'static str,
+    value: T,
+    min: T,
+    max: T,
+) -> Result<T, LimitError> {
+    if value < min || value > max {
+        Err(LimitError {
+            bound,
+            range: format!("{min:?}..={max:?}"),
+        })
+    } else {
+        Ok(value)
+    }
+}
+
+const KIB: usize = 1024;
+const MIB: usize = 1024 * KIB;
+
+/// Validated HTTP runtime bounds (SDK contract §5.2).
+///
+/// | Bound | Default | Range |
+/// |---|---|---|
+/// | `B-HTTP-08` JSON response body | 4 MiB | 64 KiB ..= 64 MiB |
+/// | `B-HTTP-08` instrument CSV body | 64 MiB | 1 MiB ..= 256 MiB |
+///
+/// A response larger than its bound is a `Decode` error that preserves the
+/// HTTP status; the body is not buffered past the bound. The kite-api-docs
+/// snapshot gives no size for the instrument dump
+/// (`docs/connect/v3/market-quotes.md:17,52`); 64 MiB is roughly 300 000
+/// rows of 200 bytes, several times the official sample's row width.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct HttpLimits {
+    json_body_bytes: usize,
+    csv_body_bytes: usize,
+}
+
+impl Default for HttpLimits {
+    fn default() -> Self {
+        Self {
+            json_body_bytes: 4 * MIB,
+            csv_body_bytes: 64 * MIB,
+        }
+    }
+}
+
+impl HttpLimits {
+    /// Maximum JSON response body, in bytes.
+    pub fn json_body_bytes(&self) -> usize {
+        self.json_body_bytes
+    }
+
+    /// Maximum instrument CSV response body, in bytes.
+    pub fn csv_body_bytes(&self) -> usize {
+        self.csv_body_bytes
+    }
+
+    /// Set the JSON body bound (`B-HTTP-08`).
+    pub fn with_json_body_bytes(mut self, bytes: usize) -> Result<Self, LimitError> {
+        self.json_body_bytes = check_range("B-HTTP-08 (JSON)", bytes, 64 * KIB, 64 * MIB)?;
+        Ok(self)
+    }
+
+    /// Set the instrument CSV body bound (`B-HTTP-08`).
+    pub fn with_csv_body_bytes(mut self, bytes: usize) -> Result<Self, LimitError> {
+        self.csv_body_bytes = check_range("B-HTTP-08 (CSV)", bytes, MIB, 256 * MIB)?;
+        Ok(self)
+    }
 }
 
 impl Default for Config {
@@ -54,6 +148,7 @@ impl Default for Config {
             api_login: KITECONNECT_API_LOGIN.to_string(),
             api_redirect: KITECONNECT_API_REDIRECT.to_string(),
             credentials: KiteCredentials::new("", "", "", "", ""),
+            limits: HttpLimits::default(),
         }
     }
 }
@@ -132,7 +227,19 @@ impl Config {
             api_login: api_login.into(),
             api_redirect: api_redirect.into(),
             credentials,
+            limits: HttpLimits::default(),
         }
+    }
+
+    /// Replace the runtime bounds.
+    pub fn with_limits(mut self, limits: HttpLimits) -> Self {
+        self.limits = limits;
+        self
+    }
+
+    /// The runtime bounds.
+    pub fn limits(&self) -> &HttpLimits {
+        &self.limits
     }
 }
 
@@ -147,6 +254,24 @@ mod tests {
         assert_eq!(config.api_base(), KITECONNECT_API_BASE);
         assert_eq!(config.api_login(), KITECONNECT_API_LOGIN);
         assert_eq!(config.api_redirect(), KITECONNECT_API_REDIRECT);
+    }
+
+    #[test]
+    fn body_bounds_are_validated() {
+        let d = HttpLimits::default();
+        assert_eq!(
+            (d.json_body_bytes(), d.csv_body_bytes()),
+            (4 * MIB, 64 * MIB)
+        );
+        assert!(d.clone().with_json_body_bytes(64 * KIB).is_ok());
+        assert!(d.clone().with_json_body_bytes(64 * MIB).is_ok());
+        assert!(d.clone().with_json_body_bytes(64 * KIB - 1).is_err());
+        assert!(d.clone().with_json_body_bytes(64 * MIB + 1).is_err());
+        assert!(d.clone().with_csv_body_bytes(MIB).is_ok());
+        assert!(d.clone().with_csv_body_bytes(256 * MIB).is_ok());
+        assert!(d.clone().with_csv_body_bytes(MIB - 1).is_err());
+        let err = d.with_csv_body_bytes(256 * MIB + 1).unwrap_err();
+        assert_eq!(err.bound, "B-HTTP-08 (CSV)");
     }
 
     #[test]
