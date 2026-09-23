@@ -13,6 +13,7 @@ exclude = [
     "Cargo.lock",
     "tests/*",
     "examples/*",
+    "benches/*",
     "*.md",
     ".*",
     ".temp/*",

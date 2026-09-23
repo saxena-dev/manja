@@ -1,0 +1,50 @@
+# Out-of-tree consumer of the packaged crate (plan task S30). `check.sh`
+# copies this directory to a scratch location, renames this file to
+# Cargo.toml and substitutes the path of the unpacked package.
+[package]
+name = "manja-consumer"
+version = "0.0.0"
+edition = "2021"
+publish = false
+
+[workspace]
+
+[dependencies]
+manja = { path = "@MANJA@", default-features = false }
+futures-util = { version = "0.3.30", optional = true }
+tokio = { version = "1.37.0", features = ["macros", "rt"], optional = true }
+
+[features]
+default = ["http", "ticker", "decoder"]
+http = ["manja/http", "dep:tokio"]
+ticker = ["manja/ticker", "dep:tokio", "dep:futures-util"]
+decoder = ["manja/decoder"]
+
+# The repository's examples, copied in by check.sh with the fixtures they
+# read, built against the packaged crate.
+[dev-dependencies]
+futures-util = "0.3.30"
+tokio = { version = "1.37.0", features = ["full"] }
+tokio-tungstenite = "0.23.1"
+tracing = "0.1.40"
+tracing-subscriber = "0.3.18"
+
+[[example]]
+name = "http_client"
+required-features = ["http"]
+
+[[example]]
+name = "session"
+required-features = ["http"]
+
+[[example]]
+name = "ticker"
+required-features = ["ticker"]
+
+[[example]]
+name = "ticker_typed"
+required-features = ["ticker", "decoder"]
+
+[[example]]
+name = "decode_offline"
+required-features = ["decoder"]
