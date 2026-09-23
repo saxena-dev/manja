@@ -18,9 +18,6 @@
 //! session. Cloning a snapshot copies it; it does not create shared revocation.
 //! Replacing credentials means constructing a new snapshot and a new client.
 //!
-//! [`KiteCredentials`] is the legacy browser-login bundle used by the `login`
-//! module. It is scheduled for removal together with that module.
-//!
 //! ```
 //! use manja::kite::connect::credentials::Credentials;
 //!
@@ -313,65 +310,6 @@ pub(crate) fn encode_query_value(value: &str) -> String {
     out
 }
 
-/// Legacy browser-login credential bundle, used only by the `login` module.
-///
-/// It is never a runtime credential: HTTP requests and the ticker use
-/// [`Credentials`]. It is constructed explicitly; nothing reads it from the
-/// environment. `Debug` redacts every field. Scheduled for removal together
-/// with the `login` module.
-#[derive(Clone)]
-pub struct KiteCredentials {
-    api_key: Secret<String>,
-    user_id: Secret<String>,
-    user_pwd: Secret<String>,
-    totp_key: Secret<String>,
-}
-
-impl fmt::Debug for KiteCredentials {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str("KiteCredentials(<redacted>)")
-    }
-}
-
-impl KiteCredentials {
-    /// Creates `KiteCredentials` from explicitly supplied values.
-    ///
-    /// It holds no API secret: token exchange borrows the secret for the
-    /// call only. It is __NOT__ safe to hardcode credentials in your
-    /// application.
-    pub fn new<InS>(api_key: InS, user_id: InS, user_pwd: InS, totp_key: InS) -> Self
-    where
-        InS: Into<String>,
-    {
-        KiteCredentials {
-            api_key: Secret::new(api_key.into()),
-            user_id: Secret::new(user_id.into()),
-            user_pwd: Secret::new(user_pwd.into()),
-            totp_key: Secret::new(totp_key.into()),
-        }
-    }
-
-    /// Returns the API key.
-    pub fn api_key(&self) -> Secret<String> {
-        self.api_key.clone()
-    }
-
-    /// Returns the user ID.
-    pub fn user_id(&self) -> Secret<String> {
-        self.user_id.clone()
-    }
-
-    /// Returns the user password.
-    pub fn user_pwd(&self) -> Secret<String> {
-        self.user_pwd.clone()
-    }
-
-    /// Returns the TOTP key.
-    pub fn totp_key(&self) -> Secret<String> {
-        self.totp_key.clone()
-    }
-}
-
 #[cfg(test)]
 mod test {
     use super::*;
@@ -400,10 +338,6 @@ mod test {
             format!("{:?}", creds.websocket_query()),
             format!("{:?}", ApiSecret::new(SENTINEL).unwrap()),
             format!("{:?}", RequestToken::new(SENTINEL).unwrap()),
-            format!(
-                "{:?}",
-                KiteCredentials::new(SENTINEL, SENTINEL, SENTINEL, SENTINEL)
-            ),
             // A nested value keeps the redaction.
             format!("{:?}", Some(vec![creds.clone()])),
         ];

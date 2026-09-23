@@ -15,7 +15,7 @@ use std::time::Duration;
 use manja::kite::connect::client::HTTPClient;
 use manja::kite::connect::config::{Config, HttpLimits};
 use manja::kite::connect::credentials::{
-    AccessToken, ApiKey, ApiSecret, Credentials, KiteCredentials, RequestToken,
+    AccessToken, ApiKey, ApiSecret, Credentials, RequestToken,
 };
 use manja::kite::connect::scheduler::SchedulerLimits;
 use manja::kite::error::{HttpErrorKind, TransportStage};
@@ -32,8 +32,7 @@ fn unauthenticated(base: &str) -> HTTPClient {
 }
 
 fn unauthenticated_with(base: &str, scheduler: SchedulerLimits) -> HTTPClient {
-    let config = Config::from_parts(base, base, base, KiteCredentials::new("", "", "", ""))
-        .with_limits(HttpLimits::default().with_scheduler(scheduler));
+    let config = Config::new(base).with_limits(HttpLimits::default().with_scheduler(scheduler));
     HTTPClient::new(config).unwrap()
 }
 

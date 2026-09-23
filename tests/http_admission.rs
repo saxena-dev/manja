@@ -9,7 +9,7 @@ use std::time::Duration;
 use manja::kite::connect::admission::{Admission, AdmissionLimits, QuotaProfile};
 use manja::kite::connect::client::HTTPClient;
 use manja::kite::connect::config::Config;
-use manja::kite::connect::credentials::{Credentials, KiteCredentials};
+use manja::kite::connect::credentials::Credentials;
 use manja::kite::connect::models::LTPQuote;
 use manja::kite::error::{HttpErrorKind, TransportStage};
 
@@ -32,7 +32,7 @@ async fn a_refused_admission_sends_nothing() {
             .with_wait(Duration::from_millis(1))
             .unwrap(),
     );
-    let config = Config::from_parts(&*base, &*base, &*base, KiteCredentials::new("", "", "", ""));
+    let config = Config::new(&*base);
     let client = HTTPClient::builder(config)
         .admission(admission)
         .credentials(Credentials::new("k", "t").unwrap())

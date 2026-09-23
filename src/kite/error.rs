@@ -21,12 +21,7 @@
 //! connect. After that point a timeout, a lost response or a malformed reply
 //! says nothing about whether the broker acted on the request.
 //!
-use std::env::VarError;
 use std::fmt;
-
-use fantoccini::error::CmdError;
-use fantoccini::error::NewSessionError;
-use reqwest::header::InvalidHeaderValue;
 
 use crate::kite::connect::credentials::CredentialError;
 use crate::kite::obs::diagnostics::BoundedText;
@@ -39,9 +34,7 @@ pub type Result<T> = std::result::Result<T, ManjaError>;
 
 /// All errors that may occur when using the `manja` crate.
 ///
-/// Non-exhaustive: new variants may be added. The WebDriver, TOTP,
-/// environment and `reqwest` variants belong to the legacy browser-login
-/// path and are scheduled for removal with it.
+/// Non-exhaustive: new variants may be added.
 #[derive(Debug, thiserror::Error)]
 #[non_exhaustive]
 pub enum ManjaError {
@@ -53,22 +46,6 @@ pub enum ManjaError {
     #[error("invalid credentials: {0}")]
     Credential(#[from] CredentialError),
 
-    /// Represents errors related to missing or invalid environment variables.
-    #[error("Environment variable error: {0}")]
-    EnvVarError(#[from] VarError),
-
-    /// Represents errors related to invalid HTTP headers.
-    #[error("Invalid header value: {0}")]
-    InvalidHeaderValueError(#[from] InvalidHeaderValue),
-
-    /// Represents errors related to starting a new WebDriver session.
-    #[error("WebDriver new session error: {0}")]
-    WebDriverNewSessionError(#[from] NewSessionError),
-
-    /// Represents general WebDriver errors.
-    #[error("WebDriver error: {0}")]
-    WebDriverError(#[from] CmdError),
-
     /// Represents errors that occur during JSON deserialization.
     #[error("JSON deserialization error: {0}")]
     JSONDeserialize(#[from] serde_json::Error),
@@ -76,15 +53,6 @@ pub enum ManjaError {
     /// Represents general I/O errors.
     #[error("IO error: {0}")]
     IoError(#[from] std::io::Error),
-
-    /// Represents HTTP client errors raised outside an HTTP operation, such
-    /// as by the legacy login flow.
-    #[error("HTTP error: {0}")]
-    Reqwest(#[from] reqwest::Error),
-
-    /// Represents errors related to Time-based One-Time Password (TOTP) generation or validation.
-    #[error("TOTP error: {0}")]
-    TotpError(String),
 
     /// Represents internal errors within the `manja` crate.
     #[error("Internal `manja` error: {0}")]

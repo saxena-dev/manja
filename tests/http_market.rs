@@ -12,7 +12,7 @@ use chrono::DateTime;
 use manja::kite::connect::api::Market;
 use manja::kite::connect::client::HTTPClient;
 use manja::kite::connect::config::{Config, HttpLimits};
-use manja::kite::connect::credentials::{Credentials, KiteCredentials};
+use manja::kite::connect::credentials::Credentials;
 use manja::kite::connect::models::{Exchange, FullQuote, InstrumentType, LTPQuote, OHLCQuote};
 use manja::kite::connect::scheduler::SchedulerLimits;
 use manja::kite::error::{HttpErrorKind, ManjaError, TransportStage};
@@ -22,10 +22,9 @@ use support::fixtures;
 use support::http::{HttpHarness, RecordedRequest, Reply};
 
 fn client_with(base: &str, limits: HttpLimits) -> HTTPClient {
-    let config = Config::from_parts(base, base, base, KiteCredentials::new("", "", "", ""))
-        .with_limits(
-            limits.with_scheduler(SchedulerLimits::default().with_read_attempts(1).unwrap()),
-        );
+    let config = Config::new(base).with_limits(
+        limits.with_scheduler(SchedulerLimits::default().with_read_attempts(1).unwrap()),
+    );
     HTTPClient::with_config(config)
         .unwrap()
         .with_credentials(Credentials::new("test_api_key", "test_access_token").unwrap())

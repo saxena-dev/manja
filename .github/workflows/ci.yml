@@ -1,8 +1,11 @@
-# Compile-only feature matrix (plans/sdk-contract.v0.md §8.4).
+# CI for the feature slices (plans/sdk-contract.v0.md §8.4; plan task S26).
 #
-# One job per plan §8 feature row. CI resolves and fetches dependencies from
-# crates.io because Cargo.lock is not tracked; local evidence for the same rows
-# uses `--offline`. MSRV and dependency-graph jobs are added by S26.
+# Every feature row is tested on the declared MSRV (1.95.0) and on the newer
+# supported toolchain (1.98.0). Dependencies are fetched from crates.io
+# because Cargo.lock is not tracked. The pinned kiteconnect-mocks submodule
+# is materialized before any test runs; a missing fixture fails setup rather
+# than letting fixture-backed tests be skipped. Fixtures are test-only and are
+# not part of the packaged crate.
 name: ci
 
 on:
@@ -12,35 +15,84 @@ on:
 permissions:
   contents: read
 
+env:
+  CARGO_TERM_COLOR: always
+
 jobs:
-  feature-check:
-    name: cargo check ${{ matrix.row }}
+  test:
+    name: test ${{ matrix.toolchain }} ${{ matrix.row }}
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
       matrix:
-        include:
-          - row: no-default
-            args: --no-default-features
-          - row: decoder
-            args: --no-default-features --features decoder
-          - row: http
-            args: --no-default-features --features http
-          - row: ticker
-            args: --no-default-features --features ticker
-          - row: ticker,decoder
-            args: --no-default-features --features ticker,decoder
-          - row: http,ticker
-            args: --no-default-features --features http,ticker
-          - row: http,ticker,decoder
-            args: --no-default-features --features http,ticker,decoder
-          - row: default
-            args: ""
+        toolchain: ["1.95.0", "1.98.0"]
+        row:
+          - no-default
+          - decoder
+          - http
+          - ticker
+          - ticker,decoder
+          - http,ticker
+          - http,ticker,decoder
+          - default
     steps:
       - uses: actions/checkout@v4
+        with:
+          submodules: true
+      - name: Verify the pinned fixtures
+        run: |
+          set -euo pipefail
+          revision=$(git -C kiteconnect-mocks rev-parse HEAD)
+          expected=$(git ls-tree HEAD kiteconnect-mocks | awk '{print $3}')
+          echo "kiteconnect-mocks at $revision (pinned $expected)" | tee -a "$GITHUB_STEP_SUMMARY"
+          test "$revision" = "$expected"
+          for f in profile.json postback.json ticker_full.packet; do
+            test -s "kiteconnect-mocks/$f" || { echo "missing fixture $f"; exit 1; }
+          done
+          test -s tests/fixtures/ticker/MANIFEST.toml
+      - name: Install Rust ${{ matrix.toolchain }}
+        run: |
+          rustup toolchain install ${{ matrix.toolchain }} --profile minimal
+          rustup default ${{ matrix.toolchain }}
+          rustc --version | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: Feature arguments
+        id: args
+        run: |
+          case "${{ matrix.row }}" in
+            default) echo "args=" >> "$GITHUB_OUTPUT" ;;
+            no-default) echo "args=--no-default-features" >> "$GITHUB_OUTPUT" ;;
+            *) echo "args=--no-default-features --features ${{ matrix.row }}" >> "$GITHUB_OUTPUT" ;;
+          esac
+      - name: cargo test
+        run: cargo test ${{ steps.args.outputs.args }}
+      - name: Resolved normal graph
+        run: |
+          set -euo pipefail
+          cargo tree ${{ steps.args.outputs.args }} -e normal --prefix none | sort -u > tree.txt
+          has() { grep -q "^$1 v" tree.txt; }
+          case "${{ matrix.row }}" in
+            no-default|decoder)
+              ! has tokio && ! has reqwest && ! has hyper && ! has tungstenite ;;
+            http)
+              ! has tungstenite && ! has tokio-tungstenite ;;
+            ticker|ticker,decoder)
+              ! has reqwest && ! has hyper ;;
+          esac
+          ! has tracing-subscriber
+          ! has fantoccini
+          ! has totp-rs
+
+  lint:
+    name: fmt, clippy and doc
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: true
       - name: Install Rust 1.98.0
         run: |
-          rustup toolchain install 1.98.0 --profile minimal
+          rustup toolchain install 1.98.0 --profile minimal --component rustfmt,clippy
           rustup default 1.98.0
-      - name: cargo check
-        run: cargo check ${{ matrix.args }}
+      - run: cargo fmt --all -- --check
+      - run: cargo clippy --all-targets --all-features -- -D warnings
+      - run: RUSTDOCFLAGS="-D warnings" cargo doc --no-deps

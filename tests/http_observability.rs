@@ -15,9 +15,7 @@ use manja::kite::connect::admission::{Admission, AdmissionLimits, QuotaProfile};
 use manja::kite::connect::api::Market;
 use manja::kite::connect::client::HTTPClient;
 use manja::kite::connect::config::{Config, HttpLimits};
-use manja::kite::connect::credentials::{
-    ApiKey, ApiSecret, Credentials, KiteCredentials, RequestToken,
-};
+use manja::kite::connect::credentials::{ApiKey, ApiSecret, Credentials, RequestToken};
 use manja::kite::connect::models::{LTPQuote, OrderVariety};
 use manja::kite::connect::scheduler::SchedulerLimits;
 use manja::kite::obs::{BridgeRecorder, InMemoryRecorder, Instrument, Observability};
@@ -110,8 +108,7 @@ const ATTEMPT: &str = "manja.http.attempt";
 const ADMISSION: &str = "manja.http.admission";
 
 fn config(base: &str, scheduler: SchedulerLimits) -> Config {
-    Config::from_parts(base, base, base, KiteCredentials::new("", "", "", ""))
-        .with_limits(HttpLimits::default().with_scheduler(scheduler))
+    Config::new(base).with_limits(HttpLimits::default().with_scheduler(scheduler))
 }
 
 fn fast() -> SchedulerLimits {

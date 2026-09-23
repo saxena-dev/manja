@@ -14,7 +14,7 @@ use std::time::Duration;
 use manja::kite::connect::api::Portfolio;
 use manja::kite::connect::client::HTTPClient;
 use manja::kite::connect::config::{Config, HttpLimits};
-use manja::kite::connect::credentials::{Credentials, KiteCredentials};
+use manja::kite::connect::credentials::Credentials;
 use manja::kite::connect::models::{
     Exchange, ModifyOrderRequest, OrderType, OrderValidity, OrderVariety, PlaceOrderRequest,
     PositionConversionRequest, PositionType, ProductType, TransactionType,
@@ -27,8 +27,7 @@ use support::fixtures;
 use support::http::{HttpHarness, RecordedRequest, Reply};
 
 fn client_with(base: &str, scheduler: SchedulerLimits) -> HTTPClient {
-    let config = Config::from_parts(base, base, base, KiteCredentials::new("", "", "", ""))
-        .with_limits(HttpLimits::default().with_scheduler(scheduler));
+    let config = Config::new(base).with_limits(HttpLimits::default().with_scheduler(scheduler));
     HTTPClient::with_config(config)
         .unwrap()
         .with_credentials(Credentials::new("test_api_key", "test_access_token").unwrap())

@@ -64,9 +64,10 @@
 //! # }
 //! ```
 //!
-//! The legacy `kite::login` browser flow and the legacy
-//! [`WebSocketClient`](kite::ticker::WebSocketClient) remain during the
-//! migration; the legacy ticker is deprecated.
+//! There is no login flow: obtain the request token yourself, then use the
+//! session resource's explicit token exchange and invalidation. The legacy
+//! [`WebSocketClient`](kite::ticker::WebSocketClient) remains, deprecated,
+//! during the migration.
 //!
 //! # Disclaimer
 //!

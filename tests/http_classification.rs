@@ -12,7 +12,7 @@ mod support;
 
 use manja::kite::connect::client::HTTPClient;
 use manja::kite::connect::config::{Config, HttpLimits};
-use manja::kite::connect::credentials::{Credentials, KiteCredentials};
+use manja::kite::connect::credentials::Credentials;
 use manja::kite::connect::scheduler::SchedulerLimits;
 use manja::kite::error::{HttpError, HttpErrorKind, KiteApiException, ManjaError, TransportStage};
 use manja::kite::obs::schema::{Endpoint, Method};
@@ -24,8 +24,7 @@ use support::http::{refused_base_url, HttpHarness, Reply};
 const SENTINEL: &str = "SENTINELaccessTOKEN0123456789abcdef";
 
 fn client(base: &str, limits: HttpLimits) -> HTTPClient {
-    let config = Config::from_parts(base, base, base, KiteCredentials::new("", "", "", ""))
-        .with_limits(limits);
+    let config = Config::new(base).with_limits(limits);
     HTTPClient::with_config(config)
         .unwrap()
         .with_credentials(Credentials::new("test_api_key", SENTINEL).unwrap())

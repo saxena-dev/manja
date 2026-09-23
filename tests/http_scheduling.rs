@@ -11,7 +11,7 @@ use std::time::{Duration, Instant};
 use manja::kite::connect::client::HTTPClient;
 use manja::kite::connect::config::{Config, HttpLimits};
 use manja::kite::connect::credentials::{
-    AccessToken, ApiKey, ApiSecret, Credentials, KiteCredentials, RequestToken,
+    AccessToken, ApiKey, ApiSecret, Credentials, RequestToken,
 };
 use manja::kite::connect::models::{
     Exchange, ModifyOrderRequest, OrderType, OrderVariety, PlaceOrderRequest,
@@ -25,13 +25,8 @@ use support::fixtures;
 use support::http::{HttpHarness, Reply};
 
 fn client_with(base: &str, scheduler: SchedulerLimits) -> HTTPClient {
-    let config = Config::from_parts(
-        base,
-        base,
-        base,
-        KiteCredentials::new("test_api_key", "", "", ""),
-    )
-    .with_limits(HttpLimits::default().with_scheduler(scheduler.with_jitter_seed(3)));
+    let config = Config::new(base)
+        .with_limits(HttpLimits::default().with_scheduler(scheduler.with_jitter_seed(3)));
     HTTPClient::with_config(config)
         .unwrap()
         .with_credentials(Credentials::new("test_api_key", "test_access_token").unwrap())
@@ -213,12 +208,11 @@ async fn the_operation_deadline_bounds_stalled_retries() {
         .unwrap()
         .with_backoff(Duration::from_millis(10), Duration::from_millis(20))
         .unwrap();
+    // Build the client first: constructing a transport can be slow on a
+    // loaded host, and the deadline bounds the operation, not construction.
+    let client = client_with(&harness.base_url(), tight);
     let start = Instant::now();
-    let err = client_with(&harness.base_url(), tight)
-        .user()
-        .profile()
-        .await
-        .unwrap_err();
+    let err = client.user().profile().await.unwrap_err();
     let elapsed = start.elapsed();
     assert!(elapsed < Duration::from_millis(2500), "{elapsed:?}");
     assert!(

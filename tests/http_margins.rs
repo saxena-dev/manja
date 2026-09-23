@@ -11,7 +11,7 @@ mod support;
 
 use manja::kite::connect::client::HTTPClient;
 use manja::kite::connect::config::{Config, HttpLimits};
-use manja::kite::connect::credentials::{Credentials, KiteCredentials};
+use manja::kite::connect::credentials::Credentials;
 use manja::kite::connect::models::{
     Exchange, OrderChargesRequest, OrderMarginRequest, OrderType, OrderVariety, ProductType,
     TransactionType,
@@ -24,8 +24,7 @@ use support::fixtures;
 use support::http::{HttpHarness, RecordedRequest, Reply};
 
 fn client_with(base: &str, limits: HttpLimits) -> HTTPClient {
-    let config = Config::from_parts(base, base, base, KiteCredentials::new("", "", "", ""))
-        .with_limits(limits);
+    let config = Config::new(base).with_limits(limits);
     HTTPClient::with_config(config)
         .unwrap()
         .with_credentials(Credentials::new("test_api_key", "test_access_token").unwrap())

@@ -19,7 +19,6 @@ use tokio_tungstenite::tungstenite::{Error as WsError, Message};
 
 use manja::kite::connect::client::HTTPClient;
 use manja::kite::connect::config::Config;
-use manja::kite::connect::credentials::KiteCredentials;
 use manja::kite::ticker::{Mode, StreamState, WebSocketClient};
 
 use support::fixtures::{self, FixtureError};
@@ -188,12 +187,7 @@ async fn http_refused_connection_is_a_connect_error() {
 }
 
 fn manja_client(base_url: String) -> HTTPClient {
-    let config = Config::from_parts(
-        base_url.clone(),
-        base_url.clone(),
-        base_url,
-        KiteCredentials::new("test_api_key", "", "", ""),
-    );
+    let config = Config::new(base_url.clone());
     HTTPClient::with_config(config).unwrap()
 }
 

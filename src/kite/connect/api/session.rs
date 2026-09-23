@@ -21,15 +21,13 @@
 //! success. Dropping the future after dispatch cancels nothing at the broker.
 //!
 //! Neither operation persists credentials, installs tokens into any client,
-//! starts a login or coordinates credential generations; invalidation does
+//! starts a login or coordinates credential generations; the SDK has no
+//! login flow: the request token comes from the caller; invalidation does
 //! not log the user out of Kite's web or mobile apps (`user.md:297`), and
 //! local clients keep their snapshots until the caller retires them. Nothing
 //! in the SDK calls these operations implicitly: not ordinary requests, not
 //! the ticker's reconnects, not shutdown and not `Drop`.
 //!
-use std::future::Future;
-use std::pin::Pin;
-
 use secrecy::Secret;
 
 use crate::kite::connect::{
@@ -39,27 +37,11 @@ use crate::kite::connect::{
     utils::create_checksum,
 };
 use crate::kite::error::Result;
-use crate::kite::traits::{KiteConfig, KiteLoginFlow};
 
 /// The session resource for one API key.
 pub struct Session<'c> {
     client: &'c HTTPClient,
     api_key: ApiKey,
-}
-
-impl<'c> KiteLoginFlow for Session<'c> {
-    /// Legacy browser login; removed with the `login` module.
-    fn gen_request_token<F, Fut>(
-        &self,
-        f: F,
-    ) -> Pin<Box<dyn Future<Output = Result<String>> + Send>>
-    where
-        F: Fn(Box<dyn KiteConfig>) -> Fut + Send + 'static,
-        Fut: Future<Output = Result<String>> + Send + 'static,
-    {
-        let config = Box::new(self.client.http_config().to_owned());
-        Box::pin(async move { f(config).await })
-    }
 }
 
 impl<'c> Session<'c> {
