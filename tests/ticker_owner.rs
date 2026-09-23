@@ -345,6 +345,8 @@ async fn a_full_queue_leaves_status_and_shutdown_responsive() {
     let limits = TickerLimits::default()
         .with_queue_messages(16)
         .unwrap()
+        .with_max_queue_age(Duration::from_secs(60))
+        .unwrap()
         .with_delivery_wait(Duration::from_secs(30))
         .unwrap();
     let (handle, mut events, guard) = builder(&h.url()).limits(limits).spawn().unwrap();
@@ -387,6 +389,8 @@ async fn shutdown_that_cannot_deliver_expires_within_its_deadline() {
     let h = WsHarness::start(vec![accept(flood(100))]).await;
     let limits = TickerLimits::default()
         .with_queue_messages(16)
+        .unwrap()
+        .with_max_queue_age(Duration::from_secs(60))
         .unwrap()
         .with_delivery_wait(Duration::from_secs(30))
         .unwrap()
@@ -437,9 +441,10 @@ async fn dropping_the_receiver_or_every_handle_terminates_the_owner() {
     let (handle, mut events, guard) = builder(&h.url()).spawn().unwrap();
     take(&mut events, 3).await;
     drop(events);
+    // Nothing was queued when the receiver went away.
     assert_eq!(
         guard.join().await,
-        TaskOutcome::Terminal(TerminalReason::ReceiverDropped)
+        TaskOutcome::Terminal(TerminalReason::ReceiverDropped { undelivered: 0 })
     );
     assert_eq!(handle.status().state, TickerState::Failed);
 

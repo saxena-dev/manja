@@ -32,8 +32,11 @@
 //! bytes (`B-TK-06`); a message over `B-TK-10` fails the connection. When the
 //! queue is full the owner stops reading the socket and waits up to
 //! `B-TK-08` for room, then fails with
-//! [`TerminalReason::DeliveryOverload`]; nothing is silently dropped. Status
-//! and shutdown never need room in the queue.
+//! [`TerminalReason::DeliveryOverload`]; it fails the same way when the
+//! oldest queued event is older than `B-TK-07`. Nothing is silently
+//! dropped. Status and shutdown never need room in the queue. See
+//! [`crate::kite::ticker::actor::delivery`] for every bound, cancellation
+//! boundary and teardown outcome.
 //!
 //! # Termination
 //!
@@ -76,7 +79,7 @@ use std::time::Duration;
 use futures_util::{FutureExt, SinkExt, Stream, StreamExt};
 use secrecy::{ExposeSecret, Secret};
 use tokio::net::TcpStream;
-use tokio::sync::{mpsc, oneshot, watch, Notify, OwnedSemaphorePermit, Semaphore};
+use tokio::sync::{mpsc, oneshot, watch, Notify};
 use tokio::task::JoinHandle;
 use tokio::time::Instant;
 use tokio_tungstenite::tungstenite::{self, protocol::WebSocketConfig, Message};
@@ -90,6 +93,7 @@ use crate::kite::envelope::{
 };
 use crate::kite::obs::Observability;
 use crate::kite::protocol::InstrumentToken;
+use crate::kite::ticker::actor::delivery;
 use crate::kite::ticker::actor::lifecycle::{self, Backoff, Disposition, ReconnectLimits};
 use crate::kite::ticker::actor::subscriptions::{
     reconcile, DesiredSubscriptions, Revision, SubscriptionCommand, SubscriptionError,
@@ -122,6 +126,7 @@ pub struct TickerLimits {
     queue_messages: usize,
     queue_bytes: usize,
     delivery_wait: Duration,
+    max_queue_age: Duration,
     command_mailbox: usize,
     max_payload: usize,
     max_instruments: usize,
@@ -136,6 +141,7 @@ impl Default for TickerLimits {
             queue_messages: 4096,
             queue_bytes: 64 << 20,
             delivery_wait: Duration::from_secs(1),
+            max_queue_age: Duration::from_secs(5),
             command_mailbox: 64,
             max_payload: 1 << 20,
             max_instruments: MAX_INSTRUMENTS_PER_CONNECTION,
@@ -178,7 +184,8 @@ impl TickerLimits {
         self.check()
     }
 
-    /// Primary delivery wait (`B-TK-08`, 10 ms to 30 s).
+    /// Primary delivery wait (`B-TK-08`, 10 ms to 30 s, at most the oldest
+    /// queued age).
     pub fn with_delivery_wait(mut self, d: Duration) -> Result<Self, TickerLimitError> {
         self.delivery_wait = within(
             "B-TK-08",
@@ -186,7 +193,19 @@ impl TickerLimits {
             Duration::from_millis(10),
             Duration::from_secs(30),
         )?;
-        Ok(self)
+        self.check()
+    }
+
+    /// Oldest queued age (`B-TK-07`, 100 ms to 60 s, at least the delivery
+    /// wait).
+    pub fn with_max_queue_age(mut self, d: Duration) -> Result<Self, TickerLimitError> {
+        self.max_queue_age = within(
+            "B-TK-07",
+            d,
+            Duration::from_millis(100),
+            Duration::from_secs(60),
+        )?;
+        self.check()
     }
 
     /// Command mailbox capacity (`B-TK-09`, 1 to 1 024).
@@ -228,6 +247,9 @@ impl TickerLimits {
         if self.queue_bytes < self.max_payload {
             return Err(TickerLimitError("B-TK-06 >= B-TK-10"));
         }
+        if self.delivery_wait > self.max_queue_age {
+            return Err(TickerLimitError("B-TK-08 <= B-TK-07"));
+        }
         Ok(self)
     }
 
@@ -246,6 +268,10 @@ impl TickerLimits {
     /// `B-TK-08`.
     pub fn delivery_wait(&self) -> Duration {
         self.delivery_wait
+    }
+    /// `B-TK-07`.
+    pub fn max_queue_age(&self) -> Duration {
+        self.max_queue_age
     }
     /// `B-TK-09`.
     pub fn command_mailbox(&self) -> usize {
@@ -333,11 +359,20 @@ pub enum TerminalReason {
     /// `B-TK-08`.
     DeliveryOverload,
     /// The primary receiver was dropped.
-    ReceiverDropped,
+    ReceiverDropped {
+        /// Events accepted but not delivered.
+        undelivered: usize,
+    },
     /// Every [`TickerHandle`] was dropped.
     HandlesDropped,
     /// The close handshake failed during shutdown.
     CloseFailed,
+    /// Shutdown interrupted a subscription write: the broker may have
+    /// received none, part or all of it.
+    SendInterrupted {
+        /// The revision being written.
+        revision: u64,
+    },
     /// Shutdown did not deliver every event within `B-TK-12`.
     ShutdownDeadlineExpired {
         /// Events the owner had accepted but could not deliver.
@@ -383,9 +418,16 @@ impl fmt::Display for TerminalReason {
             Self::DeliveryOverload => {
                 f.write_str("the consumer did not accept events within the delivery wait")
             }
-            Self::ReceiverDropped => f.write_str("the primary receiver was dropped"),
+            Self::ReceiverDropped { undelivered } => write!(
+                f,
+                "the primary receiver was dropped with {undelivered} events undelivered"
+            ),
             Self::HandlesDropped => f.write_str("every ticker handle was dropped"),
             Self::CloseFailed => f.write_str("the close handshake failed"),
+            Self::SendInterrupted { revision } => write!(
+                f,
+                "shutdown interrupted the write of revision {revision}; its delivery is unknown"
+            ),
             Self::ShutdownDeadlineExpired { undelivered } => {
                 write!(f, "shutdown expired with {undelivered} events undelivered")
             }
@@ -562,11 +604,6 @@ impl Shared {
     }
 }
 
-struct Queued {
-    event: TickerEvent,
-    _charge: OwnedSemaphorePermit,
-}
-
 // ---- builder ------------------------------------------------------------
 
 /// Builder for a ticker instance.
@@ -663,7 +700,9 @@ impl TickerBuilder {
             stop_requested: AtomicBool::new(false),
         });
         let (commands_tx, commands) = mpsc::channel(self.limits.command_mailbox);
-        let (events_tx, events_rx) = mpsc::channel(self.limits.queue_messages);
+        let (events_tx, events_rx) =
+            delivery::queue(self.limits.queue_messages, self.limits.queue_bytes);
+        let keep_open = events_tx.keep_open();
         let owner = Owner {
             url: Arc::new(url),
             desired: DesiredSubscriptions::new(self.limits.max_instruments),
@@ -673,8 +712,8 @@ impl TickerBuilder {
             sequencer: SourceSequencer::new(identity),
             shared: shared.clone(),
             commands,
-            events: events_tx.clone(),
-            bytes: Arc::new(Semaphore::new(self.limits.queue_bytes)),
+            events: events_tx,
+            interrupted: None,
             stop_at: None,
             last_sequence: None,
             gap: None,
@@ -688,7 +727,7 @@ impl TickerBuilder {
         let task = runtime.spawn(async move {
             // Held until the terminal reason is recorded, so the receiver
             // never sees the end of the queue before the reason.
-            let _keep_open = events_tx;
+            let _keep_open = keep_open;
             let reason = match AssertUnwindSafe(owner.run()).catch_unwind().await {
                 Ok(reason) => reason,
                 Err(_) => {
@@ -863,7 +902,7 @@ impl TickerHandle {
 /// `Err` first. Dropping it terminates the owner with
 /// [`TerminalReason::ReceiverDropped`].
 pub struct TickerEvents {
-    rx: mpsc::Receiver<Queued>,
+    rx: delivery::Receiver,
     shared: Arc<Shared>,
     done: bool,
 }
@@ -884,8 +923,7 @@ impl Stream for TickerEvents {
             return Poll::Ready(None);
         }
         match self.rx.poll_recv(cx) {
-            // The byte charge is released here, as ownership passes on.
-            Poll::Ready(Some(q)) => Poll::Ready(Some(Ok(q.event))),
+            Poll::Ready(Some(event)) => Poll::Ready(Some(Ok(event))),
             Poll::Ready(None) => {
                 self.done = true;
                 let terminal = self
@@ -931,6 +969,8 @@ pub(crate) struct Faults {
     pub(crate) panic_after: Option<usize>,
     /// Fail this many subscription writes.
     pub(crate) fail_sends: usize,
+    /// Never complete a subscription write.
+    pub(crate) stall_sends: bool,
 }
 
 struct Owner {
@@ -944,8 +984,9 @@ struct Owner {
     sequencer: SourceSequencer,
     shared: Arc<Shared>,
     commands: mpsc::Receiver<Command>,
-    events: mpsc::Sender<Queued>,
-    bytes: Arc<Semaphore>,
+    events: delivery::Sender,
+    // A subscription write that shutdown interrupted.
+    interrupted: Option<Revision>,
     // Set when shutdown was requested: every remaining delivery must
     // finish by then.
     stop_at: Option<Instant>,
@@ -1042,9 +1083,7 @@ impl Owner {
             tokio::select! {
                 biased;
                 _ = shared.stopped() => return Err(End::Shutdown),
-                _ = self.events.closed() => {
-                    return Err(End::Terminal(TerminalReason::ReceiverDropped))
-                }
+                _ = self.events.closed() => return Err(self.receiver_dropped(0)),
                 command = self.commands.recv() => match command {
                     None => return Err(End::Terminal(TerminalReason::HandlesDropped)),
                     Some(c) => self.on_command(c),
@@ -1083,24 +1122,11 @@ impl Owner {
         self.deliver(event).await
     }
 
-    fn charge(event: &TickerEvent) -> usize {
-        match event {
-            TickerEvent::Raw(r) => r.payload().retained_bytes(),
-            TickerEvent::Lifecycle(_) => 0,
-        }
-    }
-
     // Queue one event, waiting for room: up to `B-TK-08` normally, and up
     // to the shutdown deadline once shutdown was requested.
     async fn deliver(&mut self, event: TickerEvent) -> Result<(), End> {
-        let charge = Self::charge(&event).min(self.limits.queue_bytes) as u32;
-        let (events, bytes, shared) =
-            (self.events.clone(), self.bytes.clone(), self.shared.clone());
-        let room = async move {
-            let slot = events.reserve_owned().await.map_err(|_| ())?;
-            let bytes = bytes.acquire_many_owned(charge).await.map_err(|_| ())?;
-            Ok::<_, ()>((slot, bytes))
-        };
+        let room = self.events.reserve(delivery::charge(&event));
+        let shared = self.shared.clone();
         tokio::pin!(room);
         let normal_until = Instant::now() + self.limits.delivery_wait;
         loop {
@@ -1109,11 +1135,11 @@ impl Owner {
                 biased;
                 r = &mut room => {
                     return match r {
-                        Ok((slot, bytes)) => {
-                            slot.send(Queued { event, _charge: bytes });
+                        Ok(room) => {
+                            room.send(event);
                             Ok(())
                         }
-                        Err(()) => Err(End::Terminal(TerminalReason::ReceiverDropped)),
+                        Err(delivery::Closed) => Err(self.receiver_dropped(1)),
                     };
                 }
                 _ = shared.stopped(), if self.stop_at.is_none() => {
@@ -1129,6 +1155,18 @@ impl Owner {
                 }
             }
         }
+    }
+
+    fn receiver_dropped(&self, pending: usize) -> End {
+        End::Terminal(TerminalReason::ReceiverDropped {
+            undelivered: self.events.len() + pending,
+        })
+    }
+
+    // The consumer is too slow when the oldest queued event is older than
+    // `B-TK-07`.
+    fn queue_age_deadline(&self) -> Option<Instant> {
+        self.events.oldest().map(|t| t + self.limits.max_queue_age)
     }
 
     // One connection attempt under a fresh epoch: connect, restore, then
@@ -1158,9 +1196,7 @@ impl Owner {
             tokio::select! {
                 biased;
                 _ = shared.stopped() => return (End::Shutdown, None),
-                _ = self.events.closed() => {
-                    return (End::Terminal(TerminalReason::ReceiverDropped), None)
-                }
+                _ = self.events.closed() => return (self.receiver_dropped(0), None),
                 command = self.commands.recv() => match command {
                     None => return (End::Terminal(TerminalReason::HandlesDropped), None),
                     Some(c) => self.on_command(c),
@@ -1205,10 +1241,11 @@ impl Owner {
         let liveness = self.limits.reconnect.liveness_timeout();
         let mut last_seen = Instant::now();
         loop {
+            let age_deadline = self.queue_age_deadline();
             let end = tokio::select! {
                 biased;
                 _ = shared.stopped() => End::Shutdown,
-                _ = self.events.closed() => End::Terminal(TerminalReason::ReceiverDropped),
+                _ = self.events.closed() => self.receiver_dropped(0),
                 command = self.commands.recv() => match command {
                     None => End::Terminal(TerminalReason::HandlesDropped),
                     Some(c) => {
@@ -1229,6 +1266,17 @@ impl Owner {
                     match self.receive(message).await {
                         Ok(()) => continue,
                         Err(end) => end,
+                    }
+                }
+                _ = tokio::time::sleep_until(age_deadline.unwrap_or(last_seen)),
+                    if age_deadline.is_some() =>
+                {
+                    match self.queue_age_deadline() {
+                        Some(d) if d <= Instant::now() => {
+                            End::Terminal(TerminalReason::DeliveryOverload)
+                        }
+                        // The consumer took it meanwhile.
+                        _ => continue,
                     }
                 }
                 _ = tokio::time::sleep_until(last_seen + liveness) => {
@@ -1279,13 +1327,37 @@ impl Owner {
                 .await?;
             }
         }
-        let written = async {
+        #[cfg(test)]
+        let stall = self.faults.stall_sends;
+        let write = async {
+            #[cfg(test)]
+            if stall {
+                std::future::pending::<()>().await;
+            }
             for r in &requests {
                 socket.feed(Message::Text(r.to_string())).await?;
             }
             socket.flush().await
-        }
-        .await;
+        };
+        // One write in progress at a time (`B-TK-13`). Shutdown interrupts
+        // it, leaving its delivery unknown; a write that stalls past the
+        // liveness timeout is a liveness loss.
+        let shared = self.shared.clone();
+        let written = tokio::select! {
+            biased;
+            r = write => r,
+            _ = shared.stopped() => {
+                self.interrupted = Some(latest);
+                self.lifecycle(LifecycleKind::SendFailed { revision: latest.0 })
+                    .await?;
+                return Err(End::Shutdown);
+            }
+            _ = tokio::time::sleep(self.limits.reconnect.liveness_timeout()) => {
+                self.lifecycle(LifecycleKind::SendFailed { revision: latest.0 })
+                    .await?;
+                return self.disconnected(DisconnectReason::LivenessTimeout).await;
+            }
+        };
         #[cfg(test)]
         let written = if self.faults.fail_sends > 0 {
             self.faults.fail_sends -= 1;
@@ -1373,7 +1445,7 @@ impl Owner {
                 }
                 if !matches!(
                     reason,
-                    TerminalReason::ReceiverDropped
+                    TerminalReason::ReceiverDropped { .. }
                         | TerminalReason::AuthRejected { .. }
                         | TerminalReason::ShutdownDeadlineExpired { .. }
                 ) {
@@ -1397,6 +1469,9 @@ impl Owner {
             .get_or_insert_with(|| Instant::now() + self.limits.shutdown_deadline);
         self.state(TickerState::Stopping);
         let mut closed = true;
+        // After an interrupted write the socket may hold part of a frame: it
+        // is dropped, not closed.
+        let socket = socket.filter(|_| self.interrupted.is_none());
         if let Some(mut socket) = socket {
             closed = tokio::time::timeout_at(stop_at, async {
                 socket.close(None).await?;
@@ -1450,10 +1525,10 @@ impl Owner {
                 Err(_) => unreachable!("delivery ends only in a terminal reason"),
             }
         }
-        if closed {
-            TerminalReason::Shutdown
-        } else {
-            TerminalReason::CloseFailed
+        match (self.interrupted, closed) {
+            (Some(r), _) => TerminalReason::SendInterrupted { revision: r.0 },
+            (None, true) => TerminalReason::Shutdown,
+            (None, false) => TerminalReason::CloseFailed,
         }
     }
 }
@@ -1659,6 +1734,47 @@ mod tests {
             ]
         );
         handle.shutdown().await.unwrap();
+        server.abort();
+    }
+
+    #[tokio::test]
+    async fn shutdown_during_a_stalled_write_is_an_interrupted_send() {
+        let (url, server) = serve(0).await;
+        let mut b = TickerBuilder::new(Credentials::new("k", "t").unwrap()).url(url);
+        b.faults.stall_sends = true;
+        let (handle, mut events, guard) = b.spawn().unwrap();
+        handle
+            .subscribe([InstrumentToken::new(1)], Mode::Full)
+            .await
+            .unwrap();
+        for _ in 0..200 {
+            if handle.status().state == TickerState::Restoring {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        assert_eq!(handle.status().state, TickerState::Restoring);
+        let interrupted = TerminalReason::SendInterrupted { revision: 1 };
+        assert_eq!(handle.shutdown().await.unwrap_err().reason(), &interrupted);
+        let mut items = Vec::new();
+        while let Some(i) = events.next().await {
+            items.push(i);
+        }
+        let kinds = kinds(&items);
+        assert!(
+            kinds.contains(&"SendFailed { revision: 1 }".to_string()),
+            "{kinds:?}"
+        );
+        assert!(
+            !kinds.iter().any(|k| k.starts_with("CommandsSent")),
+            "{kinds:?}"
+        );
+        assert_eq!(
+            kinds.last().unwrap(),
+            &format!("err:{interrupted:?}"),
+            "not a clean end"
+        );
+        assert_eq!(guard.join().await, TaskOutcome::Terminal(interrupted));
         server.abort();
     }
 

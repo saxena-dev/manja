@@ -232,6 +232,8 @@ async fn a_full_mailbox_is_an_immediate_error_and_dropped_commands_are_not_rolle
         .unwrap()
         .with_command_mailbox(1)
         .unwrap()
+        .with_max_queue_age(Duration::from_secs(60))
+        .unwrap()
         .with_delivery_wait(Duration::from_secs(30))
         .unwrap();
     let (handle, mut events, _guard) = builder(&h.url()).limits(limits).spawn().unwrap();
