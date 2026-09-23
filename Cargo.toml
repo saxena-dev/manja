@@ -119,3 +119,7 @@ required-features = ["ticker"]
 [[test]]
 name = "ticker_status"
 required-features = ["ticker"]
+
+[[test]]
+name = "decoder_framing"
+required-features = ["decoder"]
