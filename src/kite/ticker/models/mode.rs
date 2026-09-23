@@ -18,7 +18,7 @@ use serde::{Deserialize, Serialize};
 /// - `Quote`: Represents the mode where quote data packets are streamed. This is the default mode.
 /// - `LTP`: Represents the mode where only the last traded price (LTP) data packets are streamed.
 ///
-#[derive(Debug, Default, Clone, Eq, Hash, Deserialize, Serialize, PartialEq, PartialOrd)]
+#[derive(Debug, Default, Clone, Eq, Hash, Deserialize, Serialize, PartialEq, PartialOrd, Ord)]
 #[serde(rename_all = "lowercase")]
 pub enum Mode {
     /// Full data packets are streamed.
@@ -28,6 +28,22 @@ pub enum Mode {
     Quote,
     /// Only the last traded price (LTP) data packets are streamed.
     LTP,
+}
+
+impl Mode {
+    /// The fixed order in which mode requests are sent: LTP, quote, full
+    /// (SDK contract §3.6).
+    pub const WIRE_ORDER: [Mode; 3] = [Mode::LTP, Mode::Quote, Mode::Full];
+
+    /// The wire value: `ltp`, `quote` or `full`
+    /// (`kite-api-docs/docs/connect/v3/websocket.md:51-57`).
+    pub const fn as_wire(&self) -> &'static str {
+        match self {
+            Mode::LTP => "ltp",
+            Mode::Quote => "quote",
+            Mode::Full => "full",
+        }
+    }
 }
 
 impl TryFrom<usize> for Mode {

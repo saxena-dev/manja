@@ -103,3 +103,7 @@ required-features = ["http"]
 [[test]]
 name = "ticker_owner"
 required-features = ["ticker"]
+
+[[test]]
+name = "ticker_subscriptions"
+required-features = ["ticker"]

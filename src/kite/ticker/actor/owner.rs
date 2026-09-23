@@ -47,8 +47,14 @@
 //! - Dropping the [`TaskGuard`] does not stop the owner. The outcome stays
 //!   visible as the sticky [`TickerStatus::terminal`] reason.
 //!
-//! This owner makes one connection attempt and does not reconnect or
-//! subscribe; those layers come later.
+//! Subscription commands (see [`crate::kite::ticker::actor::subscriptions`])
+//! go through a bounded mailbox (`B-TK-09`); a full mailbox is an immediate
+//! [`CommandError::MailboxFull`], never an indefinite wait. They are
+//! accepted in every state; on connecting, the owner writes the desired map
+//! before it reports `Active`.
+//!
+//! This owner makes one connection attempt and does not reconnect; that
+//! layer comes later.
 //!
 //! # Cancellation
 //!
@@ -57,6 +63,7 @@
 //! [`TickerEvents`] loses nothing: an event is removed from the queue only
 //! when it is returned.
 //!
+use std::collections::BTreeMap;
 use std::fmt;
 use std::panic::AssertUnwindSafe;
 use std::pin::Pin;
@@ -68,7 +75,7 @@ use std::time::Duration;
 use futures_util::{FutureExt, SinkExt, Stream, StreamExt};
 use secrecy::{ExposeSecret, Secret};
 use tokio::net::TcpStream;
-use tokio::sync::{mpsc, watch, Notify, OwnedSemaphorePermit, Semaphore};
+use tokio::sync::{mpsc, oneshot, watch, Notify, OwnedSemaphorePermit, Semaphore};
 use tokio::task::JoinHandle;
 use tokio::time::Instant;
 use tokio_tungstenite::tungstenite::{self, protocol::WebSocketConfig, Message};
@@ -80,6 +87,12 @@ use crate::kite::envelope::{
     ReceiveTime, SourceIdentity, SourceSequencer, MAX_PAYLOAD_BYTES_LIMIT,
 };
 use crate::kite::obs::Observability;
+use crate::kite::protocol::InstrumentToken;
+use crate::kite::ticker::actor::subscriptions::{
+    reconcile, DesiredSubscriptions, Revision, SubscriptionCommand, SubscriptionError,
+    MAX_INSTRUMENTS_PER_CONNECTION,
+};
+use crate::kite::ticker::models::Mode;
 
 /// The Kite Connect WebSocket endpoint
 /// (`kite-api-docs/docs/connect/v3/websocket.md:20`).
@@ -108,6 +121,7 @@ pub struct TickerLimits {
     delivery_wait: Duration,
     command_mailbox: usize,
     max_payload: usize,
+    max_instruments: usize,
     shutdown_deadline: Duration,
 }
 
@@ -120,6 +134,7 @@ impl Default for TickerLimits {
             delivery_wait: Duration::from_secs(1),
             command_mailbox: 64,
             max_payload: 1 << 20,
+            max_instruments: MAX_INSTRUMENTS_PER_CONNECTION,
             shutdown_deadline: Duration::from_secs(5),
         }
     }
@@ -181,6 +196,12 @@ impl TickerLimits {
         self.check()
     }
 
+    /// Desired instruments per connection (`B-TK-11`, 1 to 3 000).
+    pub fn with_max_instruments(mut self, n: usize) -> Result<Self, TickerLimitError> {
+        self.max_instruments = within("B-TK-11", n, 1, MAX_INSTRUMENTS_PER_CONNECTION)?;
+        Ok(self)
+    }
+
     /// Shutdown deadline (`B-TK-12`, 100 ms to 60 s).
     pub fn with_shutdown_deadline(mut self, d: Duration) -> Result<Self, TickerLimitError> {
         self.shutdown_deadline = within(
@@ -222,6 +243,10 @@ impl TickerLimits {
     /// `B-TK-10`.
     pub fn max_payload(&self) -> usize {
         self.max_payload
+    }
+    /// `B-TK-11`.
+    pub fn max_instruments(&self) -> usize {
+        self.max_instruments
     }
     /// `B-TK-12`.
     pub fn shutdown_deadline(&self) -> Duration {
@@ -404,6 +429,10 @@ pub struct TickerStatus {
     pub state: TickerState,
     /// Epoch of the current or last connection attempt; 0 before the first.
     pub connection_epoch: ConnectionEpoch,
+    /// Revision of the desired subscription map.
+    pub desired_revision: Revision,
+    /// The last revision written to a connection, if any.
+    pub sent_revision: Option<Revision>,
     /// The sticky terminal reason, once the ticker has ended.
     pub terminal: Option<TerminalReason>,
     /// Incremented on every change, so a stale snapshot is detectable.
@@ -433,10 +462,39 @@ impl std::error::Error for TickerSpawnError {}
 
 // ---- shared state -------------------------------------------------------
 
-// Commands to the owner. Subscription commands are added by the
-// subscription layer; until then the mailbox only carries liveness: when
-// every sender is dropped, every handle is gone.
-pub(crate) enum Command {}
+// Commands to the owner. When every sender is dropped, every handle is
+// gone.
+pub(crate) enum Command {
+    Subscription {
+        command: SubscriptionCommand,
+        reply: oneshot::Sender<Result<Revision, SubscriptionError>>,
+    },
+}
+
+/// Why a subscription command did not complete.
+#[derive(Clone, Debug, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum CommandError {
+    /// The owner refused the command; nothing changed.
+    Invalid(SubscriptionError),
+    /// The command mailbox (`B-TK-09`) is full; the command was not
+    /// submitted.
+    MailboxFull,
+    /// The ticker has ended.
+    Terminated(TerminalReason),
+}
+
+impl fmt::Display for CommandError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Invalid(e) => write!(f, "the command was refused: {e}"),
+            Self::MailboxFull => f.write_str("the command mailbox is full"),
+            Self::Terminated(r) => write!(f, "the ticker has ended: {r}"),
+        }
+    }
+}
+
+impl std::error::Error for CommandError {}
 
 struct Shared {
     status: watch::Sender<TickerStatus>,
@@ -567,6 +625,8 @@ impl TickerBuilder {
         let (status, status_rx) = watch::channel(TickerStatus {
             state: TickerState::Disconnected,
             connection_epoch: ConnectionEpoch(0),
+            desired_revision: Revision(0),
+            sent_revision: None,
             terminal: None,
             snapshot_revision: 0,
         });
@@ -578,7 +638,10 @@ impl TickerBuilder {
         let (commands_tx, commands) = mpsc::channel(self.limits.command_mailbox);
         let (events_tx, events_rx) = mpsc::channel(self.limits.queue_messages);
         let owner = Owner {
-            url,
+            url: Arc::new(url),
+            desired: DesiredSubscriptions::new(self.limits.max_instruments),
+            sent: None,
+            unsent: Vec::new(),
             limits: self.limits.clone(),
             sequencer: SourceSequencer::new(identity),
             shared: shared.clone(),
@@ -608,7 +671,7 @@ impl TickerBuilder {
             TickerHandle {
                 shared: shared.clone(),
                 status: status_rx,
-                _commands: commands_tx,
+                commands: commands_tx,
             },
             TickerEvents {
                 rx: events_rx,
@@ -630,7 +693,7 @@ impl TickerBuilder {
 pub struct TickerHandle {
     shared: Arc<Shared>,
     status: watch::Receiver<TickerStatus>,
-    _commands: mpsc::Sender<Command>,
+    commands: mpsc::Sender<Command>,
 }
 
 impl fmt::Debug for TickerHandle {
@@ -645,6 +708,87 @@ impl TickerHandle {
     /// The current status snapshot. Never waits on the data queue.
     pub fn status(&self) -> TickerStatus {
         self.status.borrow().clone()
+    }
+
+    /// Desire `tokens` in `mode`. A token already desired takes `mode`.
+    ///
+    /// Completes when the owner has accepted the command and assigned its
+    /// revision; that is not broker acknowledgement. See
+    /// [`crate::kite::ticker::actor::subscriptions`].
+    pub async fn subscribe(
+        &self,
+        tokens: impl IntoIterator<Item = InstrumentToken>,
+        mode: Mode,
+    ) -> Result<Revision, CommandError> {
+        self.command(SubscriptionCommand::Subscribe {
+            tokens: tokens.into_iter().collect(),
+            mode,
+        })
+        .await
+    }
+
+    /// Stop desiring `tokens`; tokens not desired are ignored.
+    pub async fn unsubscribe(
+        &self,
+        tokens: impl IntoIterator<Item = InstrumentToken>,
+    ) -> Result<Revision, CommandError> {
+        self.command(SubscriptionCommand::Unsubscribe {
+            tokens: tokens.into_iter().collect(),
+        })
+        .await
+    }
+
+    /// Change the mode of desired `tokens`. A token not desired is refused;
+    /// this never subscribes.
+    pub async fn set_mode(
+        &self,
+        tokens: impl IntoIterator<Item = InstrumentToken>,
+        mode: Mode,
+    ) -> Result<Revision, CommandError> {
+        self.command(SubscriptionCommand::SetMode {
+            tokens: tokens.into_iter().collect(),
+            mode,
+        })
+        .await
+    }
+
+    /// Replace the whole desired map atomically.
+    pub async fn replace(
+        &self,
+        desired: impl IntoIterator<Item = (InstrumentToken, Mode)>,
+    ) -> Result<Revision, CommandError> {
+        self.command(SubscriptionCommand::Replace {
+            desired: desired.into_iter().collect(),
+        })
+        .await
+    }
+
+    /// Submit `command` without waiting for mailbox room, then wait for the
+    /// owner's decision. Once submitted, dropping this future does not
+    /// withdraw the command; [`TickerStatus::desired_revision`] shows
+    /// whether it was applied.
+    pub async fn command(&self, command: SubscriptionCommand) -> Result<Revision, CommandError> {
+        let (reply, decision) = oneshot::channel();
+        self.commands
+            .try_send(Command::Subscription { command, reply })
+            .map_err(|e| match e {
+                mpsc::error::TrySendError::Full(_) => CommandError::MailboxFull,
+                mpsc::error::TrySendError::Closed(_) => self.terminated(),
+            })?;
+        match decision.await {
+            Ok(result) => result.map_err(CommandError::Invalid),
+            Err(_) => Err(self.terminated()),
+        }
+    }
+
+    fn terminated(&self) -> CommandError {
+        CommandError::Terminated(
+            self.status
+                .borrow()
+                .terminal
+                .clone()
+                .unwrap_or(TerminalReason::Aborted),
+        )
     }
 
     /// Request shutdown and wait until the owner has ended.
@@ -754,10 +898,17 @@ type Socket = WebSocketStream<MaybeTlsStream<TcpStream>>;
 pub(crate) struct Faults {
     /// Panic when this many raw observations have been delivered.
     pub(crate) panic_after: Option<usize>,
+    /// Fail every subscription write.
+    pub(crate) fail_sends: bool,
 }
 
 struct Owner {
-    url: Secret<String>,
+    url: Arc<Secret<String>>,
+    desired: DesiredSubscriptions,
+    // What the current connection was sent; `None` when not connected.
+    sent: Option<BTreeMap<InstrumentToken, Mode>>,
+    // Accepted revisions not yet written to a connection.
+    unsent: Vec<Revision>,
     limits: TickerLimits,
     sequencer: SourceSequencer,
     shared: Arc<Shared>,
@@ -855,33 +1006,6 @@ impl Owner {
         }
     }
 
-    async fn connect(&self) -> Result<Socket, TerminalReason> {
-        let config = WebSocketConfig {
-            max_message_size: Some(self.limits.max_payload),
-            max_frame_size: Some(self.limits.max_payload),
-            ..WebSocketConfig::default()
-        };
-        let attempt = tokio_tungstenite::connect_async_with_config(
-            self.url.expose_secret().as_str(),
-            Some(config),
-            true,
-        );
-        match tokio::time::timeout(self.limits.handshake_timeout, attempt).await {
-            Err(_) => Err(TerminalReason::HandshakeTimeout),
-            Ok(Ok((socket, _))) => Ok(socket),
-            // Only the status is kept: the error may carry the request URL,
-            // which holds the access token.
-            Ok(Err(tungstenite::Error::Http(response))) => {
-                let http_status = response.status().as_u16();
-                Err(match http_status {
-                    401 | 403 => TerminalReason::AuthRejected { http_status },
-                    _ => TerminalReason::HandshakeRejected { http_status },
-                })
-            }
-            Ok(Err(_)) => Err(TerminalReason::ConnectFailed),
-        }
-    }
-
     async fn connection(&mut self) -> (End, Option<Socket>) {
         self.sequencer.begin_epoch();
         self.state(TickerState::Connecting);
@@ -892,10 +1016,22 @@ impl Owner {
             return (end, None);
         }
         let shared = self.shared.clone();
-        let connected = tokio::select! {
-            biased;
-            _ = shared.stopped() => return (End::Shutdown, None),
-            r = self.connect() => r,
+        let attempt = connect(self.url.clone(), self.limits.clone());
+        tokio::pin!(attempt);
+        // Commands are accepted while connecting; restoration sends them.
+        let connected = loop {
+            tokio::select! {
+                biased;
+                _ = shared.stopped() => return (End::Shutdown, None),
+                _ = self.events.closed() => {
+                    return (End::Terminal(TerminalReason::ReceiverDropped), None)
+                }
+                command = self.commands.recv() => match command {
+                    None => return (End::Terminal(TerminalReason::HandlesDropped), None),
+                    Some(c) => self.on_command(c),
+                },
+                r = &mut attempt => break r,
+            }
         };
         let mut socket = match connected {
             Ok(socket) => socket,
@@ -910,13 +1046,18 @@ impl Owner {
                 return (End::Terminal(reason), None);
             }
         };
-        for kind in [
-            LifecycleKind::Connected,
-            LifecycleKind::Active { revision: 0 },
-        ] {
-            if let Err(end) = self.lifecycle(kind).await {
-                return (end, Some(socket));
-            }
+        if let Err(end) = self.lifecycle(LifecycleKind::Connected).await {
+            return (end, Some(socket));
+        }
+        // Restore the desired map before reporting `Active`.
+        self.state(TickerState::Restoring);
+        self.sent = Some(BTreeMap::new());
+        if let Err(end) = self.sync(&mut socket).await {
+            return (end, Some(socket));
+        }
+        let revision = self.desired.revision().0;
+        if let Err(end) = self.lifecycle(LifecycleKind::Active { revision }).await {
+            return (end, Some(socket));
         }
         self.state(TickerState::Active);
         loop {
@@ -926,7 +1067,17 @@ impl Owner {
                 _ = self.events.closed() => End::Terminal(TerminalReason::ReceiverDropped),
                 command = self.commands.recv() => match command {
                     None => End::Terminal(TerminalReason::HandlesDropped),
-                    Some(never) => match never {},
+                    Some(c) => {
+                        self.on_command(c);
+                        // Apply everything already queued, then send once.
+                        while let Ok(c) = self.commands.try_recv() {
+                            self.on_command(c);
+                        }
+                        match self.sync(&mut socket).await {
+                            Ok(()) => continue,
+                            Err(end) => end,
+                        }
+                    }
                 },
                 message = socket.next() => match self.receive(message).await {
                     Ok(()) => continue,
@@ -934,6 +1085,70 @@ impl Owner {
                 },
             };
             return (end, Some(socket));
+        }
+    }
+
+    // Decide a command: apply it whole or not at all, and reply. The reply
+    // is acceptance, not broker acknowledgement.
+    fn on_command(&mut self, command: Command) {
+        let Command::Subscription { command, reply } = command;
+        let result = self.desired.apply(&command).map(|(revision, changed)| {
+            if changed {
+                self.unsent.push(revision);
+                self.shared.update(|s| s.desired_revision = revision);
+            }
+            revision
+        });
+        // The caller may have stopped waiting; the decision stands.
+        let _ = reply.send(result);
+    }
+
+    // Bring the connection to the desired map: report superseded
+    // revisions, write the reconciling requests, then report the latest
+    // revision as sent or failed.
+    async fn sync(&mut self, socket: &mut Socket) -> Result<(), End> {
+        let Some(latest) = self.unsent.last().copied() else {
+            return Ok(());
+        };
+        for superseded in std::mem::take(&mut self.unsent) {
+            if superseded != latest {
+                self.lifecycle(LifecycleKind::Superseded {
+                    revision: superseded.0,
+                })
+                .await?;
+            }
+        }
+        let requests = reconcile(
+            self.sent.as_ref().unwrap_or(&BTreeMap::new()),
+            self.desired.map(),
+        );
+        let written = async {
+            for r in &requests {
+                socket.feed(Message::Text(r.to_string())).await?;
+            }
+            socket.flush().await
+        }
+        .await;
+        #[cfg(test)]
+        let written = if self.faults.fail_sends {
+            Err(tungstenite::Error::Io(
+                std::io::ErrorKind::BrokenPipe.into(),
+            ))
+        } else {
+            written
+        };
+        match written {
+            Ok(()) => {
+                self.sent = Some(self.desired.map().clone());
+                self.shared.update(|s| s.sent_revision = Some(latest));
+                self.lifecycle(LifecycleKind::CommandsSent { revision: latest.0 })
+                    .await
+            }
+            Err(e) => {
+                self.lifecycle(LifecycleKind::SendFailed { revision: latest.0 })
+                    .await?;
+                self.disconnected(classify(&e)).await
+            }
         }
     }
 
@@ -1084,6 +1299,33 @@ impl Owner {
     }
 }
 
+async fn connect(url: Arc<Secret<String>>, limits: TickerLimits) -> Result<Socket, TerminalReason> {
+    let config = WebSocketConfig {
+        max_message_size: Some(limits.max_payload),
+        max_frame_size: Some(limits.max_payload),
+        ..WebSocketConfig::default()
+    };
+    let attempt = tokio_tungstenite::connect_async_with_config(
+        url.expose_secret().as_str(),
+        Some(config),
+        true,
+    );
+    match tokio::time::timeout(limits.handshake_timeout, attempt).await {
+        Err(_) => Err(TerminalReason::HandshakeTimeout),
+        Ok(Ok((socket, _))) => Ok(socket),
+        // Only the status is kept: the error may carry the request URL,
+        // which holds the access token.
+        Ok(Err(tungstenite::Error::Http(response))) => {
+            let http_status = response.status().as_u16();
+            Err(match http_status {
+                401 | 403 => TerminalReason::AuthRejected { http_status },
+                _ => TerminalReason::HandshakeRejected { http_status },
+            })
+        }
+        Ok(Err(_)) => Err(TerminalReason::ConnectFailed),
+    }
+}
+
 fn classify(e: &tungstenite::Error) -> DisconnectReason {
     use tungstenite::error::ProtocolError;
     match e {
@@ -1137,21 +1379,71 @@ mod tests {
         assert_eq!(b.spawn().unwrap_err(), TickerSpawnError::NoRuntime);
     }
 
-    #[tokio::test]
-    async fn a_panicking_owner_is_reported_once_and_supervised() {
-        use tokio_tungstenite::tungstenite::Message;
+    // A server that sends `messages` after the handshake, then holds the
+    // connection open.
+    async fn serve(messages: usize) -> (String, tokio::task::JoinHandle<()>) {
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let addr = listener.local_addr().unwrap();
         let server = tokio::spawn(async move {
             let (tcp, _) = listener.accept().await.unwrap();
             let mut ws = tokio_tungstenite::accept_async(tcp).await.unwrap();
-            for _ in 0..3 {
+            for _ in 0..messages {
                 ws.send(Message::Binary(vec![0])).await.unwrap();
             }
             std::future::pending::<()>().await;
         });
-        let mut b =
-            TickerBuilder::new(Credentials::new("k", "t").unwrap()).url(format!("ws://{addr}"));
+        (format!("ws://{addr}"), server)
+    }
+
+    fn kinds(items: &[Result<TickerEvent, TickerError>]) -> Vec<String> {
+        items
+            .iter()
+            .map(|i| match i {
+                Ok(TickerEvent::Lifecycle(l)) => format!("{:?}", l.kind()),
+                Ok(TickerEvent::Raw(_)) => "raw".into(),
+                Err(e) => format!("err:{:?}", e.reason()),
+            })
+            .collect()
+    }
+
+    #[tokio::test]
+    async fn a_failed_restoration_write_never_reports_active() {
+        let (url, server) = serve(0).await;
+        let mut b = TickerBuilder::new(Credentials::new("k", "t").unwrap()).url(url);
+        b.faults.fail_sends = true;
+        let (handle, mut events, guard) = b.spawn().unwrap();
+        handle
+            .subscribe([InstrumentToken::new(1)], Mode::Full)
+            .await
+            .unwrap();
+        let mut items = Vec::new();
+        while let Some(i) = events.next().await {
+            items.push(i);
+        }
+        let kinds = kinds(&items);
+        assert!(
+            kinds.contains(&"SendFailed { revision: 1 }".to_string()),
+            "{kinds:?}"
+        );
+        assert!(!kinds.iter().any(|k| k.starts_with("Active")), "{kinds:?}");
+        assert!(
+            !kinds.iter().any(|k| k.starts_with("CommandsSent")),
+            "{kinds:?}"
+        );
+        assert_eq!(
+            guard.join().await,
+            TaskOutcome::Terminal(TerminalReason::Disconnected(
+                DisconnectReason::TransportError
+            ))
+        );
+        assert_eq!(handle.status().sent_revision, None);
+        server.abort();
+    }
+
+    #[tokio::test]
+    async fn a_panicking_owner_is_reported_once_and_supervised() {
+        let (url, server) = serve(3).await;
+        let mut b = TickerBuilder::new(Credentials::new("k", "t").unwrap()).url(url);
         b.faults.panic_after = Some(2);
         let (handle, mut events, guard) = b.spawn().unwrap();
         let mut raw = 0;

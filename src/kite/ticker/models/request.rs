@@ -120,6 +120,15 @@ impl TickerRequest {
         )
     }
 
+    /// A `mode` request: set `mode` for tokens already subscribed
+    /// (`kite-api-docs/docs/connect/v3/websocket.md:36-45`).
+    pub(crate) fn mode(mode: Mode, instrument_tokens: Vec<u32>) -> TickerRequest {
+        TickerRequest::new(
+            RequestActions::Mode,
+            RequestData::InstrumentTokensWithMode(mode, instrument_tokens),
+        )
+    }
+
     /// Creates a `TickerRequest` to unsubscribe from a list of instrument tokens.
     ///
     /// # Arguments
