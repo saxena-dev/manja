@@ -58,7 +58,9 @@ pub use order_enums::{
 /// Models for the `/portfolio/` API group, managing holdings and positions.
 ///
 mod portfolio;
-pub use portfolio::{Auction, Holding, Position, PositionConversionRequest};
+pub use portfolio::{
+    Auction, Holding, HoldingMtf, Position, PositionConversionRequest, PositionType, Positions,
+};
 
 /// Models for the `/instruments/` and `/quote/` API group, providing market data
 /// and instrument information.
@@ -66,7 +68,9 @@ pub use portfolio::{Auction, Holding, Position, PositionConversionRequest};
 mod market;
 pub(crate) use market::KiteQuote;
 #[allow(unused_imports)]
-pub use market::{FullQuote, Instrument, LTPQuote, OHLCQuote, QuoteMode};
+pub use market::{
+    Depth, DepthLevel, FullQuote, Instrument, InstrumentType, LTPQuote, OHLCQuote, QuoteMode, OHLC,
+};
 
 /// Models for the `/margins/` and `/charges/` API group, dealing with margin
 /// requirements and charges.
@@ -77,6 +81,10 @@ pub(crate) use margins::{
     BasketMargin, Charges, OrderCharges, OrderChargesRequest, OrderMargin, OrderMarginRequest, GST,
     PNL,
 };
+
+/// The partial order-update (postback) DTO, shared with the common protocol
+/// slice and the text decoder. It is the crate's only order-update type.
+pub use crate::kite::protocol::OrderUpdate;
 
 /// Enumerations for exchanges supported by Kite Connect API.
 mod exchange;

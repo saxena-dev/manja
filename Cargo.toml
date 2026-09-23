@@ -52,10 +52,6 @@ ticker = ["dep:futures-util", "dep:stubborn-io", "dep:tokio", "dep:tokio-tungste
 decoder = []
 
 [dev-dependencies]
-log = "0.4.22"
-mockito = "1.4.0"
-tokio-test = "0.4.2"
-futures = "0.3.30"
 # Re-hashes the vendored ticker corpus in tests/fixture_manifest.rs.
 sha2 = "0.10.8"
 # Paused-clock tests of admission windows and deadlines.
@@ -78,4 +74,8 @@ required-features = ["http"]
 
 [[test]]
 name = "http_scheduling"
+required-features = ["http"]
+
+[[test]]
+name = "http_reads"
 required-features = ["http"]

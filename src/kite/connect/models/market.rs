@@ -9,8 +9,10 @@
 //! processing trading instruments and their market data within the application.
 //!
 use crate::kite::connect::models::exchange::Exchange;
+use crate::kite::protocol::datetime::serde_opt_datetime;
+use crate::kite::protocol::InstrumentToken;
 
-use chrono::NaiveDate;
+use chrono::{DateTime, FixedOffset, NaiveDate};
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 
@@ -135,7 +137,7 @@ impl Instrument {
 
 /// Represents the OHLC (Open, High, Low, Close) data of a market instrument.
 ///
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[allow(clippy::upper_case_acronyms)] // Public name kept for compatibility.
 pub struct OHLC {
     /// Price at market opening.
@@ -153,7 +155,7 @@ pub struct OHLC {
 
 /// Represents a depth level in the order book for an instrument.
 ///
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct DepthLevel {
     /// Price at which the depth stands.
     pub price: f64,
@@ -167,7 +169,7 @@ pub struct DepthLevel {
 
 /// Represents the market depth for an instrument, including bid and ask levels.
 ///
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Depth {
     /// The bid levels.
     pub buy: Vec<DepthLevel>,
@@ -194,16 +196,18 @@ pub(crate) trait KiteQuote: DeserializeOwned {
 /// Represents a market quote for an instrument, including OHLC, volume, and
 /// market depth.
 ///
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct FullQuote {
-    /// The numerical identifier issued by the exchange representing the instrument.
-    pub instrument_token: u32,
+    /// Instrument token.
+    pub instrument_token: InstrumentToken,
 
-    /// The exchange timestamp of the quote packet.
-    pub timestamp: String,
+    /// The exchange timestamp of the quote (IST).
+    #[serde(default, with = "serde_opt_datetime")]
+    pub timestamp: Option<DateTime<FixedOffset>>,
 
-    /// Last trade timestamp.
-    pub last_trade_time: Option<String>,
+    /// Last trade timestamp (IST).
+    #[serde(default, with = "serde_opt_datetime")]
+    pub last_trade_time: Option<DateTime<FixedOffset>>,
 
     /// Last traded market price.
     pub last_price: f64,
@@ -261,10 +265,10 @@ impl KiteQuote for FullQuote {
 /// Represents an OHLC + LTP quote for an instrument, including OHLC, volume,
 /// and market depth.
 ///
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct OHLCQuote {
-    /// The numerical identifier issued by the exchange representing the instrument.
-    pub instrument_token: u32,
+    /// Instrument token.
+    pub instrument_token: InstrumentToken,
 
     /// Last traded market price.
     pub last_price: f64,
@@ -282,10 +286,10 @@ impl KiteQuote for OHLCQuote {
 /// Represents an LTP quote for an instrument, including OHLC, volume, and
 /// market depth.
 ///
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct LTPQuote {
-    /// The numerical identifier issued by the exchange representing the instrument.
-    pub instrument_token: u32,
+    /// Instrument token.
+    pub instrument_token: InstrumentToken,
 
     /// Last traded market price.
     pub last_price: f64,

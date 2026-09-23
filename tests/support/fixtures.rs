@@ -6,10 +6,9 @@
 // malformed fixture is an error naming the resolved path. Nothing here
 // downloads, skips, or substitutes a synthetic fixture.
 //
-// This file is shared by the library's unit tests (pulled into
-// `src/kite/connect/client.rs` with `include!`) and by the integration test
-// support crate, so it holds only items, has no inner attributes, and depends
-// only on `std`, `serde` and `serde_json`.
+// This file is shared by the integration test support crate and by test
+// crates that include it directly with `#[path]`, so it holds only items, has
+// no inner attributes, and depends only on `std`, `serde` and `serde_json`.
 
 use std::fmt;
 use std::path::{Path, PathBuf};

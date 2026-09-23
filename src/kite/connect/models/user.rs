@@ -11,38 +11,38 @@ use std::fmt;
 /// Represents the user's profile, including user ID, email, name, broker details,
 /// and products enabled.
 ///
-#[derive(Debug, Serialize, Deserialize, PartialEq)]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub struct UserProfile {
     /// The unique, permanent user id registered with the broker and the exchanges
-    user_id: String,
+    pub user_id: String,
     /// User's registered role at the broker. This will be individual for all retail users
-    user_type: String,
+    pub user_type: String,
     /// User's email
-    email: String,
+    pub email: String,
     /// User's real name
-    user_name: String,
+    pub user_name: String,
     /// Shortened version of the user's real name
-    user_shortname: String,
+    pub user_shortname: String,
     /// The broker ID
-    broker: String,
+    pub broker: String,
     /// Exchanges enabled for trading on the user's account
-    exchanges: Vec<String>,
+    pub exchanges: Vec<String>,
     /// Margin product types enabled for the user
-    products: Vec<String>,
+    pub products: Vec<String>,
     /// Order types enabled for the user
-    order_types: Vec<String>,
+    pub order_types: Vec<String>,
     /// Full URL to the user's avatar (PNG image) if there's one
-    avatar_url: Option<String>,
+    pub avatar_url: Option<String>,
     /// Additional metadata
-    meta: Meta,
+    pub meta: Meta,
 }
 
 /// Represents additional metadata associated with the user's profile.
 ///
-#[derive(Debug, Serialize, Deserialize, PartialEq)]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub struct Meta {
     /// Demat consent: empty, consent or physical
-    demat_consent: String,
+    pub demat_consent: String,
 }
 
 /// Represents the user's margins for equity and commodity segments.
@@ -50,7 +50,7 @@ pub struct Meta {
 /// This struct contains details about the user's funds, cash, and margin
 /// information for different segments.
 ///
-#[derive(Debug, Serialize, Deserialize, PartialEq)]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub struct UserMargins {
     /// Equity segment details
     pub equity: Option<Segment>,
@@ -61,7 +61,7 @@ pub struct UserMargins {
 /// Represents the details of a specific segment, including available and
 /// utilized balances.
 ///
-#[derive(Debug, Serialize, Deserialize, PartialEq)]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub struct Segment {
     /// Indicates whether the segment is enabled for the user
     pub enabled: bool,
@@ -76,7 +76,7 @@ pub struct Segment {
 
 /// Represents the available balance details within a segment.
 ///
-#[derive(Debug, Serialize, Deserialize, PartialEq)]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub struct Available {
     /// Raw cash balance in the account available for trading (also includes
     /// `intraday_payin`)
@@ -95,7 +95,7 @@ pub struct Available {
 
 /// Represents the utilized balance details within a segment.
 ///
-#[derive(Debug, Serialize, Deserialize, PartialEq)]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub struct Utilised {
     /// Sum of all utilised margins
     /// (unrealised M2M + realised M2M + SPAN + Exposure + Premium + Holding sales)
@@ -127,7 +127,7 @@ pub struct Utilised {
 
 /// Enum representing the different types of segments (commodity and equity).
 ///
-#[derive(Debug, Serialize, Deserialize, PartialEq)]
+#[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub enum SegmentKind {
     Commodity,
     Equity,
