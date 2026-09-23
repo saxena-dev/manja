@@ -148,6 +148,11 @@ path = "tests/decoder/main.rs"
 required-features = ["decoder"]
 
 [[test]]
+name = "observability_conformance"
+path = "tests/observability/main.rs"
+required-features = ["http", "ticker", "decoder"]
+
+[[test]]
 name = "public_surface"
 required-features = ["http", "ticker", "decoder"]
 
@@ -172,3 +177,10 @@ required-features = ["ticker", "decoder"]
 [[example]]
 name = "decode_offline"
 required-features = ["decoder"]
+
+# Observability overhead measurements (SDK contract §6.8); see
+# benches/overhead.rs.
+[[bench]]
+name = "overhead"
+harness = false
+required-features = ["http", "ticker", "decoder"]
