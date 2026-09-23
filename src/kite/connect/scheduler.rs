@@ -604,7 +604,6 @@ async fn acquire_observed(
 pub(crate) struct AttemptCtx {
     pub(crate) number: u32,
     pub(crate) token: DispatchToken,
-    pub(crate) dispatched: Arc<AtomicBool>,
 }
 
 /// One logical operation.
@@ -808,7 +807,6 @@ impl Scheduler {
                     },
                     slot: finisher.slot.clone(),
                 },
-                dispatched: dispatched.clone(),
             };
             let result = match tokio::time::timeout(attempt_timeout, attempt(attempt_ctx)).await {
                 Ok(r) => r,

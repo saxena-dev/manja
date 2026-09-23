@@ -135,3 +135,7 @@ required-features = ["decoder"]
 [[test]]
 name = "decoder_adapter"
 required-features = ["decoder"]
+
+[[test]]
+name = "public_surface"
+required-features = ["http", "ticker", "decoder"]

@@ -87,9 +87,8 @@ use tokio_tungstenite::{MaybeTlsStream, WebSocketStream};
 
 use crate::kite::connect::credentials::Credentials;
 use crate::kite::envelope::{
-    ConnectionEpoch, DisconnectReason, GapFacts, LifecycleEvent, LifecycleKind, PayloadKind,
-    RawObservation, ReceiveTime, SourceIdentity, SourceKey, SourceSequencer,
-    MAX_PAYLOAD_BYTES_LIMIT,
+    DisconnectReason, GapFacts, LifecycleEvent, LifecycleKind, PayloadKind, RawObservation,
+    ReceiveTime, SourceIdentity, SourceKey, SourceSequencer, MAX_PAYLOAD_BYTES_LIMIT,
 };
 use crate::kite::obs::handle::GaugeGuard;
 use crate::kite::obs::schema::{

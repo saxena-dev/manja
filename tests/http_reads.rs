@@ -123,7 +123,7 @@ async fn order_book_parses_documented_timestamps() {
     // Regression (arch §2, finding F12): records with valid offset-free
     // timestamps used to fail deserialization entirely.
     let h = serve("orders.json").await;
-    let mut c = client(&h.base_url());
+    let c = client(&h.base_url());
     let orders = c.orders().list_orders().await.unwrap().data.unwrap();
     assert_get(&only_request(&h), "/orders");
     assert_eq!(orders.len(), 10);
@@ -161,7 +161,7 @@ async fn order_book_parses_documented_timestamps() {
 #[tokio::test]
 async fn order_history_preserves_an_undocumented_status() {
     let h = serve("order_info.json").await;
-    let mut c = client(&h.base_url());
+    let c = client(&h.base_url());
     let history = c
         .orders()
         .get_order_history("171229000724687")
@@ -192,7 +192,7 @@ async fn order_history_preserves_an_undocumented_status() {
 #[tokio::test]
 async fn trade_book_and_order_trades() {
     let h = serve("trades.json").await;
-    let mut c = client(&h.base_url());
+    let c = client(&h.base_url());
     let trades = c.orders().list_trades().await.unwrap().data.unwrap();
     assert_get(&only_request(&h), "/trades");
     assert_eq!(trades.len(), 4);
@@ -208,7 +208,7 @@ async fn trade_book_and_order_trades() {
     ));
 
     let h = serve("order_trades.json").await;
-    let mut c = client(&h.base_url());
+    let c = client(&h.base_url());
     let trades = c
         .orders()
         .get_order_trades("200000000000000")
@@ -298,7 +298,7 @@ async fn a_malformed_timestamp_fails_visibly() {
         1,
     );
     let h = HttpHarness::start(vec![Reply::json(body)]).await;
-    let mut c = client(&h.base_url());
+    let c = client(&h.base_url());
     let err = c.orders().list_orders().await.unwrap_err();
     assert_eq!(err.as_http().unwrap().kind(), HttpErrorKind::Decode);
 }

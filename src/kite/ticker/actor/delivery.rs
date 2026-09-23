@@ -206,6 +206,7 @@ impl Sender {
     }
 
     /// Bytes charged to queued events.
+    #[cfg(test)]
     pub(crate) fn retained(&self) -> usize {
         lock(&self.shared).retained
     }

@@ -47,6 +47,7 @@ pub use user::{Available, Segment, SegmentKind, UserMargins, UserProfile, Utilis
 ///
 mod order;
 mod order_enums;
+#[cfg(feature = "http")]
 pub(crate) use order::check_order_id;
 pub use order::{ModifyOrderRequest, Order, OrderReceipt, PlaceOrderRequest, RequestError, Trade};
 #[allow(unused_imports)]

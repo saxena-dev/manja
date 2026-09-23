@@ -489,6 +489,8 @@ async fn invalid_urls_are_rejected_before_spawning() {
     }
 }
 
+// The legacy client is deprecated; this checks it still behaves as before.
+#[allow(deprecated)]
 #[tokio::test]
 async fn the_legacy_stream_still_connects_and_yields_raw_messages() {
     use manja::kite::ticker::{StreamState, WebSocketClient};

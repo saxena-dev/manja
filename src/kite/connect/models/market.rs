@@ -195,7 +195,19 @@ mod sealed {
 /// A quote type: [`FullQuote`], [`OHLCQuote`] or [`LTPQuote`].
 ///
 /// Sealed: each implementation is tied to one documented endpoint, so no
-/// other type can implement it.
+/// other type can implement it:
+///
+/// ```compile_fail
+/// use manja::kite::connect::models::{KiteQuote, QuoteMode};
+///
+/// #[derive(serde::Deserialize)]
+/// struct Mine;
+/// impl KiteQuote for Mine {
+///     fn mode() -> QuoteMode {
+///         unimplemented!()
+///     }
+/// }
+/// ```
 pub trait KiteQuote: DeserializeOwned + sealed::Sealed {
     /// The endpoint serving this quote type.
     fn mode() -> QuoteMode;

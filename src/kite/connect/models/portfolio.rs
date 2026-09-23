@@ -278,6 +278,7 @@ impl PositionConversionRequest {
     }
 
     /// Form fields in the documented order.
+    #[cfg_attr(not(feature = "http"), allow(dead_code))]
     pub(crate) fn form_pairs(&self) -> Vec<(&'static str, String)> {
         vec![
             ("tradingsymbol", self.tradingsymbol.clone()),

@@ -55,7 +55,6 @@
 //! the scheduler, never through a task-local or global. Labels are endpoint
 //! templates and closed outcome values only.
 //!
-use core::future::Future;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
@@ -68,7 +67,7 @@ use tracing::{Instrument as _, Span};
 use crate::kite::{
     connect::{
         admission::{Admission, RateClass},
-        api::{Charges, Margins, Market, Orders, Session, User},
+        api::{Charges, Margins, Market, Orders, Portfolio, Session, User},
         config::Config,
         credentials::{AccessToken, ApiKey, Credentials},
         models::{KiteApiResponse, UserSession},
@@ -419,8 +418,7 @@ impl HTTPClient {
         self.credentials.as_ref()
     }
 
-    /// HTTP configurations and Kite user credentials.
-    ///
+    /// The client's configuration: endpoints and limits.
     pub fn http_config(&self) -> &Config {
         &self.transport.config
     }
@@ -463,9 +461,12 @@ impl HTTPClient {
     }
 
     // --- [ API Groups ] ---
+    //
+    // Every accessor borrows the client immutably: a client is a shared,
+    // cloneable handle with no client-wide lock, so any number of
+    // resources may be used at once, from any task.
 
-    /// To call [User] related APIs using this client.
-    ///
+    /// The user resource: profile and funds.
     pub fn user(&self) -> User<'_> {
         User::new(self)
     }
@@ -477,27 +478,30 @@ impl HTTPClient {
         Session::new(self, api_key)
     }
 
-    /// To call [Orders] related APIs using this client.
-    ///
-    pub fn orders(&mut self) -> Orders<'_> {
+    /// The orders resource: placement, modification, cancellation and
+    /// order and trade books.
+    pub fn orders(&self) -> Orders<'_> {
         Orders::new(self)
     }
 
-    /// To call [Market] related APIs using this client.
-    ///
-    pub fn market(&mut self) -> Market<'_> {
+    /// The portfolio resource: holdings, positions, conversion and
+    /// auctions.
+    pub fn portfolio(&self) -> Portfolio<'_> {
+        Portfolio::new(self)
+    }
+
+    /// The market resource: quotes and the instrument master.
+    pub fn market(&self) -> Market<'_> {
         Market::new(self)
     }
 
-    /// To call [Margins] related APIs using this client.
-    ///
-    pub fn margins(&mut self) -> Margins<'_> {
+    /// The margin calculations.
+    pub fn margins(&self) -> Margins<'_> {
         Margins::new(self)
     }
 
-    /// To call [Charges] related APIs using this client.
-    ///
-    pub fn charges(&mut self) -> Charges<'_> {
+    /// The order-charges calculation.
+    pub fn charges(&self) -> Charges<'_> {
         Charges::new(self)
     }
 

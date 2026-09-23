@@ -1,10 +1,21 @@
-//! Asynchronous WebSocket client.
+//! The legacy WebSocket client. Deprecated.
 //!
-//! This module provides functionality for establishing and managing WebSocket
-//! connections to Kite Connect streaming API. It includes the `TickerStream`
-//! struct for handling the WebSocket stream and the `WebSocketClient` struct
-//! for managing the connection and interaction with the WebSocket.
+//! [`WebSocketClient`] connects with a [`StreamState`], sends that state's
+//! `mode` requests (not `subscribe` requests; see
+//! [`super::stream`]) and yields the `tungstenite` messages it receives,
+//! uninterpreted. Its item type is unchanged:
+//! `Result<tungstenite::Message, tungstenite::Error>`.
 //!
+//! It makes no readiness, reconnect or subscription-restoration
+//! guarantee. Polling reads the currently established socket directly, so
+//! a dropped connection surfaces as an error or the end of the stream; the
+//! wrapper's reconnection is not driven by polling, and nothing is
+//! re-sent. It is kept, with unchanged behavior, for existing callers
+//! during the migration. New code uses the actor ticker
+//! ([`crate::kite::ticker::actor`]).
+//!
+// The deprecated items are defined and used here.
+#![allow(deprecated)]
 use std::future::Future;
 use std::io;
 use std::pin::Pin;
@@ -19,11 +30,14 @@ use tokio_tungstenite::{MaybeTlsStream, WebSocketStream};
 use tracing::{debug, error, info};
 use tungstenite::client::IntoClientRequest;
 
-/// Represents a WebSocket stream to Kite Connect streaming API.
+/// The legacy client's socket and state. Deprecated.
 ///
-/// This struct holds the WebSocket stream and its state, allowing for interaction
-/// with the KiteConnect ticker API.
-///
+/// Its fields are public: the socket can be read and written from outside,
+/// so nothing about it is owned or guaranteed.
+#[deprecated(
+    since = "0.2.0",
+    note = "the legacy ticker makes no readiness, reconnect or restoration guarantee; use `manja::kite::ticker::actor::owner::TickerBuilder`"
+)]
 pub struct TickerStream {
     /// WebSocket stream
     pub ws_stream: WebSocketStream<MaybeTlsStream<TcpStream>>,
@@ -90,11 +104,11 @@ where
     }
 }
 
-/// Represents a WebSocket client for Kite Connect streaming API.
-///
-/// This struct manages the WebSocket connection and provides methods to
-/// interact with the WebSocket stream.
-///
+/// The legacy WebSocket client. Deprecated; see the module docs.
+#[deprecated(
+    since = "0.2.0",
+    note = "the legacy ticker makes no readiness, reconnect or restoration guarantee; use `manja::kite::ticker::actor::owner::TickerBuilder`"
+)]
 pub struct WebSocketClient(StubbornIo<TickerStream, StreamState>);
 
 impl WebSocketClient {
@@ -113,22 +127,22 @@ impl WebSocketClient {
     ///
     /// # Example
     ///
-    /// ```ignore
-    /// use futures_util::stream::StreamExt;
+    /// ```no_run
+    /// # #![allow(deprecated)]
+    /// use futures_util::StreamExt;
+    /// use manja::kite::ticker::{Mode, StreamState, WebSocketClient};
     ///
-    /// let stream_state = StreamState::from_credentials(stream_creds)
-    ///     .subscribe_token(Mode::Full, 408065)    // INFY
-    ///     .subscribe_token(Mode::Full, 884737);   // TATAMOTORS
-    /// if let Ok(mut ticker) = WebSocketClient::connect(stream_state).await {
-    ///     if let Some(maybe_msg) = ticker.next().await {
-    ///         match maybe_msg {
-    ///             Ok(msg) => info!("Message: {}", msg),
-    ///             Err(e) => error!("Error: {}", e),
-    ///         }
-    ///     }
+    /// # async fn run() -> std::io::Result<()> {
+    /// let state = StreamState::from_parts("wss://ws.kite.trade", "api_key", "access_token")
+    ///     .subscribe_token(Mode::Full, 408065);
+    /// let mut ticker = WebSocketClient::connect(state).await?;
+    /// while let Some(message) = ticker.next().await {
+    ///     // Uninterpreted tungstenite messages; nothing is re-sent after a
+    ///     // disconnect.
+    ///     let _ = message;
     /// }
+    /// # Ok(()) }
     /// ```
-    ///
     pub async fn connect(stream_state: StreamState) -> io::Result<Self> {
         match StubbornIo::connect(stream_state).await {
             Ok(stubborn) => Ok(WebSocketClient(stubborn)),

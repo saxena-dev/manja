@@ -1,18 +1,19 @@
-//! Credentials and stream state management capabilities.
+//! Legacy stream state for [`super::WebSocketClient`]. Deprecated.
 //!
-//! This module provides the functionality required to manage WebSocket streams
-//! for interacting with the Kite Connect API. It includes structures and methods
-//! to handle stream state, credentials, and subscriptions to instrument tokens
-//! for various modes.
+//! These types configure the legacy client: an endpoint, credentials and a
+//! map of modes to instrument tokens. The requests they produce on connect
+//! are `mode` actions ([`TickerRequest::set_mode`]), not `subscribe`
+//! actions, so tokens not already subscribed on the connection receive
+//! nothing. [`StreamState::from_credentials`] reads the endpoint from the
+//! `KITECONNECT_WSS_API_BASE` environment variable when it is set.
 //!
-//! The module is designed to facilitate real-time data streaming from the Kite
-//! Connect WebSocket API. It allows clients to subscribe to instrument tokens
-//! in different modes (such as Full, Quote, and LTP), manage their subscriptions,
-//! and handle the streaming of data efficiently.
+//! They are kept, with unchanged behavior, for existing callers during the
+//! migration. New code uses the actor ticker
+//! ([`crate::kite::ticker::actor`]), which subscribes before setting modes
+//! and restores its subscriptions on every reconnect.
 //!
-//! The module also provides utility functions and implementations to facilitate
-//! the connection to the WebSocket API and the handling of subscriptions.
-//!
+// The deprecated items are defined and used here.
+#![allow(deprecated)]
 use std::collections::HashMap;
 use std::pin::Pin;
 use std::task::{Context, Poll};
@@ -31,9 +32,12 @@ use super::models::TickerRequest;
 ///
 pub const KITECONNECT_WSS_API_BASE: &str = "wss://ws.kite.trade";
 
-/// Represents the credentials required to authenticate with Kite Connect WebSocket API.
-///
+/// Credentials for the legacy client. Deprecated.
 #[derive(Debug, Clone)]
+#[deprecated(
+    since = "0.2.0",
+    note = "the legacy ticker makes no readiness, reconnect or restoration guarantee; use `manja::kite::ticker::actor::owner::TickerBuilder`"
+)]
 pub struct KiteStreamCredentials {
     api_key: Secret<String>,
     access_token: Secret<String>,
@@ -50,7 +54,10 @@ impl KiteStreamCredentials {
     ///
     /// # Example
     ///
-    /// ```ignore
+    /// ```
+    /// # #![allow(deprecated)]
+    /// use manja::kite::ticker::KiteStreamCredentials;
+    ///
     /// let credentials = KiteStreamCredentials::from_parts("api_key", "access_token");
     /// ```
     pub fn from_parts<InS>(api_key: InS, access_token: InS) -> Self
@@ -91,9 +98,12 @@ type InstrumentToken = u32;
 /// for those instruments.
 type Subscription = HashMap<Mode, Vec<InstrumentToken>>;
 
-/// Represents the state of the WebSocket stream (connection).
-///
+/// Endpoint, credentials and mode map for the legacy client. Deprecated.
 #[derive(Debug, Clone)]
+#[deprecated(
+    since = "0.2.0",
+    note = "the legacy ticker makes no readiness, reconnect or restoration guarantee; use `manja::kite::ticker::actor::owner::TickerBuilder`"
+)]
 pub struct StreamState {
     // The base URL for Kite Connect WebSocket API.
     api_base: String,
@@ -115,8 +125,11 @@ impl StreamState {
     ///
     /// # Example
     ///
-    /// ```ignore
-    /// let stream_state = StreamState::from_parts("wss://ws.kite.trade", "api_key", "access_token");
+    /// ```
+    /// # #![allow(deprecated)]
+    /// use manja::kite::ticker::StreamState;
+    ///
+    /// let state = StreamState::from_parts("wss://ws.kite.trade", "api_key", "access_token");
     /// ```
     ///
     pub fn from_parts<InS>(api_base: InS, api_key: InS, access_token: InS) -> Self
@@ -138,9 +151,15 @@ impl StreamState {
     ///
     /// # Example
     ///
-    /// ```ignore
+    /// It reads the endpoint from `KITECONNECT_WSS_API_BASE` when that is
+    /// set, and otherwise uses `wss://ws.kite.trade`.
+    ///
+    /// ```
+    /// # #![allow(deprecated)]
+    /// use manja::kite::ticker::{KiteStreamCredentials, StreamState};
+    ///
     /// let credentials = KiteStreamCredentials::from_parts("api_key", "access_token");
-    /// let stream_state = StreamState::from_credentials(credentials);
+    /// let state = StreamState::from_credentials(credentials);
     /// ```
     ///
     pub fn from_credentials(credentials: KiteStreamCredentials) -> Self {
@@ -153,23 +172,13 @@ impl StreamState {
         }
     }
 
-    /// Converts the stream state to a subscription stream.
-    ///
-    /// # Returns
-    ///
-    /// A `SubscriptionStream` instance.
-    ///
-    /// # Example
-    ///
-    /// ```ignore
-    /// let subscription_stream = stream_state.to_subscription_stream();
-    /// ```
-    ///
+    /// The `mode` requests for the configured map; see the module docs.
     pub fn to_subcription_stream(self) -> SubscriptionStream {
         SubscriptionStream::with_subscription(&self.subscription)
     }
 
-    /// Subscribes to an instrument token with a specified mode.
+    /// Add `token` to the map under `mode`. On connect this becomes a
+    /// `mode` request, not a subscription.
     ///
     /// # Arguments
     ///
@@ -182,8 +191,12 @@ impl StreamState {
     ///
     /// # Example
     ///
-    /// ```ignore
-    /// let updated_state = stream_state.subscribe_token(Mode::Full, 12345);
+    /// ```
+    /// # #![allow(deprecated)]
+    /// use manja::kite::ticker::{Mode, StreamState};
+    ///
+    /// let state = StreamState::from_parts("wss://ws.kite.trade", "k", "t")
+    ///     .subscribe_token(Mode::Full, 408065);
     /// ```
     ///
     pub fn subscribe_token(mut self, mode: Mode, token: u32) -> Self {
@@ -195,18 +208,8 @@ impl StreamState {
         self
     }
 
-    /// Converts the stream state to a URI string.
-    ///
-    /// # Returns
-    ///
-    /// A `String` representing the URI.
-    ///
-    /// # Example
-    ///
-    /// ```ignore
-    /// let uri = stream_state.to_uri();
-    /// ```
-    ///
+    /// The connection URI. It contains the access token: keep it out of
+    /// logs.
     pub fn to_uri(&self) -> String {
         format!("{}?{}", self.api_base, self.credentials.to_query_params())
     }
@@ -218,11 +221,8 @@ impl IntoClientRequest for StreamState {
     }
 }
 
-/// Represents a stream of subscriptions to instrument tokens for different modes.
-///
-/// The `SubscriptionStream` struct handles iterating over the subscribed modes
-/// and their corresponding instrument tokens, generating WebSocket messages for
-/// each subscription.
+/// The `mode` requests the legacy client sends on connect, one per mode.
+/// Deprecated. Despite the name, these are not subscriptions.
 ///
 /// # Role of `current_key_idx` field
 ///
@@ -253,6 +253,10 @@ impl IntoClientRequest for StreamState {
 /// stream by processing each mode sequentially and appropriately signaling when
 /// the stream is complete or pending.
 ///
+#[deprecated(
+    since = "0.2.0",
+    note = "the legacy ticker makes no readiness, reconnect or restoration guarantee; use `manja::kite::ticker::actor::owner::TickerBuilder`"
+)]
 pub struct SubscriptionStream {
     /// A mapping of modes to their respective instrument tokens.
     ///
@@ -340,8 +344,8 @@ impl Stream for SubscriptionStream {
             this.current_key_idx += 1;
 
             // Create a `TickerRequest` for the current mode and tokens
-            let ticker_request =
-                TickerRequest::subscribe_with_mode(tokens.clone(), current_key.clone());
+            // A mode action, as this legacy client always sent.
+            let ticker_request = TickerRequest::set_mode(tokens.clone(), current_key.clone());
 
             // Serialize the `TickerRequest` to JSON and wrap it in a `Message::Text`
             match serde_json::to_string(&ticker_request) {

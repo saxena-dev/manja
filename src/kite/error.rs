@@ -176,6 +176,7 @@ pub struct BrokerError {
     message: Option<BoundedText>,
 }
 
+#[cfg_attr(not(feature = "http"), allow(dead_code))]
 impl BrokerError {
     pub(crate) fn new(error_type: Option<&str>, message: Option<&str>) -> Self {
         Self {
@@ -225,6 +226,7 @@ struct HttpErrorInner {
     source: Option<Box<dyn std::error::Error + Send + Sync>>,
 }
 
+#[cfg_attr(not(feature = "http"), allow(dead_code))]
 impl HttpError {
     pub(crate) fn new(
         kind: HttpErrorKind,

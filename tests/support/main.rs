@@ -5,6 +5,10 @@
 //! Every negative input below is synthetic unless it is named as an official
 //! `kiteconnect-mocks/` fixture; each one states what it was derived from.
 
+// Two tests drive the deprecated legacy ticker, which stays supported
+// during the migration.
+#![allow(deprecated)]
+
 #[path = "mod.rs"]
 mod support;
 

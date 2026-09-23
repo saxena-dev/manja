@@ -33,7 +33,7 @@ async fn a_refused_admission_sends_nothing() {
             .unwrap(),
     );
     let config = Config::from_parts(&*base, &*base, &*base, KiteCredentials::new("", "", "", ""));
-    let mut client = HTTPClient::builder(config)
+    let client = HTTPClient::builder(config)
         .admission(admission)
         .credentials(Credentials::new("k", "t").unwrap())
         .build()

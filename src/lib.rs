@@ -1,101 +1,72 @@
 //! > **Manja** (IPA: /maːŋdʒʱaː/) n.: A type of abrasive string utilized primarily for flying fighter kites, especially prevalent in South Asian countries. It is crafted by coating cotton string with powdered glass or a similar abrasive substance.
 //!
-//! An asynchronous client library for [Zerodha](https://zerodha.com/)'s [Kite Connect](https://kite.trade/)
-//! trading APIs (a set of REST-like HTTP APIs).
+//! An asynchronous client library for [Zerodha](https://zerodha.com/)'s
+//! [Kite Connect](https://kite.trade/) HTTP and WebSocket APIs.
 //!
-//! # `manja` Features
+//! # Slices
 //!
-//! - **Type safe**
-//!    - *Compile-time Type Checking*: type safety ensures that errors related to type mismatches are caught during compilation rather than at runtime.
-//!    - *Consistent Data Models*: `manja` uses strongly typed data models that match Kite Connect API's expected inputs and outputs.
-//!    - *Enhanced Security*: by ensuring that only valid data types are sent to and received from the API, the risk of data-related vulnerabilities is reduced.
-//!    - *Automatic Serialization/Deserialization*: `manja` handles the serialization (converting data structures to JSON) and deserialization (converting JSON responses back to data structures) automatically and correctly. This ensures that the data sent to and received from Kite Connect API adheres to the expected types.
-//!    
-//! - **Asynchronous**: built on the performant `tokio` async-runtime, `manja` delivers unmatched performance, ensuring your applications run faster and more efficiently than ever before.
-//!    - *Resource Efficiency*: maximize the use of your system's resources. `manja`'s asynchronous nature allows for optimal resource management, reducing overhead and improving overall performance.
-//!    - *Concurrent Task Handling*: manage multiple tasks simultaneously without sacrificing performance or reliability.
-//!    - *Improved latency*: experience reduced latency and faster response times, ensuring your applications are always responsive.
+//! | Feature | Module | What it gives |
+//! |---|---|---|
+//! | `http` | [`kite::connect`] | [`HTTPClient`](kite::connect::client::HTTPClient) and its resources, with explicit credentials, admission against the documented quotas, bounded deadlines and one-attempt mutations, and total response classification |
+//! | `ticker` | [`kite::ticker`] | a supervised single-owner ticker that delivers raw observations and lifecycle events in source order, restores its desired subscriptions on every bounded reconnect, and stops on credential rejection |
+//! | `decoder` | [`kite::decoder`] | a pure, bounded parser of binary and text ticker messages, and a provenance adapter |
 //!
-//! - **Distributed Logging**: stay ahead of issues with real-time distributed logging using the `tracing` crate.
-//!    - *Streamline Development*: facilitate smoother development cycles with better debugging and faster issue resolution.
-//!    - *Reduce Downtime*: with real-time insights and quick access to logs, identify and resolve issues faster, minimizing downtime.
-//!    - *Enhance User Experience*: quickly address errors and performance bottlenecks to provide a better experience for your users.
+//! [`kite::envelope`], [`kite::obs`], [`kite::protocol`] and
+//! [`kite::error`] are always available. With `ticker` and `decoder`
+//! together, [`kite::ticker::typed`] decodes the ticker's observations as
+//! they pass, alongside the raw ones.
 //!
-//! - **WebSocket** support for streaming binary market data.
-//!    - *Auto-reconnect Mechanism*: `manja` provides a reliable and stateful async WebSocket client with a configurable exponential backoff retry mechanism.
+//! What the SDK does not do: it never logs in on your behalf, stores or
+//! refreshes credentials, persists observations, or decides whether data is
+//! fresh enough to trade on. `Active` means the desired subscriptions were
+//! written to a connection, not that quotes are current. Delivery ends with a
+//! terminal error, never silently.
 //!
-//! - **WebDriver** integration for retrieving `request token` from the redirect URL after successfully authenticating with the Kite platform.
+//! # Example
 //!
-//! # Example:
-//! ```ignore
-//! use std::error::Error;
-//!
-//! mod kite;
-//! use kite::connect::client::HTTPClient;
-//!
-//! use kite::login::flow::browser_login_flow;
-//! use kite::ticker::{client::WebSocketClient, models::Mode};
-//! use kite::ticker::{KiteStreamCredentials, StreamState};
-//! use kite::traits::KiteLoginFlow;
-//!
+//! ```no_run
+//! # #[cfg(all(feature = "http", feature = "ticker"))]
+//! # mod example {
 //! use futures_util::StreamExt;
+//! use manja::kite::connect::client::HTTPClient;
+//! use manja::kite::connect::config::Config;
+//! use manja::kite::connect::credentials::Credentials;
+//! use manja::kite::protocol::InstrumentToken;
+//! use manja::kite::ticker::actor::owner::{TickerBuilder, TickerEvent};
+//! use manja::kite::ticker::Mode;
 //!
-//! use tokio;
-//! use tracing::{error, info};
-//! use tungstenite::client::IntoClientRequest;
+//! # pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
+//! // Credentials come from your own login flow and storage.
+//! let credentials = Credentials::new("api_key", "access_token")?;
 //!
-//! #[tokio::main]
-//! async fn main() -> Result<(), Box<dyn Error>> {
-//!     // Setup tracing
-//!     tracing_subscriber::fmt()
-//!         .with_max_level(tracing::Level::INFO)
-//!         .init();
+//! // HTTP: one client, shared by clones.
+//! let client = HTTPClient::new(Config::default())?.with_credentials(credentials.clone());
+//! let profile = client.user().profile().await?;
+//! let holdings = client.portfolio().get_holdings().await?;
+//! # let _ = (profile, holdings);
 //!
-//!     // Load env vars
-//!     dotenv::dotenv().ok();
-//!
-//!     // Create a default HTTPClient
-//!     let mut manja_client = HTTPClient::default();
-//!
-//!     let session = manja_client.session();
-//!
-//!     // Login flow I: request token
-//!     let request_token = session.gen_request_token(browser_login_flow).await?;
-//!
-//!     // Login flow II: user session
-//!     let kite_session = manja_client
-//!         .session()
-//!         .generate_session(&request_token)
-//!         .await?;
-//!
-//!     let stream_creds = KiteStreamCredentials::from(kite_session.data.unwrap());
-//!     let stream_state = StreamState::from_credentials(stream_creds)
-//!         // INFY
-//!         .subscribe_token(Mode::Full, 408065)
-//!         // TATAMOTORS
-//!         .subscribe_token(Mode::Full, 884737);
-//!     
-//!
-//!     info!(
-//!         "StreamState = {:?}",
-//!         stream_state.clone().into_client_request()
-//!     );
-//!
-//!     if let Ok(mut ticker) = WebSocketClient::connect(stream_state).await {
-//!         for _ in 0..120 {
-//!             tokio::time::sleep(std::time::Duration::from_millis(500)).await;
-//!             if let Some(maybe_msg) = ticker.next().await {
-//!                 match maybe_msg {
-//!                     Ok(msg) => info!("Message: {}", msg),
-//!                     Err(e) => error!("Error: {}", e),
-//!                 }
-//!             }
+//! // Ticker: one owner task; commands and status through the handle.
+//! let (handle, mut events, guard) = TickerBuilder::new(credentials).spawn()?;
+//! handle.subscribe([InstrumentToken::new(408065)], Mode::Full).await?;
+//! while let Some(item) = events.next().await {
+//!     match item? {
+//!         TickerEvent::Raw(observation) => {
+//!             let _bytes = observation.payload().as_bytes();
 //!         }
+//!         TickerEvent::Lifecycle(event) => {
+//!             let _what = event.kind();
+//!         }
+//!         _ => {}
 //!     }
-//!
-//!     Ok(())
 //! }
+//! let _outcome = guard.join().await;
+//! # Ok(()) }
+//! # }
 //! ```
+//!
+//! The legacy `kite::login` browser flow and the legacy
+//! [`WebSocketClient`](kite::ticker::WebSocketClient) remain during the
+//! migration; the legacy ticker is deprecated.
 //!
 //! # Disclaimer
 //!
@@ -105,6 +76,5 @@
 //!
 //! * The software is provided "as-is" without any warranties, express or implied. The author and contributors of this SDK do not take responsibility for any financial losses, damages, or other issues that may arise from the use of this project.
 #![warn(rust_2018_idioms)]
-#![allow(private_interfaces, unused)]
 
 pub mod kite;

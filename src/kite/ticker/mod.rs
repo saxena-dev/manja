@@ -33,16 +33,20 @@
 // status.
 pub mod actor;
 
+// Typed events: the actor ticker composed with the decoder.
+#[cfg(feature = "decoder")]
+pub mod typed;
+
 // Contains the `WebSocketClient` and `TickerStream` structs, which are used to
 // connect to the WebSocket API and handle data streaming.
 mod client;
-#[allow(unused_imports)]
+#[allow(deprecated)]
 pub use client::{TickerStream, WebSocketClient};
 
 // Defines the structures for managing the stream state and credentials, including
 // `KiteStreamCredentials` and `StreamState`.
 mod stream;
-#[allow(unused_imports)]
+#[allow(deprecated)]
 pub use stream::{KiteStreamCredentials, StreamState};
 
 // Contains data models and request types like `Mode` and `TickerRequest` used

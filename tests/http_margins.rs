@@ -99,7 +99,7 @@ async fn order_margins_are_arrays_in_and_out() {
         fixtures::json_body("order_margins.json").unwrap(),
     )])
     .await;
-    let mut c = client_with(&h.base_url(), fast());
+    let c = client_with(&h.base_url(), fast());
     let margins = c
         .margins()
         .orders(&[infy_market()])
@@ -138,7 +138,7 @@ async fn basket_margins_preserve_initial_final_and_per_order_entries() {
         fixtures::json_body("basket_margins.json").unwrap(),
     )])
     .await;
-    let mut c = client_with(&h.base_url(), fast());
+    let c = client_with(&h.base_url(), fast());
     let orders = [
         nifty("NIFTY23JUL20600CE", TransactionType::SELL),
         nifty("NIFTY23JUL20700CE", TransactionType::BUY),
@@ -171,7 +171,7 @@ async fn basket_without_positions_sets_the_query_flag() {
         fixtures::json_body("basket_margins.json").unwrap(),
     )])
     .await;
-    let mut c = client_with(&h.base_url(), fast());
+    let c = client_with(&h.base_url(), fast());
     c.margins().basket(&[infy_market()], false).await.unwrap();
     assert_eq!(only(&h).target, "/margins/basket?consider_positions=false");
 }
@@ -182,7 +182,7 @@ async fn virtual_contract_note_is_order_wise() {
         fixtures::json_body("virtual_contract_note.json").unwrap(),
     )])
     .await;
-    let mut c = client_with(&h.base_url(), fast());
+    let c = client_with(&h.base_url(), fast());
     let charges = c
         .charges()
         .orders(&[charges_request()])
@@ -216,7 +216,7 @@ async fn virtual_contract_note_is_order_wise() {
 #[tokio::test]
 async fn empty_and_invalid_requests_send_nothing() {
     let h = HttpHarness::start(vec![]).await;
-    let mut c = client_with(&h.base_url(), fast());
+    let c = client_with(&h.base_url(), fast());
     let empty: [OrderMarginRequest; 0] = [];
     let errs = [
         c.margins().orders(&empty).await.unwrap_err(),
@@ -252,7 +252,7 @@ async fn empty_and_invalid_requests_send_nothing() {
 async fn an_oversized_request_body_is_rejected_before_admission() {
     let h = HttpHarness::start(vec![]).await;
     let limits = fast().with_request_body_bytes(1024).unwrap();
-    let mut c = client_with(&h.base_url(), limits);
+    let c = client_with(&h.base_url(), limits);
     let orders: Vec<_> = (0..20).map(|_| infy_market()).collect();
     let err = c.margins().orders(&orders).await.unwrap_err();
     assert_eq!(err.as_http().unwrap().kind(), HttpErrorKind::Validation);
@@ -269,7 +269,7 @@ async fn malformed_and_partial_responses_are_errors_not_fabrications() {
     let no_orders = r#"{"status":"success","data":{"initial":null}}"#.to_string();
     for body in [partial, no_orders] {
         let h = HttpHarness::start(vec![Reply::json(body)]).await;
-        let mut c = client_with(&h.base_url(), fast());
+        let c = client_with(&h.base_url(), fast());
         let err = c
             .margins()
             .basket(&[infy_market()], true)
@@ -290,7 +290,7 @@ async fn calculations_are_retried_as_read_like() {
         Reply::json(fixtures::json_body("order_margins.json").unwrap()),
     ])
     .await;
-    let mut c = client_with(&h.base_url(), fast());
+    let c = client_with(&h.base_url(), fast());
     c.margins().orders(&[infy_market()]).await.unwrap();
     assert_eq!(h.requests().len(), 2, "one documented transient retry");
 }

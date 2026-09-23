@@ -250,7 +250,7 @@ pub fn reconcile(
             .map(|(t, _)| *t)
             .collect();
         if !tokens.is_empty() {
-            out.push(TickerRequest::mode(mode, raw(tokens)));
+            out.push(TickerRequest::set_mode(raw(tokens), mode));
         }
     }
     out

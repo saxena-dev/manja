@@ -333,6 +333,5 @@ pub(crate) fn rejection(e: &SubscriptionError) -> &'static str {
         SubscriptionError::ConflictingModes { .. } => "conflicting_modes",
         SubscriptionError::NotDesired { .. } => "not_desired",
         SubscriptionError::CapacityExceeded { .. } => "capacity_exceeded",
-        _ => "other",
     }
 }

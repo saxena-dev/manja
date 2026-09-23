@@ -260,6 +260,7 @@ fn check_market_protection(p: Option<f64>) -> Result<(), RequestError> {
 
 /// Validate an order ID used in a request path: 1 to 64 ASCII letters or
 /// digits, so it can never alter the path or query.
+#[cfg_attr(not(feature = "http"), allow(dead_code))]
 pub(crate) fn check_order_id(order_id: &str) -> Result<(), RequestError> {
     if order_id.is_empty()
         || order_id.len() > 64
@@ -270,6 +271,7 @@ pub(crate) fn check_order_id(order_id: &str) -> Result<(), RequestError> {
     Ok(())
 }
 
+#[cfg_attr(not(feature = "http"), allow(dead_code))]
 fn push<T: std::fmt::Display>(
     pairs: &mut Vec<(&'static str, String)>,
     k: &'static str,
@@ -456,6 +458,7 @@ impl PlaceOrderRequest {
     }
 
     /// Form fields in a fixed order.
+    #[cfg_attr(not(feature = "http"), allow(dead_code))]
     pub(crate) fn form_pairs(&self) -> Vec<(&'static str, String)> {
         let mut p = vec![
             ("tradingsymbol", self.tradingsymbol.clone()),
@@ -554,6 +557,7 @@ impl ModifyOrderRequest {
     }
 
     /// Form fields in a fixed order.
+    #[cfg_attr(not(feature = "http"), allow(dead_code))]
     pub(crate) fn form_pairs(&self) -> Vec<(&'static str, String)> {
         let mut p = Vec::new();
         push(&mut p, "order_type", self.order_type);

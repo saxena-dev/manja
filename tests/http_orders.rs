@@ -199,7 +199,7 @@ async fn position_conversion_is_form_encoded() {
 #[tokio::test]
 async fn invalid_requests_are_rejected_before_any_transport() {
     let h = HttpHarness::start(vec![]).await;
-    let mut c = client(&h.base_url());
+    let c = client(&h.base_url());
     let mut cases: Vec<(&str, PlaceOrderRequest)> = Vec::new();
     let mut r = limit_buy();
     r.price = None;
@@ -359,7 +359,7 @@ async fn a_malformed_acknowledgement_is_evidence_not_success() {
 #[tokio::test]
 async fn a_permit_separates_admission_from_dispatch() {
     let h = serve("order_response.json").await;
-    let mut c = client(&h.base_url());
+    let c = client(&h.base_url());
     let permit = c.admit(PermitTarget::PlaceOrder).await.unwrap();
     // The caller's own checks run here; nothing has been sent.
     assert!(h.requests().is_empty());
@@ -373,7 +373,7 @@ async fn a_permit_separates_admission_from_dispatch() {
 #[tokio::test]
 async fn a_mismatched_or_expired_permit_cannot_start_transport() {
     let h = HttpHarness::start(vec![]).await;
-    let mut c = client_with(
+    let c = client_with(
         &h.base_url(),
         SchedulerLimits::default()
             .with_permit_validity(Duration::from_millis(20))

@@ -34,6 +34,12 @@
 //! assert!(obs.clone().is_recording());
 //! ```
 //!
+// The recording helpers are used by the http, ticker and decoder slices,
+// each a different subset of them.
+#![cfg_attr(
+    not(all(feature = "http", feature = "ticker", feature = "decoder")),
+    allow(dead_code)
+)]
 use std::collections::{BTreeMap, VecDeque};
 use std::fmt;
 use std::sync::atomic::{AtomicI64, AtomicU64, Ordering};
@@ -468,6 +474,7 @@ impl GaugeGuard {
     }
 
     /// Add `delta` to this contributor's value.
+    #[cfg(test)]
     pub(crate) fn add(&self, delta: i64) {
         self.value.fetch_add(delta, Ordering::Relaxed);
         self.obs.adjust(self.labels, delta);
