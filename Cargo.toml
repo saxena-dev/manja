@@ -131,3 +131,7 @@ required-features = ["decoder"]
 [[test]]
 name = "decoder_text"
 required-features = ["decoder"]
+
+[[test]]
+name = "decoder_adapter"
+required-features = ["decoder"]

@@ -236,6 +236,10 @@ pub enum DecodeDiagnosticKind {
     InvalidText,
     /// A text message had a type this build does not know.
     UnknownTextType,
+    /// A packet field held a value its documented type cannot have, such
+    /// as a negative quantity. An additive kind beside the contract's
+    /// seven.
+    InvalidField,
 }
 
 impl DecodeDiagnosticKind {
@@ -248,6 +252,7 @@ impl DecodeDiagnosticKind {
         Self::Oversized,
         Self::InvalidText,
         Self::UnknownTextType,
+        Self::InvalidField,
     ];
 
     /// Stable name.
@@ -260,6 +265,7 @@ impl DecodeDiagnosticKind {
             Self::Oversized => "oversized",
             Self::InvalidText => "invalid_text",
             Self::UnknownTextType => "unknown_text_type",
+            Self::InvalidField => "invalid_field",
         }
     }
 }
