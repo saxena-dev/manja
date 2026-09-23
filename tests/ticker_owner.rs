@@ -13,6 +13,7 @@ use std::time::Duration;
 use futures_util::StreamExt;
 use manja::kite::connect::credentials::Credentials;
 use manja::kite::envelope::{ConnectionEpoch, DisconnectReason, PayloadKind};
+use manja::kite::ticker::actor::lifecycle::ReconnectLimits;
 use manja::kite::ticker::actor::owner::{
     TaskOutcome, TerminalReason, TickerBuilder, TickerError, TickerEvent, TickerEvents,
     TickerLimits, TickerSpawnError, TickerState,
@@ -152,11 +153,25 @@ async fn raw_messages_arrive_in_source_order_before_any_decoding_and_shutdown_is
     assert!(!rendered.contains(TOKEN), "{rendered}");
 }
 
+fn one_attempt() -> ReconnectLimits {
+    ReconnectLimits::default().with_attempts(1).unwrap()
+}
+
+fn exhausted(last: TerminalReason) -> TerminalReason {
+    TerminalReason::ReconnectExhausted {
+        attempts: 1,
+        last: Box::new(last),
+    }
+}
+
 async fn terminal_run(
     connections: Vec<WsConnection>,
     limits: TickerLimits,
 ) -> (Vec<String>, TaskOutcome, TickerState, u64, usize) {
     let h = WsHarness::start(connections).await;
+    // One attempt: these cases are about how a single connection ends;
+    // reconnecting is covered by ticker_lifecycle.
+    let limits = limits.with_reconnect(one_attempt());
     let (handle, mut events, guard) = builder(&h.url()).limits(limits).spawn().unwrap();
     let items: Vec<String> = drain(&mut events).await.iter().map(describe).collect();
     // Reported once: nothing after the terminal error.
@@ -213,7 +228,7 @@ async fn a_rejected_handshake_is_terminal_once_with_one_attempt() {
         TickerLimits::default(),
     )
     .await;
-    let reason = TerminalReason::HandshakeRejected { http_status: 500 };
+    let reason = exhausted(TerminalReason::HandshakeRejected { http_status: 500 });
     assert_eq!(
         items,
         [
@@ -237,7 +252,7 @@ async fn connection_ends_are_explicit_terminal_states() {
             TickerLimits::default(),
         )
         .await;
-        let terminal = TerminalReason::Disconnected(reason);
+        let terminal = exhausted(TerminalReason::Disconnected(reason));
         assert_eq!(
             items,
             [
@@ -274,9 +289,9 @@ async fn a_message_over_the_payload_bound_fails_the_connection() {
     assert!(!items.iter().any(|i| i.starts_with("raw:")));
     assert_eq!(
         outcome,
-        TaskOutcome::Terminal(TerminalReason::Disconnected(
+        TaskOutcome::Terminal(exhausted(TerminalReason::Disconnected(
             DisconnectReason::ProtocolError
-        ))
+        )))
     );
 }
 
@@ -284,18 +299,16 @@ async fn a_message_over_the_payload_bound_fails_the_connection() {
 async fn a_server_lost_mid_handshake_or_stalled_is_an_explicit_failure_with_a_fresh_epoch() {
     // No script: the harness closes the connection before the handshake.
     let (items, outcome, state, epoch, _) = terminal_run(vec![], TickerLimits::default()).await;
+    let reason = exhausted(TerminalReason::ConnectFailed);
     assert_eq!(
         items,
         [
-            "ConnectAttempt { attempt: 1 }",
-            "Failed",
-            "err:ConnectFailed"
+            "ConnectAttempt { attempt: 1 }".to_string(),
+            "Failed".into(),
+            format!("err:{reason:?}")
         ]
     );
-    assert_eq!(
-        outcome,
-        TaskOutcome::Terminal(TerminalReason::ConnectFailed)
-    );
+    assert_eq!(outcome, TaskOutcome::Terminal(reason));
     assert_eq!((state, epoch), (TickerState::Failed, 1));
 
     // A peer that accepts TCP and never answers the upgrade.
@@ -307,16 +320,15 @@ async fn a_server_lost_mid_handshake_or_stalled_is_an_explicit_failure_with_a_fr
     });
     let limits = TickerLimits::default()
         .with_handshake_timeout(Duration::from_secs(1))
-        .unwrap();
+        .unwrap()
+        .with_reconnect(one_attempt());
     let started = tokio::time::Instant::now();
     let (handle, mut events, guard) = builder(&url).limits(limits).spawn().unwrap();
     let items: Vec<String> = drain(&mut events).await.iter().map(describe).collect();
-    assert_eq!(items.last().unwrap(), "err:HandshakeTimeout");
+    let reason = exhausted(TerminalReason::HandshakeTimeout);
+    assert_eq!(items.last().unwrap(), &format!("err:{reason:?}"));
     assert!(started.elapsed() < Duration::from_secs(3));
-    assert_eq!(
-        guard.join().await,
-        TaskOutcome::Terminal(TerminalReason::HandshakeTimeout)
-    );
+    assert_eq!(guard.join().await, TaskOutcome::Terminal(reason));
     assert_eq!(handle.status().connection_epoch, ConnectionEpoch(1));
     hold.abort();
 }

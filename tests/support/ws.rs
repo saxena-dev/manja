@@ -31,6 +31,8 @@ pub enum Step {
     /// Close/EOF: drop the TCP connection without a close frame. A client that
     /// keeps sending afterwards observes a send failure.
     Eof,
+    /// Pause before the next step, still recording client messages.
+    Wait(std::time::Duration),
 }
 
 /// The script for one connection. If `steps` does not end in [`Step::Close`] or
@@ -169,6 +171,7 @@ async fn serve(stream: TcpStream, connection: WsConnection, recorded: Arc<Mutex<
                 let _ = sink.send(Message::Close(None)).await;
                 return;
             }
+            Step::Wait(d) => tokio::time::sleep(d).await,
             Step::Eof => {
                 // Dropping both halves drops the socket with no close frame.
                 drop(reader);

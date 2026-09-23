@@ -107,3 +107,7 @@ required-features = ["ticker"]
 [[test]]
 name = "ticker_subscriptions"
 required-features = ["ticker"]
+
+[[test]]
+name = "ticker_lifecycle"
+required-features = ["ticker"]

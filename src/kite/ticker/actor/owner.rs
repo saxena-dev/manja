@@ -53,8 +53,9 @@
 //! accepted in every state; on connecting, the owner writes the desired map
 //! before it reports `Active`.
 //!
-//! This owner makes one connection attempt and does not reconnect; that
-//! layer comes later.
+//! Lost connections and failed attempts are retried within bounds; see
+//! [`crate::kite::ticker::actor::lifecycle`] for every cause and its
+//! disposition.
 //!
 //! # Cancellation
 //!
@@ -83,11 +84,13 @@ use tokio_tungstenite::{MaybeTlsStream, WebSocketStream};
 
 use crate::kite::connect::credentials::Credentials;
 use crate::kite::envelope::{
-    ConnectionEpoch, DisconnectReason, LifecycleEvent, LifecycleKind, PayloadKind, RawObservation,
-    ReceiveTime, SourceIdentity, SourceSequencer, MAX_PAYLOAD_BYTES_LIMIT,
+    ConnectionEpoch, DisconnectReason, GapFacts, LifecycleEvent, LifecycleKind, PayloadKind,
+    RawObservation, ReceiveTime, SourceIdentity, SourceKey, SourceSequencer,
+    MAX_PAYLOAD_BYTES_LIMIT,
 };
 use crate::kite::obs::Observability;
 use crate::kite::protocol::InstrumentToken;
+use crate::kite::ticker::actor::lifecycle::{self, Backoff, Disposition, ReconnectLimits};
 use crate::kite::ticker::actor::subscriptions::{
     reconcile, DesiredSubscriptions, Revision, SubscriptionCommand, SubscriptionError,
     MAX_INSTRUMENTS_PER_CONNECTION,
@@ -123,6 +126,7 @@ pub struct TickerLimits {
     max_payload: usize,
     max_instruments: usize,
     shutdown_deadline: Duration,
+    reconnect: ReconnectLimits,
 }
 
 impl Default for TickerLimits {
@@ -136,6 +140,7 @@ impl Default for TickerLimits {
             max_payload: 1 << 20,
             max_instruments: MAX_INSTRUMENTS_PER_CONNECTION,
             shutdown_deadline: Duration::from_secs(5),
+            reconnect: ReconnectLimits::default(),
         }
     }
 }
@@ -213,6 +218,12 @@ impl TickerLimits {
         Ok(self)
     }
 
+    /// Reconnect, backoff and liveness bounds (`B-TK-02` to `B-TK-04`).
+    pub fn with_reconnect(mut self, reconnect: ReconnectLimits) -> Self {
+        self.reconnect = reconnect;
+        self
+    }
+
     fn check(self) -> Result<Self, TickerLimitError> {
         if self.queue_bytes < self.max_payload {
             return Err(TickerLimitError("B-TK-06 >= B-TK-10"));
@@ -251,6 +262,10 @@ impl TickerLimits {
     /// `B-TK-12`.
     pub fn shutdown_deadline(&self) -> Duration {
         self.shutdown_deadline
+    }
+    /// `B-TK-02` to `B-TK-04`.
+    pub fn reconnect(&self) -> &ReconnectLimits {
+        &self.reconnect
     }
 }
 
@@ -328,6 +343,14 @@ pub enum TerminalReason {
         /// Events the owner had accepted but could not deliver.
         undelivered: usize,
     },
+    /// Every connection attempt of an outage failed, or its time ran out
+    /// (`B-TK-02`).
+    ReconnectExhausted {
+        /// Failed attempts in the outage.
+        attempts: u32,
+        /// The last failure.
+        last: Box<TerminalReason>,
+    },
     /// The owner task panicked.
     Panicked,
     /// The owner task was aborted, for example by runtime shutdown.
@@ -366,6 +389,10 @@ impl fmt::Display for TerminalReason {
             Self::ShutdownDeadlineExpired { undelivered } => {
                 write!(f, "shutdown expired with {undelivered} events undelivered")
             }
+            Self::ReconnectExhausted { attempts, last } => write!(
+                f,
+                "reconnecting failed after {attempts} attempts; last: {last}"
+            ),
             Self::Panicked => f.write_str("the ticker task panicked"),
             Self::Aborted => f.write_str("the ticker task was aborted"),
         }
@@ -649,6 +676,10 @@ impl TickerBuilder {
             events: events_tx.clone(),
             bytes: Arc::new(Semaphore::new(self.limits.queue_bytes)),
             stop_at: None,
+            last_sequence: None,
+            gap: None,
+            recovered: false,
+            backoff: Backoff::new(&self.limits.reconnect),
             _observability: self.observability,
             #[cfg(test)]
             faults: self.faults,
@@ -898,8 +929,8 @@ type Socket = WebSocketStream<MaybeTlsStream<TcpStream>>;
 pub(crate) struct Faults {
     /// Panic when this many raw observations have been delivered.
     pub(crate) panic_after: Option<usize>,
-    /// Fail every subscription write.
-    pub(crate) fail_sends: bool,
+    /// Fail this many subscription writes.
+    pub(crate) fail_sends: usize,
 }
 
 struct Owner {
@@ -918,21 +949,115 @@ struct Owner {
     // Set when shutdown was requested: every remaining delivery must
     // finish by then.
     stop_at: Option<Instant>,
+    // Last ingress sequence issued in the current epoch.
+    last_sequence: Option<u64>,
+    // The loss a reconnect has yet to report as a gap.
+    gap: Option<GapFacts>,
+    // Whether the current outage has reached `Active` since it began.
+    recovered: bool,
+    backoff: Backoff,
     _observability: Observability,
     #[cfg(test)]
     faults: Faults,
 }
 
-// Why the connection phase ended.
+// Why a connection phase ended.
 enum End {
     Shutdown,
     Terminal(TerminalReason),
+    // An established connection ended.
+    Lost(DisconnectReason),
+    // A connection attempt failed.
+    Rejected(TerminalReason),
 }
 
 impl Owner {
     async fn run(mut self) -> TerminalReason {
-        let (end, socket) = self.connection().await;
-        self.finish(end, socket).await
+        let mut outage_started = Instant::now();
+        let mut failures: u32 = 0;
+        loop {
+            let (end, socket) = self.connection(failures + 1).await;
+            let failure = match end {
+                End::Shutdown | End::Terminal(_) => return self.finish(end, socket).await,
+                End::Lost(reason) => {
+                    if std::mem::take(&mut self.recovered) {
+                        // A new outage begins with this loss.
+                        outage_started = Instant::now();
+                        failures = 0;
+                    }
+                    self.gap = Some(GapFacts {
+                        previous_epoch: self.sequencer.epoch(),
+                        last_sequence_in_previous_epoch: self.last_sequence,
+                        disconnected_at: self.sequencer.elapsed_nanos_now(),
+                        reconnected_at: self.sequencer.elapsed_nanos_now(),
+                        reason,
+                    });
+                    let failure = TerminalReason::Disconnected(reason);
+                    if lifecycle::after_disconnect(reason) == Disposition::Terminal {
+                        return self.finish(End::Terminal(failure), socket).await;
+                    }
+                    failure
+                }
+                End::Rejected(reason) => {
+                    if lifecycle::after_handshake(&reason) == Disposition::Terminal {
+                        return self.finish(End::Terminal(reason), socket).await;
+                    }
+                    reason
+                }
+            };
+            drop(socket);
+            self.sent = None;
+            failures += 1;
+            let limits = self.limits.reconnect.clone();
+            let delay = self.backoff.delay(failures);
+            let resume_at = Instant::now() + delay;
+            if failures >= limits.attempts()
+                || resume_at >= outage_started + limits.outage_deadline()
+            {
+                let exhausted = TerminalReason::ReconnectExhausted {
+                    attempts: failures,
+                    last: Box::new(failure),
+                };
+                return self.finish(End::Terminal(exhausted), None).await;
+            }
+            if let Err(end) = self.backoff_wait(delay, failures + 1).await {
+                return self.finish(end, None).await;
+            }
+        }
+    }
+
+    // Wait out a backoff delay, still accepting commands; shutdown
+    // interrupts it.
+    async fn backoff_wait(&mut self, delay: Duration, next_attempt: u32) -> Result<(), End> {
+        self.state(TickerState::Backoff);
+        self.lifecycle(LifecycleKind::Backoff {
+            delay_ms: delay.as_millis().min(u64::MAX as u128) as u64,
+            next_attempt,
+        })
+        .await?;
+        let resume = tokio::time::sleep(delay);
+        tokio::pin!(resume);
+        let shared = self.shared.clone();
+        loop {
+            tokio::select! {
+                biased;
+                _ = shared.stopped() => return Err(End::Shutdown),
+                _ = self.events.closed() => {
+                    return Err(End::Terminal(TerminalReason::ReceiverDropped))
+                }
+                command = self.commands.recv() => match command {
+                    None => return Err(End::Terminal(TerminalReason::HandlesDropped)),
+                    Some(c) => self.on_command(c),
+                },
+                _ = &mut resume => return Ok(()),
+            }
+        }
+    }
+
+    fn next_key(&mut self) -> SourceKey {
+        let key = self.sequencer.next_key();
+        self.last_sequence = Some(key.ingress_sequence());
+        key
     }
 
     fn state(&self, state: TickerState) {
@@ -944,7 +1069,7 @@ impl Owner {
     }
 
     fn lifecycle_event(&mut self, kind: LifecycleKind) -> TickerEvent {
-        let key = self.sequencer.next_key();
+        let key = self.next_key();
         TickerEvent::Lifecycle(LifecycleEvent::new(
             key,
             ReceiveTime::now(),
@@ -1006,11 +1131,21 @@ impl Owner {
         }
     }
 
-    async fn connection(&mut self) -> (End, Option<Socket>) {
+    // One connection attempt under a fresh epoch: connect, restore, then
+    // serve until the connection ends.
+    async fn connection(&mut self, attempt: u32) -> (End, Option<Socket>) {
+        // The lost epoch may have issued more events (its backoff) since
+        // the loss.
+        if let Some(gap) = self.gap.as_mut() {
+            if gap.previous_epoch == self.sequencer.epoch() {
+                gap.last_sequence_in_previous_epoch = self.last_sequence;
+            }
+        }
         self.sequencer.begin_epoch();
+        self.last_sequence = None;
         self.state(TickerState::Connecting);
         if let Err(end) = self
-            .lifecycle(LifecycleKind::ConnectAttempt { attempt: 1 })
+            .lifecycle(LifecycleKind::ConnectAttempt { attempt })
             .await
         {
             return (end, None);
@@ -1043,11 +1178,17 @@ impl Owner {
                         .lifecycle(LifecycleKind::AuthRejected { http_status })
                         .await;
                 }
-                return (End::Terminal(reason), None);
+                return (End::Rejected(reason), None);
             }
         };
         if let Err(end) = self.lifecycle(LifecycleKind::Connected).await {
             return (end, Some(socket));
+        }
+        if let Some(mut gap) = self.gap.take() {
+            gap.reconnected_at = self.sequencer.elapsed_nanos_now();
+            if let Err(end) = self.lifecycle(LifecycleKind::Gap(gap)).await {
+                return (end, Some(socket));
+            }
         }
         // Restore the desired map before reporting `Active`.
         self.state(TickerState::Restoring);
@@ -1060,6 +1201,9 @@ impl Owner {
             return (end, Some(socket));
         }
         self.state(TickerState::Active);
+        self.recovered = true;
+        let liveness = self.limits.reconnect.liveness_timeout();
+        let mut last_seen = Instant::now();
         loop {
             let end = tokio::select! {
                 biased;
@@ -1079,10 +1223,20 @@ impl Owner {
                         }
                     }
                 },
-                message = socket.next() => match self.receive(message).await {
-                    Ok(()) => continue,
-                    Err(end) => end,
-                },
+                message = socket.next() => {
+                    // Any traffic, pings and heartbeats included, is liveness.
+                    last_seen = Instant::now();
+                    match self.receive(message).await {
+                        Ok(()) => continue,
+                        Err(end) => end,
+                    }
+                }
+                _ = tokio::time::sleep_until(last_seen + liveness) => {
+                    match self.disconnected(DisconnectReason::LivenessTimeout).await {
+                        Ok(()) => continue,
+                        Err(end) => end,
+                    }
+                }
             };
             return (end, Some(socket));
         }
@@ -1107,9 +1261,16 @@ impl Owner {
     // revisions, write the reconciling requests, then report the latest
     // revision as sent or failed.
     async fn sync(&mut self, socket: &mut Socket) -> Result<(), End> {
-        let Some(latest) = self.unsent.last().copied() else {
+        let requests = reconcile(
+            self.sent.as_ref().unwrap_or(&BTreeMap::new()),
+            self.desired.map(),
+        );
+        // On a new connection the retained map is restored even when no
+        // command is pending.
+        if requests.is_empty() && self.unsent.is_empty() {
             return Ok(());
-        };
+        }
+        let latest = self.desired.revision();
         for superseded in std::mem::take(&mut self.unsent) {
             if superseded != latest {
                 self.lifecycle(LifecycleKind::Superseded {
@@ -1118,10 +1279,6 @@ impl Owner {
                 .await?;
             }
         }
-        let requests = reconcile(
-            self.sent.as_ref().unwrap_or(&BTreeMap::new()),
-            self.desired.map(),
-        );
         let written = async {
             for r in &requests {
                 socket.feed(Message::Text(r.to_string())).await?;
@@ -1130,7 +1287,8 @@ impl Owner {
         }
         .await;
         #[cfg(test)]
-        let written = if self.faults.fail_sends {
+        let written = if self.faults.fail_sends > 0 {
+            self.faults.fail_sends -= 1;
             Err(tungstenite::Error::Io(
                 std::io::ErrorKind::BrokenPipe.into(),
             ))
@@ -1167,7 +1325,7 @@ impl Owner {
             Some(Err(e)) => return self.disconnected(classify(&e)).await,
             None => return self.disconnected(DisconnectReason::Eof).await,
         };
-        let key = self.sequencer.next_key();
+        let key = self.next_key();
         let observation = RawObservation::new(
             key,
             kind,
@@ -1196,13 +1354,14 @@ impl Owner {
         self.state(TickerState::Disconnected);
         self.lifecycle(LifecycleKind::Disconnected { reason })
             .await?;
-        Err(End::Terminal(TerminalReason::Disconnected(reason)))
+        Err(End::Lost(reason))
     }
 
     // Close the socket, deliver the final events and record the outcome.
     async fn finish(&mut self, end: End, socket: Option<Socket>) -> TerminalReason {
         let reason = match end {
             End::Shutdown => self.stop(socket).await,
+            End::Lost(_) | End::Rejected(_) => unreachable!("the run loop resolves these"),
             End::Terminal(reason) => {
                 if let Some(mut socket) = socket {
                     // Best effort, and never past a requested shutdown's
@@ -1288,7 +1447,7 @@ impl Owner {
                     };
                 }
                 Err(End::Terminal(r)) => return r,
-                Err(End::Shutdown) => unreachable!("delivery never ends in shutdown"),
+                Err(_) => unreachable!("delivery ends only in a terminal reason"),
             }
         }
         if closed {
@@ -1385,12 +1544,19 @@ mod tests {
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let addr = listener.local_addr().unwrap();
         let server = tokio::spawn(async move {
-            let (tcp, _) = listener.accept().await.unwrap();
-            let mut ws = tokio_tungstenite::accept_async(tcp).await.unwrap();
-            for _ in 0..messages {
-                ws.send(Message::Binary(vec![0])).await.unwrap();
+            let mut connections = tokio::task::JoinSet::new();
+            loop {
+                let (tcp, _) = listener.accept().await.unwrap();
+                connections.spawn(async move {
+                    let mut ws = tokio_tungstenite::accept_async(tcp).await.unwrap();
+                    for _ in 0..messages {
+                        ws.send(Message::Binary(vec![0])).await.unwrap();
+                    }
+                    // Reading also answers a close.
+                    while let Some(Ok(_)) = ws.next().await {}
+                    std::future::pending::<()>().await;
+                });
             }
-            std::future::pending::<()>().await;
         });
         (format!("ws://{addr}"), server)
     }
@@ -1409,8 +1575,11 @@ mod tests {
     #[tokio::test]
     async fn a_failed_restoration_write_never_reports_active() {
         let (url, server) = serve(0).await;
-        let mut b = TickerBuilder::new(Credentials::new("k", "t").unwrap()).url(url);
-        b.faults.fail_sends = true;
+        let one = ReconnectLimits::default().with_attempts(1).unwrap();
+        let mut b = TickerBuilder::new(Credentials::new("k", "t").unwrap())
+            .url(url)
+            .limits(TickerLimits::default().with_reconnect(one));
+        b.faults.fail_sends = usize::MAX;
         let (handle, mut events, guard) = b.spawn().unwrap();
         handle
             .subscribe([InstrumentToken::new(1)], Mode::Full)
@@ -1432,11 +1601,64 @@ mod tests {
         );
         assert_eq!(
             guard.join().await,
-            TaskOutcome::Terminal(TerminalReason::Disconnected(
-                DisconnectReason::TransportError
-            ))
+            TaskOutcome::Terminal(TerminalReason::ReconnectExhausted {
+                attempts: 1,
+                last: Box::new(TerminalReason::Disconnected(
+                    DisconnectReason::TransportError
+                )),
+            })
         );
         assert_eq!(handle.status().sent_revision, None);
+        server.abort();
+    }
+
+    #[tokio::test]
+    async fn a_failed_restoration_is_retried_and_only_the_restored_connection_is_active() {
+        let (url, server) = serve(0).await;
+        let quick = ReconnectLimits::default()
+            .with_backoff(Duration::from_millis(50), Duration::from_millis(50))
+            .unwrap();
+        let mut b = TickerBuilder::new(Credentials::new("k", "t").unwrap())
+            .url(url)
+            .limits(TickerLimits::default().with_reconnect(quick));
+        b.faults.fail_sends = 1;
+        let (handle, mut events, _guard) = b.spawn().unwrap();
+        handle
+            .subscribe([InstrumentToken::new(1)], Mode::Full)
+            .await
+            .unwrap();
+        let mut items = Vec::new();
+        while let Some(i) = events.next().await {
+            let active = matches!(&i, Ok(TickerEvent::Lifecycle(l)) if matches!(l.kind(), LifecycleKind::Active { .. }));
+            items.push(i);
+            if active {
+                break;
+            }
+        }
+        let epochs: Vec<(u64, String)> = items
+            .iter()
+            .map(|i| match i {
+                Ok(TickerEvent::Lifecycle(l)) => {
+                    (l.source().connection_epoch().0, format!("{:?}", l.kind()))
+                }
+                other => (0, format!("{other:?}")),
+            })
+            .filter(|(_, k)| !k.starts_with("Backoff") && !k.starts_with("Gap"))
+            .collect();
+        assert_eq!(
+            epochs,
+            [
+                (1, "ConnectAttempt { attempt: 1 }".to_string()),
+                (1, "Connected".into()),
+                (1, "SendFailed { revision: 1 }".into()),
+                (1, "Disconnected { reason: TransportError }".into()),
+                (2, "ConnectAttempt { attempt: 2 }".into()),
+                (2, "Connected".into()),
+                (2, "CommandsSent { revision: 1 }".into()),
+                (2, "Active { revision: 1 }".into()),
+            ]
+        );
+        handle.shutdown().await.unwrap();
         server.abort();
     }
 
