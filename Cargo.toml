@@ -99,3 +99,7 @@ required-features = ["http"]
 [[test]]
 name = "http_observability"
 required-features = ["http"]
+
+[[test]]
+name = "ticker_owner"
+required-features = ["ticker"]
