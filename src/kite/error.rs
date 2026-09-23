@@ -1,13 +1,13 @@
 //! Error types.
-//! 
-//! This module defines custom error types and handling mechanisms for the `manja` crate.
-//! It includes various error types that represent different failure scenarios 
-//! when interacting with Kite Connect API and other related services. 
 //!
-//! The primary error type is `ManjaError`, which consolidates all possible errors 
-//! that can occur during the execution of the client code. This module also provides 
+//! This module defines custom error types and handling mechanisms for the `manja` crate.
+//! It includes various error types that represent different failure scenarios
+//! when interacting with Kite Connect API and other related services.
+//!
+//! The primary error type is `ManjaError`, which consolidates all possible errors
+//! that can occur during the execution of the client code. This module also provides
 //! convenient error mapping from other crates like `reqwest`, `serde`, and `fantoccini`.
-//! 
+//!
 use std::env::VarError;
 use std::fmt;
 
@@ -16,17 +16,16 @@ use fantoccini::error::NewSessionError;
 use reqwest::header::InvalidHeaderValue;
 use serde::Deserialize;
 
-
 /// A `Result` alias where the `Err` case is `manja::kite::ManjaError`.
 pub type Result<T> = std::result::Result<T, ManjaError>;
 
 /// An enumeration of all possible errors that may occur when using the `manja` crate.
 ///
-/// This enum provides a consolidated view of all error types, including those 
-/// originating from external crates like `reqwest` and `fantoccini`. Each variant 
-/// represents a specific type of error that can be encountered during the operation 
+/// This enum provides a consolidated view of all error types, including those
+/// originating from external crates like `reqwest` and `fantoccini`. Each variant
+/// represents a specific type of error that can be encountered during the operation
 /// of an API client provided by `manja`.
-/// 
+///
 #[derive(Debug, thiserror::Error)]
 pub enum ManjaError {
     /// Represents errors returned by Kite Connect API.
@@ -79,9 +78,9 @@ impl From<&str> for ManjaError {
 /// Represents an error returned by Kite Connect API.
 ///
 /// This structure captures details about an error response from Kite Connect API,
-/// including the endpoint that was accessed, the HTTP status code, an optional 
+/// including the endpoint that was accessed, the HTTP status code, an optional
 /// error message, and the type of error as represented by the `KiteApiException` enum.
-/// 
+///
 #[derive(Debug, Deserialize)]
 pub(crate) struct KiteApiError {
     pub endpoint: String,
@@ -91,25 +90,23 @@ pub(crate) struct KiteApiError {
 }
 
 // TODO: Fix this.
-impl fmt::Display for KiteApiError { 
+impl fmt::Display for KiteApiError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "{:?}", self.message)
     }
 }
 
-
-
-/// Enum representing various types of errors that can occur while interacting 
+/// Enum representing various types of errors that can occur while interacting
 /// with Kite Connect API.
 ///
-/// This enum categorizes different error types that might be returned by Kite 
-/// Connect API. It covers a wide range of scenarios, such as session token issues, 
+/// This enum categorizes different error types that might be returned by Kite
+/// Connect API. It covers a wide range of scenarios, such as session token issues,
 /// user account problems, order-related errors, network issues, and more.
 ///
 #[derive(Debug, Deserialize)]
 pub enum KiteApiException {
     /// Indicates the expiry or invalidation of an authenticated session.
-    /// 
+    ///
     /// Preceded by a 403 header, this indicates the expiry or invalidation of
     /// an authenticated session. This can be caused by the user logging out,
     /// a natural expiry, or the user logging into another Kite instance.
@@ -151,7 +148,6 @@ pub enum KiteApiException {
     DeserializationException(String),
 }
 
-
 impl From<&str> for KiteApiException {
     fn from(s: &str) -> Self {
         match s {
@@ -169,7 +165,6 @@ impl From<&str> for KiteApiException {
     }
 }
 
-
 impl fmt::Display for KiteApiException {
     #[allow(deprecated)]
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -179,35 +174,35 @@ impl fmt::Display for KiteApiException {
                 "TokenException: indicates the expiry or invalidation of an authenticated session"
             ),
             KiteApiException::UserException => write!(
-                f, 
+                f,
                 "UserException: represents user account related errors"
             ),
             KiteApiException::OrderException => write!(
-                f, 
+                f,
                 "OrderException: represents order related errors such as placement failures or a corrupt fetch"
             ),
             KiteApiException::InputException => write!(
-                f, 
+                f,
                 "InputException: represents missing required fields or bad values for parameters"
             ),
             KiteApiException::MarginException => write!(
-                f, 
+                f,
                 "MarginException: represents insufficient funds required for order placement"
             ),
             KiteApiException::HoldingException => write!(
-                f, 
+                f,
                 "HoldingException: represents insufficient holdings available to place a sell order for a specified instrument"
             ),
             KiteApiException::NetworkException => write!(
-                f, 
+                f,
                 "NetworkException: represents a network error where the API was unable to communicate with the Order Management System (OMS)"
             ),
             KiteApiException::DataException => write!(
-                f, 
+                f,
                 "DataException: represents an internal system error where the API was unable to understand the response from the OMS to respond to a request"
             ),
             KiteApiException::GeneralException => write!(
-                f, 
+                f,
                 "GeneralException: represents an unclassified error"
             ),
             KiteApiException::DeserializationException(path) => write!(
@@ -219,13 +214,13 @@ impl fmt::Display for KiteApiException {
     }
 }
 
-// Utility function to map deserialization errors to `ManjaError` while logging 
+// Utility function to map deserialization errors to `ManjaError` while logging
 // the JSON string that caused the error.
 //
-// This function is useful for debugging deserialization issues by capturing and 
-// logging the raw JSON string that failed to deserialize. It returns a 
+// This function is useful for debugging deserialization issues by capturing and
+// logging the raw JSON string that failed to deserialize. It returns a
 // `ManjaError::JSONDeserialize` variant with the captured `serde_json::Error`.
-// 
+//
 pub(crate) fn map_deserialization_error(e: serde_json::Error, json_str: &str) -> ManjaError {
     tracing::error!("failed deserialization of: {}", json_str);
     ManjaError::JSONDeserialize(e)
