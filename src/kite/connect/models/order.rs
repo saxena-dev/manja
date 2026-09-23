@@ -344,7 +344,7 @@ impl std::fmt::Display for RequestError {
 
 impl std::error::Error for RequestError {}
 
-fn invalid(field: &'static str, reason: &'static str) -> Result<(), RequestError> {
+pub(super) fn invalid(field: &'static str, reason: &'static str) -> Result<(), RequestError> {
     Err(RequestError { field, reason })
 }
 

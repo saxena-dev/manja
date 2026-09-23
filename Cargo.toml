@@ -104,6 +104,10 @@ name = "http_session"
 required-features = ["http"]
 
 [[test]]
+name = "http_gtt"
+required-features = ["http"]
+
+[[test]]
 name = "http_observability"
 required-features = ["http"]
 

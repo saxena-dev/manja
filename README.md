@@ -17,7 +17,7 @@ An asynchronous Rust client library for [Zerodha](https://zerodha.com/)'s
 
 | Feature | What it adds | Default |
 |---|---|---|
-| `http` | `HTTPClient` and its resources: session, user, orders, portfolio, market, margins and charges | yes |
+| `http` | `HTTPClient` and its resources: session, user, orders, GTT, portfolio, market, margins and charges | yes |
 | `ticker` | the supervised single-owner WebSocket ticker, plus the deprecated legacy client | yes |
 | `decoder` | pure, bounded decoding of binary and text ticker messages, and a provenance adapter | yes |
 
@@ -93,9 +93,9 @@ never left the process, `Started` once the broker may have received it.
 
 **Retries, admission and permits.** Reads and margin calculations retry transient
 failures (429, 502–504, transport faults, attempt timeouts) with capped, jittered backoff
-within a total deadline. Placement, modification, cancellation, position conversion and
-the session operations make **exactly one attempt**: a lost response is reported, never
-retried or assumed. Admission enforces the documented quotas (quote 1/s; orders 10/s,
+within a total deadline. Order placement, modification, cancellation, position
+conversion, GTT placement, modification and deletion, and the session operations make
+**exactly one attempt**: a lost response is reported, never retried or assumed. Admission enforces the documented quotas (quote 1/s; orders 10/s,
 400/min, 5000/day; 25 modifications per order; others 10/s). A `DispatchPermit` from
 `HTTPClient::admit` reserves capacity for one specific order operation, expires after one
 second, and is consumed by use.
@@ -127,7 +127,7 @@ a clean shutdown; any other end yields one error first.
 when the owner accepts it, with a revision; `CommandsSent` means it was written to the
 socket, not that the broker acted on it. `Active` means the desired map was written to a
 connection, not that quotes are current. An order receipt means the broker accepted the
-request, not that it filled. Whether market data is current is yours to decide.
+request, not that it filled; a GTT receipt names the trigger, not that it fired. Whether market data is current is yours to decide.
 
 **Cancellation and concurrency.** Futures are lazy: dropping one before its first poll
 does nothing. Dropping an HTTP future after dispatch does not cancel anything at the
@@ -158,6 +158,8 @@ with no collector at all.
 - **Orders**: `POST /orders/:variety`, `PUT /orders/:variety/:order_id`,
   `DELETE /orders/:variety/:order_id`, `GET /orders`, `GET /orders/:order_id`,
   `GET /trades`, `GET /orders/:order_id/trades`
+- **GTT**: `POST /gtt/triggers`, `GET /gtt/triggers`, `GET /gtt/triggers/:id`,
+  `PUT /gtt/triggers/:id`, `DELETE /gtt/triggers/:id`
 - **Portfolio**: `GET /portfolio/holdings`, `GET /portfolio/positions`,
   `PUT /portfolio/positions`, `GET /portfolio/holdings/auctions`
 - **Market**: `GET /instruments`, `GET /instruments/:exchange`, `GET /quote`,
@@ -167,7 +169,7 @@ with no collector at all.
 - **WebSocket**: binary market data (LTP, quote, full and index packets), text order
   updates, errors and messages
 
-Not supported: GTT, historical candles, mutual funds, and holdings authorisation.
+Not supported: historical candles, mutual funds, and holdings authorisation.
 
 ## Migrating from 0.1
 

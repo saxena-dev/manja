@@ -118,6 +118,7 @@ IDs are stable. Tests cite the rows they cover, singly or as a range such as
 | `http_reads` | `http` | read response types against the official samples |
 | `http_orders` | `http` | placement, modification, cancellation and conversion requests on the wire |
 | `http_margins` | `http` | order margins, basket margins and order charges |
+| `http_gtt` | `http` | GTT placement (single and two-leg), modification and deletion on the wire, one attempt each; the trigger list and trigger decoded from the official samples; and a fetched trigger converted back into a request (`contract.md` §2.12); the sandbox has no GTT (`kite:sandbox.md:298`), so these samples are its only evidence |
 | `http_market` | `http` | quote completeness and the instrument master |
 | `http_session` | `http` | token exchange and invalidation (`contract.md` §2.2) |
 | `http_observability` | `http` | HTTP spans, metrics and diagnostics |

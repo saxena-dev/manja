@@ -48,17 +48,19 @@ on the minimum supported Rust version, 1.95.0, and on 1.98.0.
 | Orders | `GET /orders`, `GET /orders/{order_id}`, `GET /trades`, `GET /orders/{order_id}/trades` | read |
 | Portfolio | `GET /portfolio/holdings`, `GET /portfolio/holdings/auctions`, `GET /portfolio/positions` | read |
 | Portfolio | `PUT /portfolio/positions` (conversion) | mutation |
+| GTT | `POST /gtt/triggers`, `PUT /gtt/triggers/{id}`, `DELETE /gtt/triggers/{id}` (§2.12) | mutation |
+| GTT | `GET /gtt/triggers`, `GET /gtt/triggers/{id}` | read |
 | Market | `GET /instruments`, `GET /instruments/{exchange}` (CSV), `GET /quote`, `GET /quote/ohlc`, `GET /quote/ltp` | read |
 | Margins and charges | `POST /margins/orders`, `POST /margins/basket`, `POST /charges/orders` | calculation |
 | Session | `POST /session/token` (exchange), `DELETE /session/token` (invalidation) | session |
 
-Not supported: GTT, alerts, historical candles, mutual funds, holdings summary and
+Not supported: alerts, historical candles, mutual funds, holdings summary and
 authorisation, the full profile, the trigger range, and receiving postbacks over HTTP.
 
 Every JSON endpoint is decoded into its documented response type, and success requires
 a 2xx status plus a `status: "success"` envelope (`kite:response-structure.md:15-28`).
-Placement, modification and conversion take dedicated request types and are
-form-encoded (`kite:response-structure.md:2`); margin and charge calculations are JSON
+Order placement, modification and conversion, and GTT placement and modification, take
+dedicated request types and are form-encoded (`kite:response-structure.md:2`); margin and charge calculations are JSON
 (`kite:margins.md:13`). Quote requests above the documented key limits (500 for
 `/quote`, 1000 for OHLC and LTP, `kite:market-quotes.md:272-278`) are rejected before
 sending, never truncated.
@@ -86,8 +88,8 @@ keeps its own snapshot.
 
 ### 2.4 Errors
 
-HTTP failures are `ManjaError::Http(HttpError)`. Every public error and error-kind enum
-is `#[non_exhaustive]`; the stable contract is the category and the accessors, not the
+HTTP failures are `ManjaError::Http(HttpError)`. Every public error and error-kind enum,
+like every observability label domain (§4.1), is `#[non_exhaustive]`; the stable contract is the category and the accessors, not the
 `Display` text.
 
 | `HttpErrorKind` | Meaning |
@@ -237,6 +239,40 @@ secret, `kite:postbacks.md:54-56`), infer fills from order receipts, or judge wh
 market data is current. It declares no Cargo feature other than `http`, `ticker` and
 `decoder`.
 
+### 2.12 GTT orders
+
+`HTTPClient::gtt()` returns a `Gtt` resource for Good Till Triggered orders
+(`kite:gtt.md`). A GTT is a trigger held by the broker: when the instrument's price
+reaches a trigger value, the broker places the matching LIMIT order.
+
+| Operation | Contract |
+|---|---|
+| `place_trigger(&GttRequest)` | `POST /gtt/triggers`, form-encoded: `type`, then `condition` and `orders` as JSON text (`kite:gtt.md:13-78`). Returns a `GttReceipt` with the trigger ID |
+| `modify_trigger(trigger_id, &GttRequest)` | `PUT /gtt/triggers/{id}` with the complete new trigger (`kite:gtt.md:373-393`). Returns a `GttReceipt` |
+| `delete_trigger(trigger_id)` | `DELETE /gtt/triggers/{id}` with no body (`kite:gtt.md:395-405`). Returns a `GttReceipt` |
+| `list_triggers()` | `GET /gtt/triggers`: active triggers, and triggers in other states from the previous 7 days (`kite:gtt.md:169-172`) |
+| `get_trigger(trigger_id)` | `GET /gtt/triggers/{id}`: one trigger, whatever its age or state (`kite:gtt.md:281-284`) |
+
+`GttRequest::single` builds a trigger with one value and one order;
+`GttRequest::two_leg` builds a one-cancels-other trigger with two of each
+(`kite:gtt.md:80-167`). Every order is for the condition's exchange and tradingsymbol, so
+the two cannot disagree. `validate()` requires a tradable exchange, a tradingsymbol of 1
+to 64 bytes, exactly one trigger value and one order per leg, finite positive trigger
+values and order prices, a finite non-negative last price, and LIMIT orders
+(`kite:gtt.md:62`); an invalid request is a `Validation` error and nothing is sent.
+`GttRequest::from_trigger` turns a fetched `GttTrigger` back into a request, the
+documented way to modify one (`kite:gtt.md:390-393`). It copies the recorded last price,
+which the caller updates, and fails on any value a request cannot carry: an unknown type,
+exchange or order field, a zero quantity, or an order for another instrument. Trigger IDs are integers, so no
+caller string reaches the path.
+
+Placement, modification and deletion are mutations: one transport attempt, never retried
+after a 429, a lost response or a timeout (`B-HTTP-04`). A `GttReceipt` acknowledges the
+request only. Whether a trigger fired, and the outcome of the order it tried to place,
+are in `GttTrigger::orders`, where each fired order carries a `GttOrderResult`. Trigger
+types and statuses (`kite:gtt.md:359-371`) are `Inbound` values, so an undocumented one
+is preserved. Every GTT endpoint is in the `Standard` quota class (§3.6).
+
 ---
 
 ## 3. Runtime bounds
@@ -323,7 +359,7 @@ derived with `with_credentials`, draws from the same windows. `QuotaProfile::kit
 | `Quote` | `/quote`, `/quote/ohlc`, `/quote/ltp` | 1 per second |
 | `OrderPlacement` | `POST /orders/{variety}` | 10 per second, 400 per minute, 5 000 per IST day |
 | `OrderModification` | `PUT /orders/{variety}/{order_id}` | 10 per second, 25 modifications per order per IST day |
-| `Standard` | every other endpoint | 10 per second |
+| `Standard` | every other endpoint, GTT included | 10 per second |
 
 An endpoint without a known class is admitted at the profile's smallest rate. Rates
 must be finite and positive, and windows at least 1 ms. Admission cannot see requests
@@ -336,9 +372,22 @@ from other processes or other SDK instances using the same API key.
 ### 4.1 Version
 
 `OBS_SCHEMA_VERSION` = 1. Instrument names, types, units, label sets, span names and
-fields, and diagnostic shapes are compatibility surfaces. An addition is a documented
-minor change; a rename, a unit change or a label-set change needs a new version and
-release notes. The catalogue is snapshotted in `tests/obs_schema/catalogue.v1.txt`.
+fields, and diagnostic shapes are compatibility surfaces. An addition, including a new
+value in a label domain, is a documented minor change; a rename, a unit change or a
+label-set change needs a new version and release notes. The catalogue is snapshotted in
+`tests/obs_schema/catalogue.v1.txt`.
+
+The Rust enums behind the label domains (`kite::obs::schema::Endpoint`, `Method`,
+`QuotaClass` and the rest) and `DecodeDiagnosticKind` are `#[non_exhaustive]`, so an
+added value breaks no downstream code: a `match` outside the crate needs a wildcard arm,
+and each domain's `ALL` constant lists the values of the build in use.
+
+Additions within version 1:
+
+| Addition | Effect |
+|---|---|
+| `endpoint` values `/gtt/triggers` and `/gtt/triggers/{id}` (§2.12) | the domain grows from 22 to 24 values; the series bounds of the metrics labelled by `endpoint` grow with it (§4.4) |
+| `DecodeDiagnosticKind::InvalidField` (§4.5) | one more diagnostic kind |
 
 ### 4.2 Spans
 
@@ -364,7 +413,7 @@ or query parameters to Kite requests.
 | Key | Values |
 |---|---|
 | `method` | `GET`, `POST`, `PUT`, `DELETE` |
-| `endpoint` | the 21 endpoint templates of §2.1, and `unknown` |
+| `endpoint` | the 23 endpoint templates of §2.1, and `unknown` |
 | `quota_class` | `read`, `calc`, `mut`, `sess` |
 | `result` (HTTP operation) | `ok`, `http_status`, `broker_error`, `auth_rejected`, `transport_error`, `timeout`, `deadline`, `admission_rejected`, `cancelled`, `decode_error`, `validation` |
 | `result` (HTTP attempt) | `ok`, `http_status`, `broker_error`, `auth_rejected`, `transport_error`, `timeout`, `cancelled`, `decode_error` |
@@ -390,14 +439,14 @@ are never labels.
 
 | Instrument | Type, unit | Labels | Series bound |
 |---|---|---|---|
-| `manja_http_operations_total` | counter, operations | `method`, `endpoint`, `quota_class`, `result` | 3 872 |
-| `manja_http_operation_duration_seconds` | histogram, s | `method`, `endpoint`, `quota_class`, `result` | 3 872 |
-| `manja_http_attempts_total` | counter, attempts | `method`, `endpoint`, `result` | 704 |
-| `manja_http_attempt_duration_seconds` | histogram, s | `method`, `endpoint`, `result` | 704 |
+| `manja_http_operations_total` | counter, operations | `method`, `endpoint`, `quota_class`, `result` | 4 224 |
+| `manja_http_operation_duration_seconds` | histogram, s | `method`, `endpoint`, `quota_class`, `result` | 4 224 |
+| `manja_http_attempts_total` | counter, attempts | `method`, `endpoint`, `result` | 768 |
+| `manja_http_attempt_duration_seconds` | histogram, s | `method`, `endpoint`, `result` | 768 |
 | `manja_http_in_flight` | gauge, attempts | `quota_class` | 4 |
 | `manja_http_admission_waiters` | gauge, waiters | `quota_class` | 4 |
 | `manja_http_admission_wait_seconds` | histogram, s | `quota_class`, `admission_result` | 16 |
-| `manja_http_retries_total` | counter, retries | `method`, `endpoint`, `error_class` | 352 |
+| `manja_http_retries_total` | counter, retries | `method`, `endpoint`, `error_class` | 384 |
 | `manja_auth_rejections_total` | counter, rejections | `transport` | 2 |
 | `manja_ticker_connection_attempts_total` | counter, attempts | `result` | 6 |
 | `manja_ticker_connect_duration_seconds` | histogram, s | `result` | 6 |
@@ -469,6 +518,7 @@ These choices are not dictated by the Kite documentation alone.
 | Quota enforcement | Every documented window is enforced locally by default (§3.6) | Exceeding them is a documented broker error (`kite:exceptions.md:39`) |
 | Oversized quote requests | Rejected before sending, never split or truncated | A split would return several snapshots taken at different times as one result |
 | Endpoint support | Holdings auctions and the order charges calculation stay supported | Both are documented read or calculation endpoints with official fixtures |
+| GTT orders | Only LIMIT orders, each for the condition's instrument; a modification sends the complete trigger | The documentation lists `LIMIT` as the only order type and shows each order repeating the condition's exchange and tradingsymbol (`kite:gtt.md:56-64`); it recommends fetching the trigger and sending it back modified (`kite:gtt.md:390-393`) |
 | Default features | `http`, `ticker` and `decoder` | Keeps every 0.1 import path available |
 | Minimum Rust version | 1.95.0 | The oldest toolchain tested |
 | Legacy ticker | `WebSocketClient` and its types are deprecated, not repaired; see `migration.md` §5 | Its stream reads the socket directly, so repairing it would change its behavior |

@@ -2,9 +2,11 @@
 //!
 //! Instrument names, types, units and exact label sets; span names and
 //! fields; closed label-value domains; and the shared histogram bucket
-//! profile. These are versioned compatibility surfaces: an addition is a
-//! documented minor change, while a rename, unit change or label-set change
-//! needs a schema version bump. `tests/obs_schema/` snapshots
+//! profile. These are versioned compatibility surfaces: an addition, such as
+//! a new value in a label domain, is a documented minor change, while a
+//! rename, unit change or label-set change needs a schema version bump. The
+//! domain enums are `#[non_exhaustive]` so that adding a value breaks no
+//! downstream code. `tests/obs_schema/` snapshots
 //! [`catalogue_text`].
 //!
 //! Every label value comes from a closed enum below, so a metric series can
@@ -31,7 +33,11 @@ pub const MAX_LABEL_VALUE_BYTES: usize = 64;
 macro_rules! domain {
     ($(#[$doc:meta])* $name:ident { $($(#[$vdoc:meta])* $variant:ident => $s:literal),+ $(,)? }) => {
         $(#[$doc])*
+        ///
+        /// A later release may add values, so a `match` outside this crate
+        /// needs a wildcard arm; [`Self::ALL`] lists every value of this build.
         #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
+        #[non_exhaustive]
         pub enum $name {
             $($(#[$vdoc])* $variant,)+
         }
@@ -141,6 +147,10 @@ domain!(
         ChargesOrders => "/charges/orders",
         /// `/session/token`
         SessionToken => "/session/token",
+        /// `/gtt/triggers`
+        GttTriggers => "/gtt/triggers",
+        /// `/gtt/triggers/{id}`
+        GttTriggersId => "/gtt/triggers/{id}",
         /// Any other endpoint.
         Unknown => "unknown",
     }
@@ -665,14 +675,14 @@ mod tests {
     fn series_bounds_match_the_contract_table() {
         use Instrument as I;
         let expected = [
-            (I::HttpOperationsTotal, 3872),
-            (I::HttpOperationDuration, 3872),
-            (I::HttpAttemptsTotal, 704),
-            (I::HttpAttemptDuration, 704),
+            (I::HttpOperationsTotal, 4224),
+            (I::HttpOperationDuration, 4224),
+            (I::HttpAttemptsTotal, 768),
+            (I::HttpAttemptDuration, 768),
             (I::HttpInFlight, 4),
             (I::HttpAdmissionWaiters, 4),
             (I::HttpAdmissionWait, 16),
-            (I::HttpRetriesTotal, 352),
+            (I::HttpRetriesTotal, 384),
             (I::AuthRejectionsTotal, 2),
             (I::TickerConnectionAttemptsTotal, 6),
             (I::TickerConnectDuration, 6),
@@ -701,7 +711,7 @@ mod tests {
         assert!(Endpoint::ALL
             .iter()
             .all(|e| e.as_str().len() <= MAX_LABEL_VALUE_BYTES));
-        assert_eq!(Endpoint::ALL.len(), 22);
+        assert_eq!(Endpoint::ALL.len(), 24);
         assert!(Instrument::ALL
             .iter()
             .all(|i| i.label_keys().len() <= MAX_LABELS));

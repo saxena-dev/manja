@@ -40,6 +40,7 @@ its `BR-*` ID. The behavior you can rely on is in [`contract.md`](contract.md).
 | Envelopes | `RawObservation`, `LifecycleEvent`, `SourceKey`, `SourceIdentity`, `SourceSequencer`, `GapFacts`, `ENVELOPE_VERSION` |
 | Ticker | `kite::ticker::actor`: `TickerBuilder::spawn` returns `(TickerHandle, TickerEvents, TaskGuard)`; the commands `subscribe`, `unsubscribe`, `set_mode` and `replace`; `TickerStatus`; `TickerLimits`, `ReconnectLimits`; `TickerRequest::set_mode` |
 | Decoder | `kite::decoder::{framing, packets, text, adapter}`; `kite::ticker::typed::TypedEvents` with both `ticker` and `decoder` |
+| GTT | `HTTPClient::gtt()` returns `Gtt` with `place_trigger`, `modify_trigger`, `delete_trigger`, `list_triggers` and `get_trigger`; `GttRequest` (`single`, `two_leg`, `from_trigger`, `validate()`), `GttOrderRequest`, `GttReceipt`, `GttTrigger`, `GttCondition`, `GttOrder`, `GttOrderResult`, `GttOrderOutcome`, `GttType`, `GttStatus`; the `endpoint` label values `/gtt/triggers` and `/gtt/triggers/{id}` |
 
 ## 3. Changes that keep their path
 

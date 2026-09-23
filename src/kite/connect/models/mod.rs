@@ -58,6 +58,14 @@ pub use order_enums::{
     OrderStatus, OrderType, OrderValidity, OrderVariety, ProductType, TransactionType,
 };
 
+/// Models for the `/gtt/` API group: Good Till Triggered orders.
+///
+mod gtt;
+pub use gtt::{
+    GttCondition, GttOrder, GttOrderOutcome, GttOrderRequest, GttOrderResult, GttReceipt,
+    GttRequest, GttStatus, GttTrigger, GttType,
+};
+
 /// Models for the `/portfolio/` API group, managing holdings and positions.
 ///
 mod portfolio;

@@ -9,16 +9,17 @@
 use manja::kite::connect::admission::{
     Admission, AdmissionError, AdmissionGrant, AdmissionLimits, QuotaProfile, RateClass, Window,
 };
-use manja::kite::connect::api::{Charges, Margins, Market, Orders, Portfolio, Session, User};
+use manja::kite::connect::api::{Charges, Gtt, Margins, Market, Orders, Portfolio, Session, User};
 use manja::kite::connect::client::{HTTPClient, HttpClientBuilder, HttpDiagnostics, HttpFailure};
 use manja::kite::connect::config::{Config, HttpLimits};
 use manja::kite::connect::credentials::{
     AccessToken, ApiKey, ApiSecret, CredentialError, Credentials, RequestToken,
 };
 use manja::kite::connect::models::{
-    Exchange, FullQuote, Holding, Instrument, KiteApiResponse, LTPQuote, ModifyOrderRequest,
-    OHLCQuote, Order, OrderReceipt, PlaceOrderRequest, Position, PositionConversionRequest,
-    Positions, QuoteMode, Quotes, RequestError, Trade, UserSession,
+    Exchange, FullQuote, GttCondition, GttOrder, GttOrderOutcome, GttOrderRequest, GttOrderResult,
+    GttReceipt, GttRequest, GttStatus, GttTrigger, GttType, Holding, Instrument, KiteApiResponse,
+    LTPQuote, ModifyOrderRequest, OHLCQuote, Order, OrderReceipt, PlaceOrderRequest, Position,
+    PositionConversionRequest, Positions, QuoteMode, Quotes, RequestError, Trade, UserSession,
 };
 use manja::kite::connect::scheduler::{DispatchPermit, PermitTarget, SchedulerLimits};
 use manja::kite::decoder::adapter::{Adapter, AdapterError, Decoded, DecodedEvent, Versions};
@@ -56,6 +57,7 @@ fn resources(c: &HTTPClient, key: ApiKey) {
     let _: Market<'_> = c.market();
     let _: Margins<'_> = c.margins();
     let _: Charges<'_> = c.charges();
+    let _: Gtt<'_> = c.gtt();
     let _: Session<'_> = c.session(key);
 }
 
@@ -70,6 +72,25 @@ async fn signatures(c: &HTTPClient, h: &TickerHandle) {
     let _: Result<KiteApiResponse<Vec<Order>>, ManjaError> = c.orders().list_orders().await;
     let _: Result<KiteApiResponse<Vec<Holding>>, ManjaError> = c.portfolio().get_holdings().await;
     let _: Result<KiteApiResponse<Positions>, ManjaError> = c.portfolio().get_positions().await;
+    let gtt: GttRequest = GttRequest::single(
+        Exchange::NSE,
+        "INFY",
+        702.0,
+        798.0,
+        GttOrderRequest::limit(
+            manja::kite::connect::models::TransactionType::BUY,
+            Quantity::new(1).unwrap(),
+            manja::kite::connect::models::ProductType::CashAndCarry,
+            702.5,
+        ),
+    );
+    let _: Result<(), RequestError> = gtt.validate();
+    let _: fn(&GttTrigger) -> Result<GttRequest, RequestError> = GttRequest::from_trigger;
+    let _: Result<KiteApiResponse<GttReceipt>, ManjaError> = c.gtt().place_trigger(&gtt).await;
+    let _: Result<KiteApiResponse<GttReceipt>, ManjaError> = c.gtt().modify_trigger(1, &gtt).await;
+    let _: Result<KiteApiResponse<GttReceipt>, ManjaError> = c.gtt().delete_trigger(1).await;
+    let _: Result<KiteApiResponse<Vec<GttTrigger>>, ManjaError> = c.gtt().list_triggers().await;
+    let _: Result<KiteApiResponse<GttTrigger>, ManjaError> = c.gtt().get_trigger(1).await;
     let _: Result<KiteApiResponse<Quotes<LTPQuote>>, ManjaError> =
         c.market().get_quotes::<LTPQuote>(&["NSE:INFY"]).await;
     let _: Result<Vec<Instrument>, ManjaError> = c.market().get_instruments_all().await;

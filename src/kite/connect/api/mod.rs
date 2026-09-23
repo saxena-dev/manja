@@ -1,10 +1,10 @@
 //! API endpoint definitions and functions for interacting with Kite Connect API.
 //!
 //! This module organizes the various API groups for Kite Connect API. It includes
-//! submodules for managing sessions, user data, orders, portfolio, market data,
-//! and margins. Each submodule corresponds to a specific set of endpoints in
-//! Kite Connect API, making it easier to interact with different aspects of the
-//! trading platform.
+//! submodules for managing sessions, user data, orders, GTT orders, portfolio,
+//! market data, and margins. Each submodule corresponds to a specific set of
+//! endpoints in Kite Connect API, making it easier to interact with different
+//! aspects of the trading platform.
 //!
 // Manages the `/session/` API group, including authentication and session management.
 mod session;
@@ -19,6 +19,10 @@ pub use user::User;
 // and status checks.
 mod orders;
 pub use orders::Orders;
+
+// Manages the `/gtt/` API group: Good Till Triggered orders.
+mod gtt;
+pub use gtt::Gtt;
 
 // Manages the `/portfolio/` API group, including holdings and positions.
 //

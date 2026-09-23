@@ -67,7 +67,7 @@ use tracing::{Instrument as _, Span};
 use crate::kite::{
     connect::{
         admission::{Admission, RateClass},
-        api::{Charges, Margins, Market, Orders, Portfolio, Session, User},
+        api::{Charges, Gtt, Margins, Market, Orders, Portfolio, Session, User},
         config::Config,
         credentials::{AccessToken, ApiKey, Credentials},
         models::{KiteApiResponse, UserSession},
@@ -488,6 +488,11 @@ impl HTTPClient {
     /// auctions.
     pub fn portfolio(&self) -> Portfolio<'_> {
         Portfolio::new(self)
+    }
+
+    /// The GTT resource: Good Till Triggered orders.
+    pub fn gtt(&self) -> Gtt<'_> {
+        Gtt::new(self)
     }
 
     /// The market resource: quotes and the instrument master.
@@ -1049,6 +1054,8 @@ pub(crate) fn endpoint_template(method: Method, path: &str) -> Endpoint {
         ["margins", "basket"] => Endpoint::MarginsBasket,
         ["charges", "orders"] => Endpoint::ChargesOrders,
         ["session", "token"] => Endpoint::SessionToken,
+        ["gtt", "triggers"] => Endpoint::GttTriggers,
+        ["gtt", "triggers", _] => Endpoint::GttTriggersId,
         _ => Endpoint::Unknown,
     }
 }
@@ -1219,7 +1226,9 @@ mod tests {
                 Endpoint::MarginsBasket,
             ),
             (Delete, "/session/token", Endpoint::SessionToken),
-            (Get, "/gtt/triggers", Endpoint::Unknown),
+            (Post, "/gtt/triggers", Endpoint::GttTriggers),
+            (Delete, "/gtt/triggers/123", Endpoint::GttTriggersId),
+            (Get, "/alerts", Endpoint::Unknown),
         ];
         for (m, path, expected) in cases {
             assert_eq!(endpoint_template(m, path), expected, "{path}");
