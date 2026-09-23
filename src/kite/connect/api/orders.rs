@@ -1,180 +1,192 @@
-//! Orders API group: `/orders/`
+//! Orders API group: `/orders/` and `/trades`.
 //!
-//! This module provides functionality to interact with the orders-related
-//! endpoints of Kite Connect API.
+//! Placing an order registers it with the OMS. That does not guarantee its
+//! receipt at the exchange, and its status is not known when placement
+//! returns (`kite-api-docs/docs/connect/v3/orders.md:42-52`). The
+//! acknowledgements returned here ([`OrderReceipt`]) therefore assert no
+//! fill, no final modification and no confirmed cancellation; the order book,
+//! order history and order updates report what happened.
 //!
-//! Placing an order implies registering it with the OMS via the API. This does
-//! not guarantee the order's receipt at the exchange. The fate of an order is
-//! dependent on several factors including market hours, availability of funds,
-//! risk checks and so on. Under normal circumstances, order placement, receipt
-//! by the OMS, transport to the exchange, execution, and the confirmation
-//! roundtrip happen instantly.
+//! Placement, modification and cancellation make exactly one transport
+//! attempt per call, including after an HTTP 429 or a lost response, and are
+//! validated before admission, so an invalid request sends nothing. A lost
+//! or malformed response after dispatch does not show whether the broker
+//! acted: the error's stage says so, and the caller decides what to do next.
 //!
-//! When an order is successfully placed, the API returns an `order_id`. The status
-//! of the order is not known at the moment of placing because of the aforementioned
-//! reasons.
+//! Each mutation has a `*_with_permit` variant that dispatches with a
+//! [`DispatchPermit`] obtained from `HTTPClient::admit`, giving the caller an
+//! explicit point between admission and dispatch.
 //!
-//! Refer to the official [API documentation](https://kite.trade/docs/connect/v3/orders/).
-//!
-
 use crate::kite::connect::{
     client::HTTPClient,
-    models::{KiteApiResponse, Order, OrderReceipt, Trade},
+    models::{
+        check_order_id, KiteApiResponse, ModifyOrderRequest, Order, OrderReceipt, OrderVariety,
+        PlaceOrderRequest, Trade,
+    },
+    scheduler::DispatchPermit,
 };
 use crate::kite::error::Result;
 
-/// The order APIs let you place orders of different varities, modify and
-/// cancel pending orders, retrieve the daily order and more.
-///
+/// Order placement, modification and cancellation, the order book and the
+/// trade book.
 pub struct Orders<'c> {
     /// Reference to the HTTP client used for making API requests.
     pub client: &'c HTTPClient,
 }
 
 impl<'c> Orders<'c> {
-    /// Creates a new instance of `Orders` with default API rate limits.
-    ///
-    /// # Arguments
-    ///
-    /// * `client` - A reference to the `HTTPClient` used for making API requests.
-    ///
-    /// # Returns
-    ///
-    /// A new instance of `Orders`.
-    ///
+    /// Order APIs on `client`.
     pub fn new(client: &'c HTTPClient) -> Self {
         Self { client }
     }
 
-    // ===== [ KiteConnect API endpoints ] =====
+    // ===== [ Mutations: one attempt each ] =====
 
-    /// Places an order of a particular variety.
+    /// Place an order: `POST /orders/{variety}`, form-encoded.
     ///
-    /// Placing an order implies registering it with the OMS via the API. This does
-    /// not guarantee the order's receipt at the exchange. The fate of an order is
-    /// dependent on several factors including market hours, availability of funds,
-    /// risk checks and so on. Under normal circumstances, order placement, receipt
-    /// by the OMS, transport to the exchange, execution, and the confirmation
-    /// roundtrip happen instantly.
-    ///
-    /// When an order is successfully placed, the API returns an `order_id`. The status
-    /// of the order is not known at the moment of placing because of the aforementioned
-    /// reasons.
-    ///
-    /// # Arguments
-    ///
-    /// * `order` - A reference to an `Order` instance containing the order details.
-    ///
-    /// # Returns
-    ///
-    /// A `Result` containing a `KiteApiResponse` with an `OrderReceipt` on success.
-    ///
-    pub async fn place_order(&self, order: &Order) -> Result<KiteApiResponse<OrderReceipt>> {
+    /// The request is validated first; an invalid one is a `Validation`
+    /// error and nothing is sent.
+    pub async fn place_order(
+        &self,
+        request: &PlaceOrderRequest,
+    ) -> Result<KiteApiResponse<OrderReceipt>> {
+        self.place(request, None).await
+    }
+
+    /// [`Self::place_order`] with admitted capacity from
+    /// `HTTPClient::admit(PermitTarget::PlaceOrder)`.
+    pub async fn place_order_with_permit(
+        &self,
+        request: &PlaceOrderRequest,
+        permit: DispatchPermit,
+    ) -> Result<KiteApiResponse<OrderReceipt>> {
+        self.place(request, Some(permit)).await
+    }
+
+    async fn place(
+        &self,
+        request: &PlaceOrderRequest,
+        permit: Option<DispatchPermit>,
+    ) -> Result<KiteApiResponse<OrderReceipt>> {
         self.client
-            .post(&format!("/orders/{}", order.variety), order)
+            .send_form(
+                reqwest::Method::POST,
+                &format!("/orders/{}", request.variety),
+                request.validate(),
+                request.form_pairs(),
+                permit,
+            )
             .await
     }
 
-    /// Modifies an open or pending order.
-    ///
-    /// As long as on order is open or pending in the system, certain attributes of
-    /// it may be modified.
-    ///
-    /// # Arguments
-    ///
-    /// * `variety` - The variety of the order (e.g., "regular", "amo").
-    /// * `order_id` - The unique ID of the order to be modified.
-    /// * `order` - A reference to an `Order` instance containing the modified order details.
-    ///
-    /// # Returns
-    ///
-    /// A `Result` containing a `KiteApiResponse` with an `OrderReceipt` on success.
-    ///
+    /// Modify an open or pending order: `PUT /orders/{variety}/{order_id}`,
+    /// form-encoded, sending only the fields that are set.
     pub async fn modify_order(
         &self,
-        variety: &str,
+        variety: OrderVariety,
         order_id: &str,
-        order: &Order,
+        request: &ModifyOrderRequest,
     ) -> Result<KiteApiResponse<OrderReceipt>> {
+        self.modify(variety, order_id, request, None).await
+    }
+
+    /// [`Self::modify_order`] with admitted capacity from
+    /// `HTTPClient::admit(PermitTarget::ModifyOrder { order_id })`.
+    pub async fn modify_order_with_permit(
+        &self,
+        variety: OrderVariety,
+        order_id: &str,
+        request: &ModifyOrderRequest,
+        permit: DispatchPermit,
+    ) -> Result<KiteApiResponse<OrderReceipt>> {
+        self.modify(variety, order_id, request, Some(permit)).await
+    }
+
+    async fn modify(
+        &self,
+        variety: OrderVariety,
+        order_id: &str,
+        request: &ModifyOrderRequest,
+        permit: Option<DispatchPermit>,
+    ) -> Result<KiteApiResponse<OrderReceipt>> {
+        let valid = check_order_id(order_id).and_then(|_| request.validate(variety));
+        let path = if valid.is_ok() {
+            format!("/orders/{variety}/{order_id}")
+        } else {
+            format!("/orders/{variety}/invalid")
+        };
         self.client
-            .put(&format!("/orders/{}/{}", variety, order_id), order)
+            .send_form(
+                reqwest::Method::PUT,
+                &path,
+                valid,
+                request.form_pairs(),
+                permit,
+            )
             .await
     }
 
-    /// Cancels an open or pending order.
+    /// Cancel an open or pending order: `DELETE /orders/{variety}/{order_id}`.
     ///
-    /// As long as on order is open or pending in the system, it can be cancelled.
-    ///
-    /// # Arguments
-    ///
-    /// * `variety` - The variety of the order (e.g., "regular", "amo").
-    /// * `order_id` - The unique ID of the order to be canceled.
-    ///
-    /// # Returns
-    ///
-    /// A `Result` containing a `KiteApiResponse` with an `OrderReceipt` on success.
-    ///
+    /// Only the `Authorization` header authenticates the request; neither
+    /// the API key nor the access token is placed in the URL
+    /// (`kite-api-docs/docs/connect/v3/orders.md:148-162`). The receipt
+    /// acknowledges the request, not a confirmed cancellation.
     pub async fn cancel_order(
         &self,
-        variety: &str,
+        variety: OrderVariety,
         order_id: &str,
     ) -> Result<KiteApiResponse<OrderReceipt>> {
+        self.cancel(variety, order_id, None).await
+    }
+
+    /// [`Self::cancel_order`] with admitted capacity from
+    /// `HTTPClient::admit(PermitTarget::CancelOrder)`.
+    pub async fn cancel_order_with_permit(
+        &self,
+        variety: OrderVariety,
+        order_id: &str,
+        permit: DispatchPermit,
+    ) -> Result<KiteApiResponse<OrderReceipt>> {
+        self.cancel(variety, order_id, Some(permit)).await
+    }
+
+    async fn cancel(
+        &self,
+        variety: OrderVariety,
+        order_id: &str,
+        permit: Option<DispatchPermit>,
+    ) -> Result<KiteApiResponse<OrderReceipt>> {
+        let valid = check_order_id(order_id);
+        let path = if valid.is_ok() {
+            format!("/orders/{variety}/{order_id}")
+        } else {
+            format!("/orders/{variety}/invalid")
+        };
         self.client
-            .delete(&format!("/orders/{}/{}", variety, order_id), true)
+            .send_form(reqwest::Method::DELETE, &path, valid, Vec::new(), permit)
             .await
     }
 
-    /// Retrieves the list of all orders (open and executed) for the day.
-    ///
-    /// The order history or the order book is transient as it only lives for a day
-    /// in the system. When you retrieve orders, you get all the orders for the day
-    /// including open, pending, and executed ones.
-    ///
-    /// # Returns
-    ///
-    /// A `Result` containing a `KiteApiResponse` with a vector of `Order` instances on success.
-    ///
+    // ===== [ Reads ] =====
+
+    /// Every order of the day, open and executed: `GET /orders`.
     pub async fn list_orders(&self) -> Result<KiteApiResponse<Vec<Order>>> {
         self.client.get("/orders").await
     }
 
-    /// Retrieves the history of a given order.
-    ///
-    /// # Arguments
-    ///
-    /// * `order_id` - The unique ID of the order whose history is to be retrieved.
-    ///
-    /// # Returns
-    ///
-    /// A `Result` containing a `KiteApiResponse` with a vector of `Order` instances on success.
-    ///
+    /// The history of one order: `GET /orders/{order_id}`.
     pub async fn get_order_history(&self, order_id: &str) -> Result<KiteApiResponse<Vec<Order>>> {
-        self.client.get(&format!("/orders/{}", order_id)).await
+        self.client.get(&format!("/orders/{order_id}")).await
     }
 
-    /// Retrieves the list of all executed trades for the day.
-    ///
-    /// # Returns
-    ///
-    /// A `Result` containing a `KiteApiResponse` with a vector of `Trade` instances on success.
-    ///
+    /// Every executed trade of the day: `GET /trades`.
     pub async fn list_trades(&self) -> Result<KiteApiResponse<Vec<Trade>>> {
         self.client.get("/trades").await
     }
 
-    /// Retrieves the trades generated by a particular order.
-    ///
-    /// # Arguments
-    ///
-    /// * `order_id` - The unique ID of the order whose trades are to be retrieved.
-    ///
-    /// # Returns
-    ///
-    /// A `Result` containing a `KiteApiResponse` with a vector of `Trade` instances on success.
-    ///
+    /// The trades of one order: `GET /orders/{order_id}/trades`.
     pub async fn get_order_trades(&self, order_id: &str) -> Result<KiteApiResponse<Vec<Trade>>> {
-        self.client
-            .get(&format!("/orders/{}/trades", order_id))
-            .await
+        self.client.get(&format!("/orders/{order_id}/trades")).await
     }
 }

@@ -11,9 +11,13 @@ use std::time::{Duration, Instant};
 use manja::kite::connect::client::HTTPClient;
 use manja::kite::connect::config::{Config, HttpLimits};
 use manja::kite::connect::credentials::{Credentials, KiteCredentials};
-use manja::kite::connect::models::{Order, PositionConversionRequest};
+use manja::kite::connect::models::{
+    Exchange, ModifyOrderRequest, OrderType, OrderVariety, PlaceOrderRequest,
+    PositionConversionRequest, PositionType, ProductType, TransactionType,
+};
 use manja::kite::connect::scheduler::{PermitTarget, SchedulerLimits};
 use manja::kite::error::{HttpErrorKind, TransportStage};
+use manja::kite::protocol::Quantity;
 
 use support::fixtures;
 use support::http::{HttpHarness, Reply};
@@ -53,32 +57,37 @@ fn gateway(status: u16) -> Reply {
     }
 }
 
-// A response-shaped order for the legacy placement and modification entry
-// points; S09 replaces them with dedicated request types.
-fn legacy_order() -> Order {
-    serde_json::from_value(serde_json::json!({
-        "order_id": "151220000000000", "parent_order_id": null,
-        "exchange_order_id": null, "modified": false, "placed_by": "AB1234",
-        "variety": "regular", "status": "OPEN", "tradingsymbol": "INFY",
-        "exchange": "NSE", "instrument_token": 408065, "transaction_type": "BUY",
-        "order_type": "LIMIT", "product": "CNC", "validity": "DAY", "price": 1500.0,
-        "quantity": 1, "trigger_price": 0.0, "average_price": 0.0,
-        "pending_quantity": 1, "filled_quantity": 0, "disclosed_quantity": 0,
-        "order_timestamp": null, "exchange_timestamp": null,
-        "exchange_update_timestamp": null, "status_message": null,
-        "status_message_raw": null, "cancelled_quantity": 0,
-        "auction_number": null, "meta": {}, "tag": null, "guid": "g"
-    }))
-    .unwrap()
+fn place_request() -> PlaceOrderRequest {
+    let mut r = PlaceOrderRequest::new(
+        OrderVariety::Regular,
+        Exchange::NSE,
+        "INFY",
+        TransactionType::BUY,
+        OrderType::Limit,
+        Quantity::new(1).unwrap(),
+        ProductType::CashAndCarry,
+    );
+    r.price = Some(1500.0);
+    r
+}
+
+fn modify_request() -> ModifyOrderRequest {
+    ModifyOrderRequest {
+        price: Some(1501.0),
+        ..Default::default()
+    }
 }
 
 fn conversion() -> PositionConversionRequest {
-    serde_json::from_value(serde_json::json!({
-        "tradingsymbol": "INFY", "exchange": "NSE", "transaction_type": "BUY",
-        "position_type": "overnight", "quantity": 1,
-        "old_product": "CNC", "new_product": "MIS"
-    }))
-    .unwrap()
+    PositionConversionRequest {
+        tradingsymbol: "INFY".into(),
+        exchange: Exchange::NSE,
+        transaction_type: TransactionType::BUY,
+        position_type: PositionType::Overnight,
+        quantity: Quantity::new(1).unwrap(),
+        old_product: ProductType::CashAndCarry,
+        new_product: ProductType::MarginIntradaySquareoff,
+    }
 }
 
 /// Run every one-attempt operation against `replies` and assert that
@@ -94,20 +103,20 @@ async fn each_one_attempt_operation(replies: fn() -> Vec<Reply>) {
             assert_eq!(harness.requests().len(), 1, "{} made one attempt", $name);
         }};
     }
-    once!("place", |c| c.orders().place_order(&legacy_order()));
+    once!("place", |c| c.orders().place_order(&place_request()));
     once!("modify", |c| c.orders().modify_order(
-        "regular",
+        OrderVariety::Regular,
         "151220000000000",
-        &legacy_order()
+        &modify_request()
     ));
     once!("cancel", |c| c
         .orders()
-        .cancel_order("regular", "151220000000000"));
+        .cancel_order(OrderVariety::Regular, "151220000000000"));
     once!("convert", |c| {
         let c2 = c.clone();
         async move {
             manja::kite::connect::api::Portfolio::new(&c2)
-                .convert_position(conversion())
+                .convert_position(&conversion())
                 .await
         }
     });

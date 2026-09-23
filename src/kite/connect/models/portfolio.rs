@@ -216,46 +216,77 @@ pub struct Position {
     pub day_sell_value: f64,
 }
 
-/// Represents the variety of an order, either overnight or day positions.
-///
-/// This enum contains constant values used for placing different types of
-/// orders.
-///
-#[derive(Debug, Serialize, Deserialize)]
+/// Whether a position to convert is an overnight or a day position.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum PositionType {
     /// Overnight position.
     #[serde(rename = "overnight")]
     Overnight,
 
-    /// Day position
+    /// Day position.
     #[serde(rename = "day")]
     Day,
 }
 
-/// Represents the request parameters for a position conversion.
+impl std::fmt::Display for PositionType {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            Self::Overnight => "overnight",
+            Self::Day => "day",
+        })
+    }
+}
+
+/// A position conversion: `PUT /portfolio/positions`, form-encoded
+/// (`kite-api-docs/docs/connect/v3/portfolio.md:463-497`).
 ///
-/// These parameters are required to convert a position's margin product.
-///
-#[derive(Debug, Serialize, Deserialize)]
+/// A successful response reports the broker's result (`true`). It is not
+/// reconciled position state.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct PositionConversionRequest {
     /// Tradingsymbol of the instrument.
     pub tradingsymbol: String,
-
-    /// Name of the exchange.
+    /// Exchange. `NONE` and `INDICES` are rejected.
     pub exchange: Exchange,
-
-    /// Transaction type: BUY or SELL.
+    /// BUY or SELL.
     pub transaction_type: TransactionType,
-
-    /// Position type: overnight or day.
+    /// Overnight or day.
     pub position_type: PositionType,
-
     /// Quantity to convert.
-    pub quantity: i32,
-
-    /// Existing margin product of the position.
+    pub quantity: crate::kite::protocol::Quantity,
+    /// Existing margin product.
     pub old_product: ProductType,
-
-    /// Margin product to convert to.
+    /// Margin product to convert to; must differ from `old_product`.
     pub new_product: ProductType,
+}
+
+impl PositionConversionRequest {
+    /// Check the documented fields.
+    pub fn validate(&self) -> Result<(), crate::kite::connect::models::RequestError> {
+        use crate::kite::connect::models::RequestError;
+        let err = |field, reason| Err(RequestError { field, reason });
+        if !self.exchange.is_tradable() {
+            return err("exchange", "is not a tradable exchange");
+        }
+        if self.tradingsymbol.is_empty() || self.tradingsymbol.len() > 64 {
+            return err("tradingsymbol", "must be 1-64 bytes");
+        }
+        if self.old_product == self.new_product {
+            return err("new_product", "must differ from old_product");
+        }
+        Ok(())
+    }
+
+    /// Form fields in the documented order.
+    pub(crate) fn form_pairs(&self) -> Vec<(&'static str, String)> {
+        vec![
+            ("tradingsymbol", self.tradingsymbol.clone()),
+            ("exchange", self.exchange.to_string()),
+            ("transaction_type", self.transaction_type.to_string()),
+            ("position_type", self.position_type.to_string()),
+            ("quantity", self.quantity.to_string()),
+            ("old_product", self.old_product.to_string()),
+            ("new_product", self.new_product.to_string()),
+        ]
+    }
 }

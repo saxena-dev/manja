@@ -49,7 +49,8 @@ pub use user::{Available, Segment, SegmentKind, UserMargins, UserProfile, Utilis
 ///
 mod order;
 mod order_enums;
-pub use order::{Order, OrderReceipt, Trade};
+pub(crate) use order::check_order_id;
+pub use order::{ModifyOrderRequest, Order, OrderReceipt, PlaceOrderRequest, RequestError, Trade};
 #[allow(unused_imports)]
 pub use order_enums::{
     OrderStatus, OrderType, OrderValidity, OrderVariety, ProductType, TransactionType,

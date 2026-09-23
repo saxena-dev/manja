@@ -217,3 +217,353 @@ pub struct Trade {
     #[serde(default, with = "serde_opt_datetime")]
     pub exchange_timestamp: Option<DateTime<FixedOffset>>,
 }
+
+// --- [ Request DTOs ] ---
+
+/// Why a request was rejected before admission. Nothing was sent.
+#[derive(Clone, Debug, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct RequestError {
+    /// The offending field.
+    pub field: &'static str,
+    /// Why it was rejected.
+    pub reason: &'static str,
+}
+
+impl std::fmt::Display for RequestError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "invalid `{}`: {}", self.field, self.reason)
+    }
+}
+
+impl std::error::Error for RequestError {}
+
+fn invalid(field: &'static str, reason: &'static str) -> Result<(), RequestError> {
+    Err(RequestError { field, reason })
+}
+
+fn check_price(field: &'static str, p: Option<f64>) -> Result<(), RequestError> {
+    match p {
+        Some(v) if !v.is_finite() || v <= 0.0 => invalid(field, "must be finite and positive"),
+        _ => Ok(()),
+    }
+}
+
+// orders.md:37,101: greater than 0 and up to 100, or -1 for automatic.
+fn check_market_protection(p: Option<f64>) -> Result<(), RequestError> {
+    match p {
+        Some(v) if v == -1.0 || (v > 0.0 && v <= 100.0) => Ok(()),
+        Some(_) => invalid("market_protection", "must be -1 or in (0, 100]"),
+        None => Ok(()),
+    }
+}
+
+/// Validate an order ID used in a request path: 1 to 64 ASCII letters or
+/// digits, so it can never alter the path or query.
+pub(crate) fn check_order_id(order_id: &str) -> Result<(), RequestError> {
+    if order_id.is_empty()
+        || order_id.len() > 64
+        || !order_id.bytes().all(|b| b.is_ascii_alphanumeric())
+    {
+        return invalid("order_id", "must be 1-64 ASCII letters or digits");
+    }
+    Ok(())
+}
+
+fn push<T: std::fmt::Display>(
+    pairs: &mut Vec<(&'static str, String)>,
+    k: &'static str,
+    v: Option<T>,
+) {
+    if let Some(v) = v {
+        pairs.push((k, v.to_string()));
+    }
+}
+
+/// A new order: `POST /orders/{variety}`, form-encoded
+/// (`kite-api-docs/docs/connect/v3/orders.md:58-103`).
+///
+/// It has no order ID, status, fill or timestamp: those are response-only
+/// facts, and a request type that cannot hold them cannot fabricate them:
+///
+/// ```compile_fail
+/// # use manja::kite::connect::models::*;
+/// # use manja::kite::protocol::Quantity;
+/// let mut req = PlaceOrderRequest::new(
+///     OrderVariety::Regular, Exchange::NSE, "INFY", TransactionType::BUY,
+///     OrderType::Market, Quantity::new(1).unwrap(), ProductType::CashAndCarry,
+/// );
+/// req.order_id = "151220000000000".into();
+/// ```
+///
+/// [`Self::validate`] checks the protocol shape only: the route, identifiers,
+/// quantities and order-type field combinations. It is not a risk, exposure
+/// or authority check; applications add those.
+#[derive(Clone, Debug, PartialEq)]
+pub struct PlaceOrderRequest {
+    /// Order variety; selects the route.
+    pub variety: OrderVariety,
+    /// Exchange. `NONE` and `INDICES` are rejected.
+    pub exchange: Exchange,
+    /// Exchange tradingsymbol.
+    pub tradingsymbol: String,
+    /// BUY or SELL.
+    pub transaction_type: TransactionType,
+    /// Order type.
+    pub order_type: OrderType,
+    /// Quantity to transact.
+    pub quantity: crate::kite::protocol::Quantity,
+    /// Margin product.
+    pub product: ProductType,
+    /// Order validity; `DAY` by default.
+    pub validity: OrderValidity,
+    /// Price: required for LIMIT and SL, forbidden for MARKET and SL-M.
+    pub price: Option<f64>,
+    /// Trigger price: required for SL and SL-M, forbidden otherwise.
+    pub trigger_price: Option<f64>,
+    /// Quantity to disclose publicly; at most `quantity`.
+    pub disclosed_quantity: Option<u32>,
+    /// Life span in minutes: required with TTL validity, forbidden otherwise.
+    pub validity_ttl: Option<u32>,
+    /// Iceberg legs, 2 to 50: required for the iceberg variety only.
+    pub iceberg_legs: Option<u32>,
+    /// Iceberg leg quantity: required for the iceberg variety only.
+    pub iceberg_quantity: Option<u32>,
+    /// Auction number: required for the auction variety only.
+    pub auction_number: Option<String>,
+    /// Market protection, -1 or in (0, 100]: MARKET and SL-M only.
+    pub market_protection: Option<f64>,
+    /// Automatic slicing above freeze quantity.
+    pub autoslice: Option<bool>,
+    /// Optional tag, at most 20 ASCII letters and digits.
+    pub tag: Option<String>,
+}
+
+impl PlaceOrderRequest {
+    /// A request with `DAY` validity and no optional fields.
+    pub fn new(
+        variety: OrderVariety,
+        exchange: Exchange,
+        tradingsymbol: impl Into<String>,
+        transaction_type: TransactionType,
+        order_type: OrderType,
+        quantity: crate::kite::protocol::Quantity,
+        product: ProductType,
+    ) -> Self {
+        Self {
+            variety,
+            exchange,
+            tradingsymbol: tradingsymbol.into(),
+            transaction_type,
+            order_type,
+            quantity,
+            product,
+            validity: OrderValidity::Day,
+            price: None,
+            trigger_price: None,
+            disclosed_quantity: None,
+            validity_ttl: None,
+            iceberg_legs: None,
+            iceberg_quantity: None,
+            auction_number: None,
+            market_protection: None,
+            autoslice: None,
+            tag: None,
+        }
+    }
+
+    /// Check the documented field combinations.
+    pub fn validate(&self) -> Result<(), RequestError> {
+        if !self.exchange.is_tradable() {
+            return invalid("exchange", "is not a tradable exchange");
+        }
+        if self.tradingsymbol.is_empty() || self.tradingsymbol.len() > 64 {
+            return invalid("tradingsymbol", "must be 1-64 bytes");
+        }
+        check_price("price", self.price)?;
+        check_price("trigger_price", self.trigger_price)?;
+        match self.order_type {
+            OrderType::Limit if self.price.is_none() => {
+                return invalid("price", "is required for LIMIT orders")
+            }
+            OrderType::Stoploss if self.price.is_none() || self.trigger_price.is_none() => {
+                return invalid("trigger_price", "SL orders need price and trigger_price")
+            }
+            OrderType::StoplossMarket if self.trigger_price.is_none() => {
+                return invalid("trigger_price", "is required for SL-M orders")
+            }
+            OrderType::Market | OrderType::StoplossMarket if self.price.is_some() => {
+                return invalid("price", "is not accepted for MARKET or SL-M orders")
+            }
+            OrderType::Market | OrderType::Limit
+                if self.trigger_price.is_some() && self.variety != OrderVariety::Cover =>
+            {
+                return invalid("trigger_price", "is only for SL, SL-M and cover orders")
+            }
+            _ => {}
+        }
+        if self.market_protection.is_some()
+            && !matches!(
+                self.order_type,
+                OrderType::Market | OrderType::StoplossMarket
+            )
+        {
+            return invalid("market_protection", "is only for MARKET and SL-M orders");
+        }
+        check_market_protection(self.market_protection)?;
+        if self
+            .disclosed_quantity
+            .is_some_and(|d| d > self.quantity.get())
+        {
+            return invalid("disclosed_quantity", "exceeds quantity");
+        }
+        match (self.validity, self.validity_ttl) {
+            (OrderValidity::TimeToLive, None | Some(0)) => {
+                return invalid(
+                    "validity_ttl",
+                    "a positive TTL is required with TTL validity",
+                )
+            }
+            (OrderValidity::Day | OrderValidity::ImmediateOrCancel, Some(_)) => {
+                return invalid("validity_ttl", "is only for TTL validity")
+            }
+            _ => {}
+        }
+        let iceberg = self.variety == OrderVariety::Iceberg;
+        match (iceberg, self.iceberg_legs, self.iceberg_quantity) {
+            (true, Some(legs), Some(q)) if (2..=50).contains(&legs) && q > 0 => {}
+            (true, _, _) => {
+                return invalid(
+                    "iceberg_legs",
+                    "iceberg orders need 2-50 legs and a leg quantity",
+                )
+            }
+            (false, None, None) => {}
+            (false, _, _) => return invalid("iceberg_legs", "is only for iceberg orders"),
+        }
+        match (self.variety == OrderVariety::Auction, &self.auction_number) {
+            (true, Some(n)) if !n.is_empty() => {}
+            (true, _) => return invalid("auction_number", "is required for auction orders"),
+            (false, None) => {}
+            (false, Some(_)) => return invalid("auction_number", "is only for auction orders"),
+        }
+        if let Some(tag) = &self.tag {
+            if tag.is_empty() || tag.len() > 20 || !tag.bytes().all(|b| b.is_ascii_alphanumeric()) {
+                return invalid("tag", "must be 1-20 ASCII letters or digits");
+            }
+        }
+        Ok(())
+    }
+
+    /// Form fields in a fixed order.
+    pub(crate) fn form_pairs(&self) -> Vec<(&'static str, String)> {
+        let mut p = vec![
+            ("tradingsymbol", self.tradingsymbol.clone()),
+            ("exchange", self.exchange.to_string()),
+            ("transaction_type", self.transaction_type.to_string()),
+            ("order_type", self.order_type.to_string()),
+            ("quantity", self.quantity.to_string()),
+            ("product", self.product.to_string()),
+            ("validity", self.validity.to_string()),
+        ];
+        push(&mut p, "price", self.price);
+        push(&mut p, "trigger_price", self.trigger_price);
+        push(&mut p, "disclosed_quantity", self.disclosed_quantity);
+        push(&mut p, "validity_ttl", self.validity_ttl);
+        push(&mut p, "iceberg_legs", self.iceberg_legs);
+        push(&mut p, "iceberg_quantity", self.iceberg_quantity);
+        push(&mut p, "auction_number", self.auction_number.as_ref());
+        push(&mut p, "market_protection", self.market_protection);
+        push(&mut p, "autoslice", self.autoslice);
+        push(&mut p, "tag", self.tag.as_ref());
+        p
+    }
+}
+
+/// Changes to an open or pending order: `PUT /orders/{variety}/{order_id}`,
+/// form-encoded (`kite-api-docs/docs/connect/v3/orders.md:105-146`).
+///
+/// Only the fields that are set are sent. A successful modification returns
+/// an [`OrderReceipt`], which does not prove the modification took effect.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct ModifyOrderRequest {
+    /// New order type.
+    pub order_type: Option<OrderType>,
+    /// New quantity.
+    pub quantity: Option<crate::kite::protocol::Quantity>,
+    /// New price.
+    pub price: Option<f64>,
+    /// New trigger price.
+    pub trigger_price: Option<f64>,
+    /// New disclosed quantity.
+    pub disclosed_quantity: Option<u32>,
+    /// New validity.
+    pub validity: Option<OrderValidity>,
+    /// New TTL in minutes; only with TTL validity.
+    pub validity_ttl: Option<u32>,
+    /// Market protection, -1 or in (0, 100].
+    pub market_protection: Option<f64>,
+}
+
+impl ModifyOrderRequest {
+    /// Check the documented fields for `variety`: cover orders accept only
+    /// price and trigger price, and at least one field must be set.
+    pub fn validate(&self, variety: OrderVariety) -> Result<(), RequestError> {
+        let any = self.order_type.is_some()
+            || self.quantity.is_some()
+            || self.price.is_some()
+            || self.trigger_price.is_some()
+            || self.disclosed_quantity.is_some()
+            || self.validity.is_some()
+            || self.validity_ttl.is_some()
+            || self.market_protection.is_some();
+        if !any {
+            return invalid("request", "sets no field to modify");
+        }
+        check_price("price", self.price)?;
+        check_price("trigger_price", self.trigger_price)?;
+        check_market_protection(self.market_protection)?;
+        if variety == OrderVariety::Cover
+            && (self.order_type.is_some()
+                || self.quantity.is_some()
+                || self.disclosed_quantity.is_some()
+                || self.validity.is_some()
+                || self.validity_ttl.is_some()
+                || self.market_protection.is_some())
+        {
+            return invalid(
+                "variety",
+                "cover orders accept only price and trigger_price",
+            );
+        }
+        if self.validity_ttl.is_some() && self.validity != Some(OrderValidity::TimeToLive) {
+            return invalid("validity_ttl", "is only for TTL validity");
+        }
+        if self.validity == Some(OrderValidity::TimeToLive) && self.validity_ttl.unwrap_or(0) == 0 {
+            return invalid(
+                "validity_ttl",
+                "a positive TTL is required with TTL validity",
+            );
+        }
+        if let (Some(d), Some(q)) = (self.disclosed_quantity, self.quantity) {
+            if d > q.get() {
+                return invalid("disclosed_quantity", "exceeds quantity");
+            }
+        }
+        Ok(())
+    }
+
+    /// Form fields in a fixed order.
+    pub(crate) fn form_pairs(&self) -> Vec<(&'static str, String)> {
+        let mut p = Vec::new();
+        push(&mut p, "order_type", self.order_type);
+        push(&mut p, "quantity", self.quantity);
+        push(&mut p, "price", self.price);
+        push(&mut p, "trigger_price", self.trigger_price);
+        push(&mut p, "disclosed_quantity", self.disclosed_quantity);
+        push(&mut p, "validity", self.validity);
+        push(&mut p, "validity_ttl", self.validity_ttl);
+        push(&mut p, "market_protection", self.market_protection);
+        p
+    }
+}

@@ -475,20 +475,6 @@ impl HTTPClient {
             .await
     }
 
-    /// PUT a JSON body to `path` and decode the response envelope.
-    pub(crate) async fn put<Model, Payload>(
-        &self,
-        path: &str,
-        data: Payload,
-    ) -> Result<KiteApiResponse<Model>>
-    where
-        Model: DeserializeOwned,
-        Payload: Serialize,
-    {
-        self.json(reqwest::Method::PUT, path, None, |rb| rb.json(&data))
-            .await
-    }
-
     /// DELETE `path` and decode the response envelope. With `with_auth`, the
     /// API key and access token are also sent as query parameters, as the
     /// session-logout endpoint documents
@@ -513,6 +499,46 @@ impl HTTPClient {
                 rb
             } else {
                 rb.query(&query)
+            }
+        })
+        .await
+    }
+
+    /// Send `pairs` form-encoded (`application/x-www-form-urlencoded`,
+    /// `kite-api-docs/docs/connect/v3/response-structure.md:2`) and decode the
+    /// response envelope. `validate` runs first: an invalid request, or a
+    /// body over `B-HTTP-09`, fails before admission and sends nothing.
+    pub(crate) async fn send_form<Model>(
+        &self,
+        method: reqwest::Method,
+        path: &str,
+        validate: std::result::Result<(), crate::kite::connect::models::RequestError>,
+        pairs: Vec<(&'static str, String)>,
+        permit: Option<DispatchPermit>,
+    ) -> Result<KiteApiResponse<Model>>
+    where
+        Model: DeserializeOwned,
+    {
+        let (m, endpoint) = labels(&method, path);
+        let rejected = |detail: &str| {
+            HttpError::new(HttpErrorKind::Validation, m, endpoint, Stage::NotStarted)
+                .with_detail(detail)
+        };
+        validate.map_err(|e| rejected(&e.to_string()))?;
+        let body = form_urlencode(&pairs);
+        if body.len() > self.transport.config.limits().request_body_bytes() {
+            return Err(rejected("the request body exceeds its bound").into());
+        }
+        self.json(method, path, permit, |rb| {
+            if pairs.is_empty() {
+                // Nothing to send: no body and no content type.
+                rb
+            } else {
+                rb.header(
+                    reqwest::header::CONTENT_TYPE,
+                    "application/x-www-form-urlencoded",
+                )
+                .body(body.clone())
             }
         })
         .await
@@ -732,6 +758,33 @@ pub(crate) fn credentials_from_session(session: &UserSession) -> Result<Credenti
         ApiKey::new(session.api_key.expose_secret().as_str())?,
         AccessToken::new(session.access_token.expose_secret().as_str())?,
     ))
+}
+
+/// Encode form fields as `application/x-www-form-urlencoded`: ASCII letters,
+/// digits and `*-._` are kept, a space becomes `+`, and every other byte is
+/// percent-encoded.
+pub(crate) fn form_urlencode(pairs: &[(&str, String)]) -> String {
+    fn enc(out: &mut String, s: &str) {
+        for b in s.bytes() {
+            match b {
+                b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'*' | b'-' | b'.' | b'_' => {
+                    out.push(b as char)
+                }
+                b' ' => out.push('+'),
+                _ => out.push_str(&format!("%{b:02X}")),
+            }
+        }
+    }
+    let mut out = String::new();
+    for (i, (k, v)) in pairs.iter().enumerate() {
+        if i > 0 {
+            out.push('&');
+        }
+        enc(&mut out, k);
+        out.push('=');
+        enc(&mut out, v);
+    }
+    out
 }
 
 /// The rate class of a request and, for a modification, its order ID.

@@ -79,3 +79,7 @@ required-features = ["http"]
 [[test]]
 name = "http_reads"
 required-features = ["http"]
+
+[[test]]
+name = "http_orders"
+required-features = ["http"]

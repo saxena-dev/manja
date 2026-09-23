@@ -94,6 +94,7 @@ const MIB: usize = 1024 * KIB;
 /// |---|---|---|
 /// | `B-HTTP-08` JSON response body | 4 MiB | 64 KiB ..= 64 MiB |
 /// | `B-HTTP-08` instrument CSV body | 64 MiB | 1 MiB ..= 256 MiB |
+/// | `B-HTTP-09` request body | 1 MiB | 1 KiB ..= 8 MiB |
 /// | `B-HTTP-10` in-flight attempts per transport | 32 | 1 ..= 256 |
 ///
 /// Deadline, attempt and retry bounds (`B-HTTP-01`–`05`, `-11`, `-12`) are
@@ -110,6 +111,7 @@ const MIB: usize = 1024 * KIB;
 pub struct HttpLimits {
     json_body_bytes: usize,
     csv_body_bytes: usize,
+    request_body_bytes: usize,
     in_flight: usize,
     scheduler: SchedulerLimits,
 }
@@ -119,6 +121,7 @@ impl Default for HttpLimits {
         Self {
             json_body_bytes: 4 * MIB,
             csv_body_bytes: 64 * MIB,
+            request_body_bytes: MIB,
             in_flight: 32,
             scheduler: SchedulerLimits::default(),
         }
@@ -151,6 +154,18 @@ impl HttpLimits {
     pub fn with_scheduler(mut self, scheduler: SchedulerLimits) -> Self {
         self.scheduler = scheduler;
         self
+    }
+
+    /// Maximum request body, in bytes. A larger request is a `Validation`
+    /// error before admission.
+    pub fn request_body_bytes(&self) -> usize {
+        self.request_body_bytes
+    }
+
+    /// Set the request body bound (`B-HTTP-09`).
+    pub fn with_request_body_bytes(mut self, bytes: usize) -> Result<Self, LimitError> {
+        self.request_body_bytes = check_range("B-HTTP-09", bytes, KIB, 8 * MIB)?;
+        Ok(self)
     }
 
     /// Maximum concurrent transport attempts on one transport.
@@ -303,6 +318,11 @@ mod tests {
         assert!(d.clone().with_csv_body_bytes(MIB).is_ok());
         assert!(d.clone().with_csv_body_bytes(256 * MIB).is_ok());
         assert!(d.clone().with_csv_body_bytes(MIB - 1).is_err());
+        assert_eq!(d.request_body_bytes(), MIB);
+        assert!(d.clone().with_request_body_bytes(KIB).is_ok());
+        assert!(d.clone().with_request_body_bytes(8 * MIB).is_ok());
+        assert!(d.clone().with_request_body_bytes(KIB - 1).is_err());
+        assert!(d.clone().with_request_body_bytes(8 * MIB + 1).is_err());
         assert_eq!(d.in_flight(), 32);
         assert!(d.clone().with_in_flight(1).is_ok());
         assert!(d.clone().with_in_flight(256).is_ok());

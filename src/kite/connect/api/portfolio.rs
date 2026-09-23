@@ -13,6 +13,7 @@
 use crate::kite::connect::{
     client::HTTPClient,
     models::{Auction, Holding, KiteApiResponse, PositionConversionRequest, Positions},
+    scheduler::DispatchPermit,
 };
 use crate::kite::error::Result;
 
@@ -71,19 +72,42 @@ impl<'c> Portfolio<'c> {
         self.client.get("/portfolio/positions").await
     }
 
-    /// Convert the margin product of an open position.
+    /// Convert the margin product of an open position:
+    /// `PUT /portfolio/positions`, form-encoded, one attempt.
     ///
-    /// All positions held are of specific margin products such as NRML, MIS
-    /// etc. A position can have one and only one margin product. These
-    /// products affect how the user's margin usage and free cash values are
-    /// computed, and a user may want to covert or change a position's margin
-    /// product from time to time. More on [margin policies](https://zerodha.com/z-connect/general/zerodha-margin-policies).
-    ///
+    /// The request is validated first; an invalid one sends nothing. The
+    /// `true` result is the broker's response, not reconciled position state.
     pub async fn convert_position(
         &self,
-        request: PositionConversionRequest,
+        request: &PositionConversionRequest,
     ) -> Result<KiteApiResponse<bool>> {
-        self.client.put("/portfolio/positions", request).await
+        self.convert(request, None).await
+    }
+
+    /// [`Self::convert_position`] with admitted capacity from
+    /// `HTTPClient::admit(PermitTarget::ConvertPosition)`.
+    pub async fn convert_position_with_permit(
+        &self,
+        request: &PositionConversionRequest,
+        permit: DispatchPermit,
+    ) -> Result<KiteApiResponse<bool>> {
+        self.convert(request, Some(permit)).await
+    }
+
+    async fn convert(
+        &self,
+        request: &PositionConversionRequest,
+        permit: Option<DispatchPermit>,
+    ) -> Result<KiteApiResponse<bool>> {
+        self.client
+            .send_form(
+                reqwest::Method::PUT,
+                "/portfolio/positions",
+                request.validate(),
+                request.form_pairs(),
+                permit,
+            )
+            .await
     }
 
     /// Retrieve the list of auctions that are currently being held.
