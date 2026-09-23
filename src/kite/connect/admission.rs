@@ -19,6 +19,7 @@
 //! | Class | Endpoints | Windows |
 //! |---|---|---|
 //! | `Quote` | `/quote`, `/quote/ohlc`, `/quote/ltp` | 1 per second |
+//! | `Historical` | `/instruments/historical/{instrument_token}/{interval}` | 3 per second |
 //! | `OrderPlacement` | `POST /orders/{variety}` | 10 per second, 400 per minute, 5 000 per IST day |
 //! | `OrderModification` | `PUT /orders/{variety}/{order_id}` | 10 per second, 25 modifications per order per IST day |
 //! | `Standard` | every other documented endpoint | 10 per second |
@@ -40,8 +41,12 @@ use tokio::time::Instant;
 
 use crate::kite::obs::schema::{Endpoint, Method};
 
-/// Version of the default quota profile.
-pub const QUOTA_PROFILE_VERSION: &str = "kite-connect-v3/exceptions.md@2026-09-23";
+/// Version of the default quota profile: the documentation page it encodes,
+/// the date that page was accessed, and a revision that increases whenever
+/// the encoding of that same page changes. A version without a `+r` suffix is
+/// revision 1, and the revision restarts at 1 when the page is accessed again
+/// on a new date. Revision 2 adds the historical candle class.
+pub const QUOTA_PROFILE_VERSION: &str = "kite-connect-v3/exceptions.md@2026-09-23+r2";
 
 /// IST offset in seconds, for the daily ceiling's day boundary.
 const IST_OFFSET_SECONDS: i64 = 5 * 3600 + 30 * 60;
@@ -52,6 +57,8 @@ const IST_OFFSET_SECONDS: i64 = 5 * 3600 + 30 * 60;
 pub enum RateClass {
     /// Market quote endpoints.
     Quote,
+    /// Historical candle data.
+    Historical,
     /// Order placement.
     OrderPlacement,
     /// Order modification.
@@ -67,6 +74,7 @@ impl RateClass {
     pub fn of(method: Method, endpoint: Endpoint) -> Self {
         match (method, endpoint) {
             (_, Endpoint::Quote | Endpoint::QuoteOhlc | Endpoint::QuoteLtp) => Self::Quote,
+            (_, Endpoint::InstrumentsHistorical) => Self::Historical,
             (Method::Post, Endpoint::OrdersVariety) => Self::OrderPlacement,
             (Method::Put, Endpoint::OrdersVarietyId) => Self::OrderModification,
             (_, Endpoint::Unknown) => Self::Unclassified,
@@ -107,6 +115,9 @@ pub enum QuotaError {
     PlacementAboveTenPerSecond,
     /// The daily ceiling or modification limit is zero.
     InvalidCeiling,
+    /// Windows were given for `RateClass::Unclassified`, which takes the
+    /// profile's smallest rate instead.
+    UnclassifiedWindows,
     /// A bound is outside its permitted range.
     Bound(&'static str),
 }
@@ -124,6 +135,7 @@ impl std::error::Error for QuotaError {}
 pub struct QuotaProfile {
     version: String,
     quote: Vec<Window>,
+    historical: Vec<Window>,
     placement: Vec<Window>,
     modification: Vec<Window>,
     standard: Vec<Window>,
@@ -138,6 +150,7 @@ impl QuotaProfile {
         Self {
             version: QUOTA_PROFILE_VERSION.to_string(),
             quote: vec![Window::new(1, s)],
+            historical: vec![Window::new(3, s)],
             placement: vec![
                 Window::new(10, s),
                 Window::new(400, Duration::from_secs(60)),
@@ -149,52 +162,78 @@ impl QuotaProfile {
         }
     }
 
-    /// A custom profile, validated: every class needs at least one window,
-    /// windows need a positive limit and a period of at least 1 ms, the
-    /// placement class may not exceed 10 per second, and the ceilings must be
-    /// positive.
-    #[allow(clippy::too_many_arguments)]
-    pub fn custom(
-        version: impl Into<String>,
-        quote: Vec<Window>,
-        placement: Vec<Window>,
-        modification: Vec<Window>,
-        standard: Vec<Window>,
-        daily_order_ceiling: u32,
-        modifications_per_order: u32,
+    /// The profile with a different version label. Give a changed profile
+    /// its own version, so that what is in force can be told apart from
+    /// [`QUOTA_PROFILE_VERSION`].
+    pub fn with_version(mut self, version: impl Into<String>) -> Self {
+        self.version = version.into();
+        self
+    }
+
+    /// The profile with `windows` for `class`, validated: at least one
+    /// window, each with a positive limit and a period of at least 1 ms, and
+    /// no more than 10 per second for order placement. `Unclassified` has
+    /// no windows of its own: it takes the profile's smallest rate.
+    ///
+    /// ```
+    /// use std::time::Duration;
+    /// use manja::kite::connect::admission::{QuotaProfile, RateClass, Window};
+    ///
+    /// let profile = QuotaProfile::kite_v3()
+    ///     .with_version("desk-quota-1")
+    ///     .with_windows(RateClass::Standard, vec![Window::new(5, Duration::from_secs(1))])
+    ///     .unwrap();
+    /// assert_eq!(profile.windows(RateClass::Standard)[0].limit, 5);
+    /// ```
+    pub fn with_windows(
+        mut self,
+        class: RateClass,
+        windows: Vec<Window>,
     ) -> Result<Self, QuotaError> {
-        let profile = Self {
-            version: version.into(),
-            quote,
-            placement,
-            modification,
-            standard,
-            daily_order_ceiling,
-            modifications_per_order,
+        if windows.is_empty() {
+            return Err(QuotaError::MissingWindows(class));
+        }
+        if windows
+            .iter()
+            .any(|w| w.limit == 0 || w.period < Duration::from_millis(1))
+        {
+            return Err(QuotaError::InvalidWindow);
+        }
+        let slot = match class {
+            RateClass::Quote => &mut self.quote,
+            RateClass::Historical => &mut self.historical,
+            RateClass::OrderPlacement => {
+                if windows.iter().any(|w| w.per_second() > 10.0) {
+                    return Err(QuotaError::PlacementAboveTenPerSecond);
+                }
+                &mut self.placement
+            }
+            RateClass::OrderModification => &mut self.modification,
+            RateClass::Standard => &mut self.standard,
+            RateClass::Unclassified => return Err(QuotaError::UnclassifiedWindows),
         };
-        for (class, windows) in [
-            (RateClass::Quote, &profile.quote),
-            (RateClass::OrderPlacement, &profile.placement),
-            (RateClass::OrderModification, &profile.modification),
-            (RateClass::Standard, &profile.standard),
-        ] {
-            if windows.is_empty() {
-                return Err(QuotaError::MissingWindows(class));
-            }
-            if windows
-                .iter()
-                .any(|w| w.limit == 0 || w.period < Duration::from_millis(1))
-            {
-                return Err(QuotaError::InvalidWindow);
-            }
-        }
-        if profile.placement.iter().any(|w| w.per_second() > 10.0) {
-            return Err(QuotaError::PlacementAboveTenPerSecond);
-        }
-        if daily_order_ceiling == 0 || modifications_per_order == 0 {
+        *slot = windows;
+        Ok(self)
+    }
+
+    /// The profile with a different daily ceiling of order placements;
+    /// zero is refused.
+    pub fn with_daily_order_ceiling(mut self, orders: u32) -> Result<Self, QuotaError> {
+        if orders == 0 {
             return Err(QuotaError::InvalidCeiling);
         }
-        Ok(profile)
+        self.daily_order_ceiling = orders;
+        Ok(self)
+    }
+
+    /// The profile with a different limit of modifications per order per
+    /// IST day; zero is refused.
+    pub fn with_modifications_per_order(mut self, limit: u32) -> Result<Self, QuotaError> {
+        if limit == 0 {
+            return Err(QuotaError::InvalidCeiling);
+        }
+        self.modifications_per_order = limit;
+        Ok(self)
     }
 
     /// Profile version.
@@ -207,12 +246,14 @@ impl QuotaProfile {
     pub fn windows(&self, class: RateClass) -> Vec<Window> {
         match class {
             RateClass::Quote => self.quote.clone(),
+            RateClass::Historical => self.historical.clone(),
             RateClass::OrderPlacement => self.placement.clone(),
             RateClass::OrderModification => self.modification.clone(),
             RateClass::Standard => self.standard.clone(),
             RateClass::Unclassified => {
                 let all = [
                     &self.quote,
+                    &self.historical,
                     &self.placement,
                     &self.modification,
                     &self.standard,
@@ -657,15 +698,7 @@ mod tests {
         assert_eq!(p.version(), QUOTA_PROFILE_VERSION);
         let s = Duration::from_secs(1);
         let ok = |placement: Vec<Window>| {
-            QuotaProfile::custom(
-                "t",
-                vec![Window::new(1, s)],
-                placement,
-                vec![Window::new(10, s)],
-                vec![Window::new(10, s)],
-                5000,
-                25,
-            )
+            QuotaProfile::kite_v3().with_windows(RateClass::OrderPlacement, placement)
         };
         assert!(ok(vec![Window::new(10, s)]).is_ok());
         assert_eq!(
@@ -680,6 +713,30 @@ mod tests {
         assert_eq!(
             ok(vec![]),
             Err(QuotaError::MissingWindows(RateClass::OrderPlacement))
+        );
+        assert_eq!(
+            QuotaProfile::kite_v3().with_windows(RateClass::Historical, vec![]),
+            Err(QuotaError::MissingWindows(RateClass::Historical))
+        );
+        // Every class is set by name, so windows cannot land in the wrong one.
+        let p = QuotaProfile::kite_v3()
+            .with_version("t")
+            .with_windows(RateClass::Historical, vec![Window::new(2, s)])
+            .unwrap();
+        assert_eq!(p.version(), "t");
+        assert_eq!(p.windows(RateClass::Historical), vec![Window::new(2, s)]);
+        assert_eq!(p.windows(RateClass::Quote), vec![Window::new(1, s)]);
+        assert_eq!(
+            QuotaProfile::kite_v3().with_windows(RateClass::Unclassified, vec![Window::new(1, s)]),
+            Err(QuotaError::UnclassifiedWindows)
+        );
+        assert_eq!(
+            QuotaProfile::kite_v3().with_daily_order_ceiling(0),
+            Err(QuotaError::InvalidCeiling)
+        );
+        assert_eq!(
+            QuotaProfile::kite_v3().with_modifications_per_order(0),
+            Err(QuotaError::InvalidCeiling)
         );
     }
 
@@ -773,16 +830,11 @@ mod tests {
 
     #[tokio::test(start_paused = true)]
     async fn daily_ceiling_resets_at_the_ist_day_boundary() {
-        let profile = QuotaProfile::custom(
-            "t",
-            vec![Window::new(1, Duration::from_secs(1))],
-            vec![Window::new(10, Duration::from_secs(1))],
-            vec![Window::new(10, Duration::from_secs(1))],
-            vec![Window::new(10, Duration::from_secs(1))],
-            3,
-            2,
-        )
-        .unwrap();
+        let profile = QuotaProfile::kite_v3()
+            .with_version("t")
+            .with_daily_order_ceiling(3)
+            .and_then(|p| p.with_modifications_per_order(2))
+            .unwrap();
         let clock = Arc::new(FakeClock(AtomicI64::new(MORNING)));
         let a = Admission::with_clock(profile, AdmissionLimits::default(), clock.clone());
         for _ in 0..3 {
@@ -878,6 +930,46 @@ mod tests {
         );
         first.await.unwrap().unwrap();
         assert_eq!(a.waiters(), 0);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn historical_candles_are_admitted_three_per_second() {
+        let (a, _) = scope();
+        let start = Instant::now();
+        for _ in 0..3 {
+            a.acquire(RateClass::Historical, None, WAIT)
+                .await
+                .unwrap()
+                .consume();
+        }
+        assert_eq!(start.elapsed(), Duration::ZERO, "three fit in one second");
+        // With the historical window full, a quote is still admitted at once.
+        a.acquire(RateClass::Quote, None, WAIT)
+            .await
+            .unwrap()
+            .consume();
+        assert_eq!(
+            start.elapsed(),
+            Duration::ZERO,
+            "quotes have their own window"
+        );
+        a.acquire(RateClass::Historical, None, WAIT)
+            .await
+            .unwrap()
+            .consume();
+        assert_eq!(start.elapsed(), Duration::from_secs(1), "the fourth waits");
+        // And historical requests did not use the quote window: the next quote
+        // (its window freed at 1 s) is admitted at once too.
+        let before = Instant::now();
+        a.acquire(RateClass::Quote, None, WAIT)
+            .await
+            .unwrap()
+            .consume();
+        assert_eq!(before.elapsed(), Duration::ZERO);
+        assert_eq!(
+            QuotaProfile::kite_v3().windows(RateClass::Historical),
+            vec![Window::new(3, Duration::from_secs(1))]
+        );
     }
 
     #[tokio::test(start_paused = true)]

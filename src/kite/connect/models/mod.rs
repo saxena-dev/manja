@@ -58,6 +58,11 @@ pub use order_enums::{
     OrderStatus, OrderType, OrderValidity, OrderVariety, ProductType, TransactionType,
 };
 
+/// Models for historical candle data: `/instruments/historical/`.
+///
+mod historical;
+pub use historical::{Candle, CandleInterval, HistoricalData, HistoricalRequest};
+
 /// Models for the `/gtt/` API group: Good Till Triggered orders.
 ///
 mod gtt;

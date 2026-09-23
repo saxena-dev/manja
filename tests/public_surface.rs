@@ -16,9 +16,10 @@ use manja::kite::connect::credentials::{
     AccessToken, ApiKey, ApiSecret, CredentialError, Credentials, RequestToken,
 };
 use manja::kite::connect::models::{
-    Exchange, FullQuote, GttCondition, GttOrder, GttOrderOutcome, GttOrderRequest, GttOrderResult,
-    GttReceipt, GttRequest, GttStatus, GttTrigger, GttType, Holding, Instrument, KiteApiResponse,
-    LTPQuote, ModifyOrderRequest, OHLCQuote, Order, OrderReceipt, PlaceOrderRequest, Position,
+    Candle, CandleInterval, Exchange, FullQuote, GttCondition, GttOrder, GttOrderOutcome,
+    GttOrderRequest, GttOrderResult, GttReceipt, GttRequest, GttStatus, GttTrigger, GttType,
+    HistoricalData, HistoricalRequest, Holding, Instrument, KiteApiResponse, LTPQuote,
+    ModifyOrderRequest, OHLCQuote, Order, OrderReceipt, PlaceOrderRequest, Position,
     PositionConversionRequest, Positions, QuoteMode, Quotes, RequestError, Trade, UserSession,
 };
 use manja::kite::connect::scheduler::{DispatchPermit, PermitTarget, SchedulerLimits};
@@ -94,6 +95,11 @@ async fn signatures(c: &HTTPClient, h: &TickerHandle) {
     let _: Result<KiteApiResponse<Quotes<LTPQuote>>, ManjaError> =
         c.market().get_quotes::<LTPQuote>(&["NSE:INFY"]).await;
     let _: Result<Vec<Instrument>, ManjaError> = c.market().get_instruments_all().await;
+    let at = chrono::DateTime::parse_from_rfc3339("2017-12-15T09:15:00+05:30").unwrap();
+    let history = HistoricalRequest::new(InstrumentToken::new(5633), CandleInterval::Day, at, at);
+    let _: Result<KiteApiResponse<HistoricalData>, ManjaError> =
+        c.market().get_historical(&history).await;
+    let _: fn(&HistoricalData) -> &Vec<Candle> = |d| &d.candles;
     let _: Result<DispatchPermit, ManjaError> = c.admit(PermitTarget::PlaceOrder).await;
     let _: HttpDiagnostics = c.diagnostics();
     let _: Result<Revision, CommandError> =

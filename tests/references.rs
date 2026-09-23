@@ -4,7 +4,8 @@
 //! - `kite:<page>.md:<lines>` citations name a page listed in
 //!   `docs/kite-sources.toml` and stay within its recorded line count, and
 //!   every listed page has its URL, access time, SHA-256, size and lines;
-//! - `QUOTA_PROFILE_VERSION` names the access date of `exceptions.md`;
+//! - `QUOTA_PROFILE_VERSION` names the access date of `exceptions.md`, with
+//!   an optional `+r<revision>`;
 //! - every bound, coverage and breaking-change ID used is defined in `docs/`;
 //! - every `docs/<file>.md §N` reference names an existing section;
 //! - no file refers to material that is not part of the repository.
@@ -219,12 +220,23 @@ fn the_quota_profile_version_names_the_recorded_access_date() {
     let pages = kite_pages();
     let accessed = &pages["exceptions.md"].get("accessed")[..10];
     let source = read("src/kite/connect/admission.rs");
-    let expected = format!("\"kite-connect-v3/exceptions.md@{accessed}\"");
+    let marker = "pub const QUOTA_PROFILE_VERSION: &str = \"";
+    let start = source
+        .find(marker)
+        .expect("QUOTA_PROFILE_VERSION is defined")
+        + marker.len();
+    let version = &source[start..start + source[start..].find('"').unwrap()];
+    // `<page>@<access date>`, optionally followed by `+r<revision>`.
+    let prefix = format!("kite-connect-v3/exceptions.md@{accessed}");
+    let revision = version
+        .strip_prefix(&prefix)
+        .unwrap_or_else(|| panic!("QUOTA_PROFILE_VERSION {version:?} does not name {prefix}"));
     assert!(
-        source.contains(&format!(
-            "pub const QUOTA_PROFILE_VERSION: &str = {expected};"
-        )),
-        "QUOTA_PROFILE_VERSION does not name {expected}"
+        revision.is_empty()
+            || revision
+                .strip_prefix("+r")
+                .is_some_and(|n| !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit())),
+        "QUOTA_PROFILE_VERSION {version:?} has a malformed revision"
     );
 }
 

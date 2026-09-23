@@ -32,6 +32,14 @@ bytes = 13250
 lines = 405
 
 [[page]]
+name = "historical.md"
+url = "https://kite.trade/docs/connect/v3/historical/index.md"
+accessed = "2026-09-23T19:18:48Z"
+sha256 = "38e451a16839138b346f94d2c92681e202ac1e8bc9a15e1f88c881f236a64279"
+bytes = 6488
+lines = 185
+
+[[page]]
 name = "margins.md"
 url = "https://kite.trade/docs/connect/v3/margins/index.md"
 accessed = "2026-09-23T14:42:26Z"

@@ -118,6 +118,7 @@ IDs are stable. Tests cite the rows they cover, singly or as a range such as
 | `http_reads` | `http` | read response types against the official samples |
 | `http_orders` | `http` | placement, modification, cancellation and conversion requests on the wire |
 | `http_margins` | `http` | order margins, basket margins and order charges |
+| `http_historical` | `http` | historical candles: every interval's path and the IST query on the wire, minute and open-interest candles decoded from the official samples, continuous data, a range that ends before it starts, a malformed candle, read retries, and the client admitting them in their own 3-per-second class, apart from quotes (`contract.md` §2.13); a paused-clock unit test in `kite::connect::admission` covers the class's timing |
 | `http_gtt` | `http` | GTT placement (single and two-leg), modification and deletion on the wire, one attempt each; the trigger list and trigger decoded from the official samples; and a fetched trigger converted back into a request (`contract.md` §2.12); the sandbox has no GTT (`kite:sandbox.md:298`), so these samples are its only evidence |
 | `http_market` | `http` | quote completeness and the instrument master |
 | `http_session` | `http` | token exchange and invalidation (`contract.md` §2.2) |
@@ -262,7 +263,8 @@ warnings denied, and `cargo doc` with warnings denied, on 1.98.0.
 - every `kite:<page>.md:<lines>` citation names a page in
   [`kite-sources.toml`](kite-sources.toml) and stays within that page's lines, and each
   manifest entry has a URL, an access time, a SHA-256, a size and a line count;
-- `QUOTA_PROFILE_VERSION` names the access date recorded for `exceptions.md`;
+- `QUOTA_PROFILE_VERSION` names the access date recorded for `exceptions.md`, with an
+  optional `+r<revision>`;
 - every `B-HTTP-*`, `B-TK-*`, `B-DEC-*`, `B-DIAG-*`, `INV-*` and `BR-*` ID used in
   `src`, `tests`, `benches`, `examples`, `docs`, `scripts`, `.github`, `README.md`,
   `Cargo.toml` and the fixture manifest is defined in `docs/`;

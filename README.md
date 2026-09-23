@@ -95,8 +95,9 @@ never left the process, `Started` once the broker may have received it.
 failures (429, 502–504, transport faults, attempt timeouts) with capped, jittered backoff
 within a total deadline. Order placement, modification, cancellation, position
 conversion, GTT placement, modification and deletion, and the session operations make
-**exactly one attempt**: a lost response is reported, never retried or assumed. Admission enforces the documented quotas (quote 1/s; orders 10/s,
-400/min, 5000/day; 25 modifications per order; others 10/s). A `DispatchPermit` from
+**exactly one attempt**: a lost response is reported, never retried or assumed.
+Admission enforces the documented quotas (quote 1/s; historical candles 3/s; orders
+10/s, 400/min, 5000/day; 25 modifications per order; others 10/s). A `DispatchPermit` from
 `HTTPClient::admit` reserves capacity for one specific order operation, expires after one
 second, and is consumed by use.
 
@@ -164,12 +165,13 @@ with no collector at all.
   `PUT /portfolio/positions`, `GET /portfolio/holdings/auctions`
 - **Market**: `GET /instruments`, `GET /instruments/:exchange`, `GET /quote`,
   `GET /quote/ohlc`, `GET /quote/ltp`
+- **Historical data**: `GET /instruments/historical/:instrument_token/:interval`
 - **Margins and charges**: `POST /margins/orders`, `POST /margins/basket`,
   `POST /charges/orders`
 - **WebSocket**: binary market data (LTP, quote, full and index packets), text order
   updates, errors and messages
 
-Not supported: historical candles, mutual funds, and holdings authorisation.
+Not supported: mutual funds and holdings authorisation.
 
 ## Migrating from 0.1
 

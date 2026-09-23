@@ -1047,6 +1047,7 @@ pub(crate) fn endpoint_template(method: Method, path: &str) -> Endpoint {
         ["portfolio", "positions"] => Endpoint::Positions,
         ["instruments"] => Endpoint::Instruments,
         ["instruments", _] => Endpoint::InstrumentsExchange,
+        ["instruments", "historical", _, _] => Endpoint::InstrumentsHistorical,
         ["quote"] => Endpoint::Quote,
         ["quote", "ohlc"] => Endpoint::QuoteOhlc,
         ["quote", "ltp"] => Endpoint::QuoteLtp,
@@ -1220,6 +1221,11 @@ mod tests {
             (Delete, "/orders/amo/1", Endpoint::OrdersVarietyId),
             (Get, "/orders/1/trades", Endpoint::OrdersIdTrades),
             (Get, "/instruments/NSE", Endpoint::InstrumentsExchange),
+            (
+                Get,
+                "/instruments/historical/5633/minute?from=x",
+                Endpoint::InstrumentsHistorical,
+            ),
             (
                 Post,
                 "/margins/basket?consider_positions=true",

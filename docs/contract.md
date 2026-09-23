@@ -51,10 +51,11 @@ on the minimum supported Rust version, 1.95.0, and on 1.98.0.
 | GTT | `POST /gtt/triggers`, `PUT /gtt/triggers/{id}`, `DELETE /gtt/triggers/{id}` (§2.12) | mutation |
 | GTT | `GET /gtt/triggers`, `GET /gtt/triggers/{id}` | read |
 | Market | `GET /instruments`, `GET /instruments/{exchange}` (CSV), `GET /quote`, `GET /quote/ohlc`, `GET /quote/ltp` | read |
+| Historical data | `GET /instruments/historical/{instrument_token}/{interval}` (§2.13) | read |
 | Margins and charges | `POST /margins/orders`, `POST /margins/basket`, `POST /charges/orders` | calculation |
 | Session | `POST /session/token` (exchange), `DELETE /session/token` (invalidation) | session |
 
-Not supported: alerts, historical candles, mutual funds, holdings summary and
+Not supported: alerts, mutual funds, holdings summary and
 authorisation, the full profile, the trigger range, and receiving postbacks over HTTP.
 
 Every JSON endpoint is decoded into its documented response type, and success requires
@@ -273,6 +274,21 @@ are in `GttTrigger::orders`, where each fired order carries a `GttOrderResult`. 
 types and statuses (`kite:gtt.md:359-371`) are `Inbound` values, so an undocumented one
 is preserved. Every GTT endpoint is in the `Standard` quota class (§3.6).
 
+### 2.13 Historical candles
+
+`Market::get_historical(&HistoricalRequest)` reads the candles of one instrument and
+interval: `GET /instruments/historical/{instrument_token}/{interval}` with `from`, `to`
+and, when set, `continuous=1` and `oi=1` (`kite:historical.md:5-23`).
+
+| Item | Contract |
+|---|---|
+| Interval | `CandleInterval`: `minute`, `3minute`, `5minute`, `10minute`, `15minute`, `30minute`, `60minute` or `day` (`kite:historical.md:14`). An undocumented interval cannot be expressed |
+| Range | `from` and `to` are `DateTime<FixedOffset>` values, sent as IST wall time in the documented `yyyy-mm-dd hh:mm:ss` form (`kite:historical.md:20-21`); an instant in another zone is converted, not reinterpreted. `validate()` rejects a `to` before `from` as a `Validation` error, and nothing is sent |
+| Range length | The documentation gives no maximum range per interval, so none is enforced. A response larger than the JSON body bound (`B-HTTP-08`) is a `Decode` error |
+| Candles | `HistoricalData::candles`, each a `Candle` decoded from the broker's array `[timestamp, open, high, low, close, volume]` with an optional seventh value, open interest (`kite:historical.md:25-27,114-185`); a seventh value of `null` is no open interest. Timestamps keep the offset they carry. A candle with fewer than six values, more than seven, or a value of the wrong type is a `Decode` error |
+| Continuous data | `continuous` asks for day candles across expired futures contracts, for NFO and MCX futures (`kite:historical.md:35-39`); the SDK only forwards the flag |
+| Retries and quota | A read: retried like every read, and admitted in its own `Historical` quota class at 3 requests per second (§3.6) |
+
 ---
 
 ## 3. Runtime bounds
@@ -357,12 +373,18 @@ derived with `with_credentials`, draws from the same windows. `QuotaProfile::kit
 | Class | Endpoints | Windows |
 |---|---|---|
 | `Quote` | `/quote`, `/quote/ohlc`, `/quote/ltp` | 1 per second |
+| `Historical` | `/instruments/historical/{instrument_token}/{interval}` | 3 per second (`kite:exceptions.md:50`) |
 | `OrderPlacement` | `POST /orders/{variety}` | 10 per second, 400 per minute, 5 000 per IST day |
 | `OrderModification` | `PUT /orders/{variety}/{order_id}` | 10 per second, 25 modifications per order per IST day |
 | `Standard` | every other endpoint, GTT included | 10 per second |
 
-An endpoint without a known class is admitted at the profile's smallest rate. Rates
-must be finite and positive, and windows at least 1 ms. Admission cannot see requests
+An endpoint without a known class is admitted at the profile's smallest rate. A
+different profile starts from `kite_v3()` and changes one setting at a time, each
+validated as it is set: `with_windows(class, windows)` names the class it changes, so
+windows cannot land in the wrong one; `with_daily_order_ceiling` and
+`with_modifications_per_order` refuse zero; and `with_version` labels the result. Every
+class needs at least one window, limits must be positive, windows at least 1 ms, and order
+placement at most 10 per second. Admission cannot see requests
 from other processes or other SDK instances using the same API key.
 
 ---
@@ -387,6 +409,7 @@ Additions within version 1:
 | Addition | Effect |
 |---|---|
 | `endpoint` values `/gtt/triggers` and `/gtt/triggers/{id}` (§2.12) | the domain grows from 22 to 24 values; the series bounds of the metrics labelled by `endpoint` grow with it (§4.4) |
+| `endpoint` value `/instruments/historical/{instrument_token}/{interval}` (§2.13) | the domain grows to 25 values, with the §4.4 bounds |
 | `DecodeDiagnosticKind::InvalidField` (§4.5) | one more diagnostic kind |
 
 ### 4.2 Spans
@@ -413,7 +436,7 @@ or query parameters to Kite requests.
 | Key | Values |
 |---|---|
 | `method` | `GET`, `POST`, `PUT`, `DELETE` |
-| `endpoint` | the 23 endpoint templates of §2.1, and `unknown` |
+| `endpoint` | the 24 endpoint templates of §2.1, and `unknown` |
 | `quota_class` | `read`, `calc`, `mut`, `sess` |
 | `result` (HTTP operation) | `ok`, `http_status`, `broker_error`, `auth_rejected`, `transport_error`, `timeout`, `deadline`, `admission_rejected`, `cancelled`, `decode_error`, `validation` |
 | `result` (HTTP attempt) | `ok`, `http_status`, `broker_error`, `auth_rejected`, `transport_error`, `timeout`, `cancelled`, `decode_error` |
@@ -439,14 +462,14 @@ are never labels.
 
 | Instrument | Type, unit | Labels | Series bound |
 |---|---|---|---|
-| `manja_http_operations_total` | counter, operations | `method`, `endpoint`, `quota_class`, `result` | 4 224 |
-| `manja_http_operation_duration_seconds` | histogram, s | `method`, `endpoint`, `quota_class`, `result` | 4 224 |
-| `manja_http_attempts_total` | counter, attempts | `method`, `endpoint`, `result` | 768 |
-| `manja_http_attempt_duration_seconds` | histogram, s | `method`, `endpoint`, `result` | 768 |
+| `manja_http_operations_total` | counter, operations | `method`, `endpoint`, `quota_class`, `result` | 4 400 |
+| `manja_http_operation_duration_seconds` | histogram, s | `method`, `endpoint`, `quota_class`, `result` | 4 400 |
+| `manja_http_attempts_total` | counter, attempts | `method`, `endpoint`, `result` | 800 |
+| `manja_http_attempt_duration_seconds` | histogram, s | `method`, `endpoint`, `result` | 800 |
 | `manja_http_in_flight` | gauge, attempts | `quota_class` | 4 |
 | `manja_http_admission_waiters` | gauge, waiters | `quota_class` | 4 |
 | `manja_http_admission_wait_seconds` | histogram, s | `quota_class`, `admission_result` | 16 |
-| `manja_http_retries_total` | counter, retries | `method`, `endpoint`, `error_class` | 384 |
+| `manja_http_retries_total` | counter, retries | `method`, `endpoint`, `error_class` | 400 |
 | `manja_auth_rejections_total` | counter, rejections | `transport` | 2 |
 | `manja_ticker_connection_attempts_total` | counter, attempts | `result` | 6 |
 | `manja_ticker_connect_duration_seconds` | histogram, s | `result` | 6 |
@@ -534,7 +557,7 @@ These choices are not dictated by the Kite documentation alone.
 | `DECODER_VERSION` | 1 | the decoder's output for a given input |
 | `CONVERSION_POLICY_VERSION` | 1 | price scaling (§5) |
 | `OBS_SCHEMA_VERSION` | 1 | the observability schema (§4) |
-| `QUOTA_PROFILE_VERSION` | `kite-connect-v3/exceptions.md@2026-09-23` | the default quota profile (§3.6), from the page accessed on that date |
+| `QUOTA_PROFILE_VERSION` | `kite-connect-v3/exceptions.md@2026-09-23+r2` | the default quota profile (§3.6): the page it encodes, the date that page was accessed, and a revision that increases when the encoding of the same page changes. A version without a `+r` suffix is revision 1, and the revision restarts at 1 when the page is accessed again on a new date. Revision 2 added the `Historical` class |
 
 Each is versioned independently. The crate is pre-1.0: every intentional break ships in
 a minor-version bump with release notes, and deprecated items keep working for at least

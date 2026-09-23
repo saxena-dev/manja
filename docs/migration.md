@@ -29,7 +29,7 @@ its `BR-*` ID. The behavior you can rely on is in [`contract.md`](contract.md).
 | Credentials | `Credentials` (API key and access token), `ApiKey`, `AccessToken`, `ApiSecret`, `RequestToken`; `Debug` redacts every secret |
 | Session | `HTTPClient::session(api_key)`, then `Session::exchange(&RequestToken, &ApiSecret)` and `Session::invalidate(&AccessToken)` |
 | HTTP errors | `ManjaError::Http(HttpError)` with `kind()`, `stage()`, `http_status()`, `broker()`, `attempt()`, `retry()`, `is_timeout()` and `may_have_reached_broker()` |
-| Admission | `Admission`, `QuotaProfile::kite_v3()`, `AdmissionLimits`; `HttpClientBuilder::admission` shares a quota between clients |
+| Admission | `Admission`, `QuotaProfile::kite_v3()` with `with_version`, `with_windows(RateClass, Vec<Window>)`, `with_daily_order_ceiling` and `with_modifications_per_order`, `AdmissionLimits`; `HttpClientBuilder::admission` shares a quota between clients |
 | Scheduling | `SchedulerLimits`; `HTTPClient::admit(PermitTarget)` returns a `DispatchPermit`, used by `place_order_with_permit`, `modify_order_with_permit`, `cancel_order_with_permit` and `convert_position_with_permit` |
 | Requests | `PlaceOrderRequest`, `ModifyOrderRequest`, `PositionConversionRequest`, `OrderMarginRequest` and `OrderChargesRequest`, each with `validate()` |
 | Quotes | `Quotes<Q>` with `requested`, `received`, `missing`, `unexpected`, `get` and `is_complete`; `Instrument::quote_key` |
@@ -40,6 +40,7 @@ its `BR-*` ID. The behavior you can rely on is in [`contract.md`](contract.md).
 | Envelopes | `RawObservation`, `LifecycleEvent`, `SourceKey`, `SourceIdentity`, `SourceSequencer`, `GapFacts`, `ENVELOPE_VERSION` |
 | Ticker | `kite::ticker::actor`: `TickerBuilder::spawn` returns `(TickerHandle, TickerEvents, TaskGuard)`; the commands `subscribe`, `unsubscribe`, `set_mode` and `replace`; `TickerStatus`; `TickerLimits`, `ReconnectLimits`; `TickerRequest::set_mode` |
 | Decoder | `kite::decoder::{framing, packets, text, adapter}`; `kite::ticker::typed::TypedEvents` with both `ticker` and `decoder` |
+| Historical data | `Market::get_historical(&HistoricalRequest)` returning `HistoricalData` of `Candle`s; `CandleInterval`; `RateClass::Historical`; the `endpoint` label value `/instruments/historical/{instrument_token}/{interval}` |
 | GTT | `HTTPClient::gtt()` returns `Gtt` with `place_trigger`, `modify_trigger`, `delete_trigger`, `list_triggers` and `get_trigger`; `GttRequest` (`single`, `two_leg`, `from_trigger`, `validate()`), `GttOrderRequest`, `GttReceipt`, `GttTrigger`, `GttCondition`, `GttOrder`, `GttOrderResult`, `GttOrderOutcome`, `GttType`, `GttStatus`; the `endpoint` label values `/gtt/triggers` and `/gtt/triggers/{id}` |
 
 ## 3. Changes that keep their path

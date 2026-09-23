@@ -26,7 +26,9 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use futures_util::StreamExt;
-use manja::kite::connect::admission::{Admission, AdmissionLimits, QuotaProfile, Window};
+use manja::kite::connect::admission::{
+    Admission, AdmissionLimits, QuotaProfile, RateClass, Window,
+};
 use manja::kite::connect::client::HTTPClient;
 use manja::kite::connect::config::{Config, HttpLimits};
 use manja::kite::connect::credentials::Credentials;
@@ -238,16 +240,15 @@ fn client(base: &str, obs: Observability) -> HTTPClient {
     // A high standard-class quota: this measures instrumentation overhead,
     // not the documented 10 per second admission wait.
     let fast = Window::new(1_000_000, Duration::from_secs(1));
-    let profile = QuotaProfile::custom(
-        "bench",
-        vec![fast],
-        vec![Window::new(10, Duration::from_secs(1))],
-        vec![fast],
-        vec![fast],
-        5000,
-        25,
-    )
-    .unwrap();
+    let mut profile = QuotaProfile::kite_v3().with_version("bench");
+    for class in [
+        RateClass::Quote,
+        RateClass::Historical,
+        RateClass::OrderModification,
+        RateClass::Standard,
+    ] {
+        profile = profile.with_windows(class, vec![fast]).unwrap();
+    }
     HTTPClient::builder(Config::new(base).with_limits(limits))
         .admission(Admission::new(profile, AdmissionLimits::default()))
         .observability(obs)

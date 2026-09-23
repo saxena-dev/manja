@@ -26,11 +26,22 @@
 //! a malformed row is a `Decode` error naming its row number. Its
 //! `last_price` is not a live quote.
 //!
+//! # Historical candles
+//!
+//! [`Market::get_historical`] reads candles for one instrument and interval
+//! (`kite:historical.md`). It is admitted in its own quota class, 3 requests
+//! per second (`kite:exceptions.md:45-52`), and retried like every read.
+//! The documentation gives no maximum range per interval, so the SDK
+//! enforces none; a response over the JSON body bound (`B-HTTP-08`) is a
+//! `Decode` error.
+//!
 use std::collections::{HashMap, HashSet};
 
 use crate::kite::connect::{
     client::HTTPClient,
-    models::{Exchange, Instrument, KiteApiResponse, KiteQuote, Quotes},
+    models::{
+        Exchange, HistoricalData, HistoricalRequest, Instrument, KiteApiResponse, KiteQuote, Quotes,
+    },
 };
 use crate::kite::error::{HttpError, HttpErrorKind, Result, TransportStage};
 use crate::kite::obs::schema::{Endpoint, Method};
@@ -47,6 +58,7 @@ fn endpoint_of(path: &str) -> Endpoint {
         "/quote/ohlc" => Endpoint::QuoteOhlc,
         "/quote/ltp" => Endpoint::QuoteLtp,
         "/instruments" => Endpoint::Instruments,
+        p if p.starts_with("/instruments/historical/") => Endpoint::InstrumentsHistorical,
         _ => Endpoint::InstrumentsExchange,
     }
 }
@@ -211,5 +223,41 @@ impl<'c> Market<'c> {
             message: response.message,
             error_type: response.error_type,
         })
+    }
+
+    /// Historical candles:
+    /// `GET /instruments/historical/{instrument_token}/{interval}`
+    /// (`kite:historical.md:5-33`).
+    ///
+    /// ```no_run
+    /// # async fn f(client: &manja::kite::connect::client::HTTPClient) -> manja::kite::error::Result<()> {
+    /// use chrono::{FixedOffset, TimeZone};
+    /// use manja::kite::connect::models::{CandleInterval, HistoricalRequest};
+    /// use manja::kite::protocol::InstrumentToken;
+    ///
+    /// let ist = FixedOffset::east_opt(5 * 3600 + 30 * 60).unwrap();
+    /// let request = HistoricalRequest::new(
+    ///     InstrumentToken::new(5633),
+    ///     CandleInterval::Minute,
+    ///     ist.with_ymd_and_hms(2017, 12, 15, 9, 15, 0).unwrap(),
+    ///     ist.with_ymd_and_hms(2017, 12, 15, 9, 20, 0).unwrap(),
+    /// );
+    /// let data = client.market().get_historical(&request).await?.data;
+    /// for candle in data.map(|d| d.candles).unwrap_or_default() {
+    ///     println!("{} close {}", candle.timestamp, candle.close);
+    /// }
+    /// # Ok(()) }
+    /// ```
+    ///
+    /// Fails before admission, sending nothing, when `to` is before `from`.
+    pub async fn get_historical(
+        &self,
+        request: &HistoricalRequest,
+    ) -> Result<KiteApiResponse<HistoricalData>> {
+        let path = request.path();
+        request
+            .validate()
+            .map_err(|e| self.client.reject(rejected(&path, &e.to_string())))?;
+        self.client.get_with_query(&path, &request.query()).await
     }
 }
