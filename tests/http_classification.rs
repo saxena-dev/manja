@@ -357,3 +357,28 @@ async fn broker_messages_are_sanitized_before_retention() {
     let message = http(&err).broker().unwrap().message().unwrap().as_str();
     assert!(message.starts_with("bad access_token="), "{message}");
 }
+
+#[tokio::test]
+async fn rate_limited_response_is_an_error_with_its_status() {
+    // Supplemental: documented error envelope with HTTP 429
+    // (exceptions.md:39). The legacy retry policy is told to give up at once
+    // so the classified 429 itself is observed; retry policy is S06.
+    let body =
+        r#"{"status":"error","message":"Too many requests","error_type":"NetworkException"}"#;
+    let harness = HttpHarness::start(vec![reply(429, "application/json", body)]).await;
+    let give_up = backoff::ExponentialBackoffBuilder::new()
+        .with_max_elapsed_time(Some(std::time::Duration::ZERO))
+        .build();
+    let err = client(&harness.base_url(), HttpLimits::default())
+        .user()
+        .with_backoff(give_up)
+        .profile()
+        .await
+        .unwrap_err();
+    let e = http(&err);
+    assert_eq!(e.http_status(), Some(429));
+    assert_eq!(e.kind(), HttpErrorKind::Broker);
+    assert_eq!(e.stage(), TransportStage::ResponseReceived);
+    assert_eq!(e.attempt(), 1);
+    assert_clean(&err);
+}
