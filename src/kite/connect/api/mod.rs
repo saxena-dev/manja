@@ -38,25 +38,12 @@ pub use market::Market;
 mod margins;
 pub use margins::{Charges, Margins};
 
-/// Creates an ExponentialBackoff policy with a specified rate limit.
+/// The legacy retry pacing used by the resource facades after an HTTP 429.
 ///
-/// This function sets up an exponential backoff policy to control the rate of
-/// API requests, ensuring compliance with rate limits by introducing a minimum
-/// interval between requests.
-///
-/// # Arguments
-///
-/// * `rate_limit_per_second` - The number of allowed API requests per second.
-///
-/// # Returns
-///
-/// An `ExponentialBackoff` instance configured with the specified rate limit.
-///
-/// # Example
-///
-/// ```ignore
-/// let backoff_policy = create_backoff_policy(10); // 10 requests per second
-/// ```
+/// It spaces retries `1 / rate_limit_per_second` apart. It is not rate
+/// limiting: when a request may start is decided by the client's shared
+/// [`Admission`](crate::kite::connect::admission::Admission) scope, which
+/// every attempt, retries included, passes through.
 fn create_backoff_policy(rate_limit_per_second: u64) -> ExponentialBackoff {
     // Calculate the minimum duration between requests
     let min_interval = Duration::from_secs_f64(1.0 / rate_limit_per_second as f64);

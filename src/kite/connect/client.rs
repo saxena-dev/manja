@@ -32,6 +32,7 @@ use serde_json::Value;
 
 use crate::kite::{
     connect::{
+        admission::{Admission, RateClass},
         api::{Charges, Margins, Market, Orders, Session, User},
         config::Config,
         credentials::{AccessToken, ApiKey, Credentials},
@@ -49,6 +50,8 @@ const ATTEMPT_TIMEOUT: Duration = Duration::from_secs(10);
 struct Transport {
     http: reqwest::Client,
     config: Config,
+    admission: Admission,
+    in_flight: Arc<tokio::sync::Semaphore>,
 }
 
 /// An asynchronous Kite Connect HTTP client.
@@ -72,12 +75,61 @@ impl std::fmt::Debug for HTTPClient {
     }
 }
 
+/// Builder for [`HTTPClient`].
+///
+/// A client built without [`Self::admission`] gets its own budget scope.
+/// Give independently built clients one [`Admission`] to make them share
+/// quota windows; clones and [`HTTPClient::with_credentials`] share it
+/// automatically.
+#[must_use]
+pub struct HttpClientBuilder {
+    config: Config,
+    admission: Option<Admission>,
+    credentials: Option<Credentials>,
+}
+
+impl HttpClientBuilder {
+    /// Draw quota from `admission`, shared with other clients.
+    pub fn admission(mut self, admission: Admission) -> Self {
+        self.admission = Some(admission);
+        self
+    }
+
+    /// Authenticate with `credentials`.
+    pub fn credentials(mut self, credentials: Credentials) -> Self {
+        self.credentials = Some(credentials);
+        self
+    }
+
+    /// Build the client. Fails with a configuration error if the HTTP
+    /// transport cannot be built.
+    pub fn build(self) -> Result<HTTPClient> {
+        let mut client =
+            HTTPClient::build_transport(self.config, self.admission.unwrap_or_default())?;
+        client.credentials = self.credentials;
+        Ok(client)
+    }
+}
+
 impl HTTPClient {
-    /// A client for `config` with no credentials.
+    /// A builder for a client using `config`.
+    pub fn builder(config: Config) -> HttpClientBuilder {
+        HttpClientBuilder {
+            config,
+            admission: None,
+            credentials: None,
+        }
+    }
+
+    /// A client for `config` with no credentials and its own budget scope.
     ///
     /// Fails with a configuration error if the HTTP transport cannot be
     /// built.
     pub fn new(config: Config) -> Result<Self> {
+        Self::builder(config).build()
+    }
+
+    fn build_transport(config: Config, admission: Admission) -> Result<Self> {
         let http = reqwest::ClientBuilder::new()
             .timeout(ATTEMPT_TIMEOUT)
             .build()
@@ -91,11 +143,22 @@ impl HTTPClient {
                 .with_detail("the HTTP transport could not be built")
                 .with_source(e.without_url())
             })?;
+        let in_flight = Arc::new(tokio::sync::Semaphore::new(config.limits().in_flight()));
         Ok(Self {
-            transport: Arc::new(Transport { http, config }),
+            transport: Arc::new(Transport {
+                http,
+                config,
+                admission,
+                in_flight,
+            }),
             credentials: None,
             backoff: Default::default(),
         })
+    }
+
+    /// The admission scope this client draws quota from.
+    pub fn admission(&self) -> &Admission {
+        &self.transport.admission
     }
 
     /// Same as [`Self::new`].
@@ -376,6 +439,23 @@ impl HTTPClient {
                 .with_attempt(attempt)
                 .with_detail(detail)
         };
+        let admission = &self.transport.admission;
+        let wait = admission.limits().wait();
+        let (class, order_id) = rate_key(m, endpoint, path);
+        let admitted = |e: &dyn std::fmt::Display| {
+            HttpError::new(HttpErrorKind::Admission, m, endpoint, Stage::NotStarted)
+                .with_attempt(attempt)
+                .with_detail(&e.to_string())
+        };
+        let grant = admission
+            .acquire(class, order_id.as_deref(), wait)
+            .await
+            .map_err(|e| admitted(&e))?;
+        let _in_flight =
+            tokio::time::timeout(wait, self.transport.in_flight.clone().acquire_owned())
+                .await
+                .map_err(|_| admitted(&"no in-flight attempt slot within the admission wait"))?
+                .map_err(|_| admitted(&"the transport is closed"))?;
         let url = self.transport.config.url(path);
         let mut rb = self
             .transport
@@ -391,6 +471,8 @@ impl HTTPClient {
         let request = build(rb).build().map_err(|e| {
             not_started("the request could not be built").with_source(e.without_url())
         })?;
+        // Dispatch now: the admitted capacity is used from here on.
+        grant.consume();
         let mut response = self.transport.http.execute(request).await.map_err(|e| {
             // A connect failure is affirmative evidence that no request
             // bytes left the process; anything later is not.
@@ -462,6 +544,20 @@ pub(crate) fn credentials_from_session(session: &UserSession) -> Result<Credenti
         ApiKey::new(session.api_key.expose_secret().as_str())?,
         AccessToken::new(session.access_token.expose_secret().as_str())?,
     ))
+}
+
+/// The rate class of a request and, for a modification, its order ID.
+fn rate_key(method: Method, endpoint: Endpoint, path: &str) -> (RateClass, Option<String>) {
+    let class = RateClass::of(method, endpoint);
+    let order_id = match class {
+        RateClass::OrderModification => path
+            .split('?')
+            .next()
+            .and_then(|p| p.trim_matches('/').rsplit('/').next())
+            .map(str::to_string),
+        _ => None,
+    };
+    (class, order_id)
 }
 
 fn labels(method: &reqwest::Method, path: &str) -> (Method, Endpoint) {
@@ -700,6 +796,45 @@ pub mod test_utils {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn clones_replacements_and_shared_builders_share_one_budget() {
+        let a = HTTPClient::new(Config::default()).unwrap();
+        let clone = a.clone();
+        let replacement = a.with_credentials(Credentials::new("k", "t").unwrap());
+        assert!(a.admission().same_scope(clone.admission()));
+        assert!(a.admission().same_scope(replacement.admission()));
+        let shared = HTTPClient::builder(Config::default())
+            .admission(a.admission().clone())
+            .build()
+            .unwrap();
+        assert!(a.admission().same_scope(shared.admission()));
+        let independent = HTTPClient::new(Config::default()).unwrap();
+        assert!(!a.admission().same_scope(independent.admission()));
+    }
+
+    #[test]
+    fn modifications_are_keyed_by_their_order_id() {
+        assert_eq!(
+            rate_key(
+                Method::Put,
+                Endpoint::OrdersVarietyId,
+                "/orders/regular/151220000000000"
+            ),
+            (
+                RateClass::OrderModification,
+                Some("151220000000000".to_string())
+            )
+        );
+        assert_eq!(
+            rate_key(
+                Method::Delete,
+                Endpoint::OrdersVarietyId,
+                "/orders/regular/1"
+            ),
+            (RateClass::Standard, None)
+        );
+    }
 
     #[test]
     fn endpoint_templates_hide_dynamic_segments() {

@@ -93,6 +93,10 @@ const MIB: usize = 1024 * KIB;
 /// |---|---|---|
 /// | `B-HTTP-08` JSON response body | 4 MiB | 64 KiB ..= 64 MiB |
 /// | `B-HTTP-08` instrument CSV body | 64 MiB | 1 MiB ..= 256 MiB |
+/// | `B-HTTP-10` in-flight attempts per transport | 32 | 1 ..= 256 |
+///
+/// Admission bounds (`B-HTTP-06`, `B-HTTP-07`) belong to the shared
+/// [`Admission`](crate::kite::connect::admission::Admission) scope.
 ///
 /// A response larger than its bound is a `Decode` error that preserves the
 /// HTTP status; the body is not buffered past the bound. The kite-api-docs
@@ -103,6 +107,7 @@ const MIB: usize = 1024 * KIB;
 pub struct HttpLimits {
     json_body_bytes: usize,
     csv_body_bytes: usize,
+    in_flight: usize,
 }
 
 impl Default for HttpLimits {
@@ -110,6 +115,7 @@ impl Default for HttpLimits {
         Self {
             json_body_bytes: 4 * MIB,
             csv_body_bytes: 64 * MIB,
+            in_flight: 32,
         }
     }
 }
@@ -128,6 +134,17 @@ impl HttpLimits {
     /// Set the JSON body bound (`B-HTTP-08`).
     pub fn with_json_body_bytes(mut self, bytes: usize) -> Result<Self, LimitError> {
         self.json_body_bytes = check_range("B-HTTP-08 (JSON)", bytes, 64 * KIB, 64 * MIB)?;
+        Ok(self)
+    }
+
+    /// Maximum concurrent transport attempts on one transport.
+    pub fn in_flight(&self) -> usize {
+        self.in_flight
+    }
+
+    /// Set the in-flight attempt bound (`B-HTTP-10`).
+    pub fn with_in_flight(mut self, attempts: usize) -> Result<Self, LimitError> {
+        self.in_flight = check_range("B-HTTP-10", attempts, 1, 256)?;
         Ok(self)
     }
 
@@ -270,6 +287,11 @@ mod tests {
         assert!(d.clone().with_csv_body_bytes(MIB).is_ok());
         assert!(d.clone().with_csv_body_bytes(256 * MIB).is_ok());
         assert!(d.clone().with_csv_body_bytes(MIB - 1).is_err());
+        assert_eq!(d.in_flight(), 32);
+        assert!(d.clone().with_in_flight(1).is_ok());
+        assert!(d.clone().with_in_flight(256).is_ok());
+        assert!(d.clone().with_in_flight(0).is_err());
+        assert!(d.clone().with_in_flight(257).is_err());
         let err = d.with_csv_body_bytes(256 * MIB + 1).unwrap_err();
         assert_eq!(err.bound, "B-HTTP-08 (CSV)");
     }
