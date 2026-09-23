@@ -195,7 +195,7 @@ impl Default for Config {
             api_base: KITECONNECT_API_BASE.to_string(),
             api_login: KITECONNECT_API_LOGIN.to_string(),
             api_redirect: KITECONNECT_API_REDIRECT.to_string(),
-            credentials: KiteCredentials::new("", "", "", "", ""),
+            credentials: KiteCredentials::new("", "", "", ""),
             limits: HttpLimits::default(),
         }
     }
@@ -338,7 +338,7 @@ mod tests {
             "http://127.0.0.1:1",
             "http://127.0.0.1:1",
             "http://127.0.0.1:1",
-            KiteCredentials::new("k", "SENTINEL", "u", "SENTINEL", "SENTINEL"),
+            KiteCredentials::new("k", "u", "SENTINEL", "SENTINEL"),
         );
         assert!(!format!("{config:?}").contains("SENTINEL"));
     }

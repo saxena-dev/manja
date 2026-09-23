@@ -24,7 +24,7 @@ use support::fixtures;
 use support::http::{HttpHarness, RecordedRequest, Reply};
 
 fn client_with(base: &str, limits: HttpLimits) -> HTTPClient {
-    let config = Config::from_parts(base, base, base, KiteCredentials::new("", "", "", "", ""))
+    let config = Config::from_parts(base, base, base, KiteCredentials::new("", "", "", ""))
         .with_limits(limits);
     HTTPClient::with_config(config)
         .unwrap()

@@ -4,12 +4,10 @@
 //! represent the various structures used in API requests and responses, making
 //! it easier to work with Kite Connect API in a type-safe manner.
 //!
-//! [`KiteApiResponse<T>`] is the wrapper struct that represents a response from
-//! Kite Connect API and is a good starting point to dig deeper. The generic type
-//! `T` is the specific data structure returned from an API endpoint. For example,
-//! a successful `Session::generate_session()` call yields
-//! `KiteApiResponse<UserSession>`, where [`UserSession`] holds the information
-//! returned by the token-exchange endpoint.
+//! [`KiteApiResponse<T>`] is the response envelope; its `data` holds the
+//! endpoint's type. For example, a successful `Session::exchange` yields
+//! `KiteApiResponse<UserSession>`, where [`UserSession`] holds the
+//! secret-wrapped tokens returned by the token-exchange endpoint.
 //!
 //! These models are compiled in every feature build; the resource APIs that
 //! return them need the `http` feature.

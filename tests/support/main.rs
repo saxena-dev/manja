@@ -188,7 +188,7 @@ fn manja_client(base_url: String) -> HTTPClient {
         base_url.clone(),
         base_url.clone(),
         base_url,
-        KiteCredentials::new("test_api_key", "", "", "", ""),
+        KiteCredentials::new("test_api_key", "", "", ""),
     );
     HTTPClient::with_config(config).unwrap()
 }

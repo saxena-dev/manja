@@ -10,7 +10,9 @@ use std::time::{Duration, Instant};
 
 use manja::kite::connect::client::HTTPClient;
 use manja::kite::connect::config::{Config, HttpLimits};
-use manja::kite::connect::credentials::{Credentials, KiteCredentials};
+use manja::kite::connect::credentials::{
+    AccessToken, ApiKey, ApiSecret, Credentials, KiteCredentials, RequestToken,
+};
 use manja::kite::connect::models::{
     Exchange, ModifyOrderRequest, OrderType, OrderVariety, PlaceOrderRequest,
     PositionConversionRequest, PositionType, ProductType, TransactionType,
@@ -27,7 +29,7 @@ fn client_with(base: &str, scheduler: SchedulerLimits) -> HTTPClient {
         base,
         base,
         base,
-        KiteCredentials::new("test_api_key", "test_api_secret", "", "", ""),
+        KiteCredentials::new("test_api_key", "", "", ""),
     )
     .with_limits(HttpLimits::default().with_scheduler(scheduler.with_jitter_seed(3)));
     HTTPClient::with_config(config)
@@ -121,9 +123,14 @@ async fn each_one_attempt_operation(replies: fn() -> Vec<Reply>) {
         }
     });
     once!("exchange", |c| c
-        .session()
-        .generate_session("request_token"));
-    once!("invalidate", |c| c.session().delete_session());
+        .session(ApiKey::new("test_api_key").unwrap())
+        .exchange(
+            &RequestToken::new("request_token").unwrap(),
+            &ApiSecret::new("test_api_secret").unwrap()
+        ));
+    once!("invalidate", |c| c
+        .session(ApiKey::new("test_api_key").unwrap())
+        .invalidate(&AccessToken::new("test_access_token").unwrap()));
 }
 
 #[tokio::test]

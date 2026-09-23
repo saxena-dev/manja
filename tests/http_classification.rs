@@ -24,7 +24,7 @@ use support::http::{refused_base_url, HttpHarness, Reply};
 const SENTINEL: &str = "SENTINELaccessTOKEN0123456789abcdef";
 
 fn client(base: &str, limits: HttpLimits) -> HTTPClient {
-    let config = Config::from_parts(base, base, base, KiteCredentials::new("", "", "", "", ""))
+    let config = Config::from_parts(base, base, base, KiteCredentials::new("", "", "", ""))
         .with_limits(limits);
     HTTPClient::with_config(config)
         .unwrap()

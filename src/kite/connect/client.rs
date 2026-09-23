@@ -322,11 +322,6 @@ impl HTTPClient {
         self.credentials.as_ref()
     }
 
-    // Used only by the legacy `Session` facade until it is replaced.
-    pub(crate) fn replace_credentials(&mut self, credentials: Option<Credentials>) {
-        self.credentials = credentials;
-    }
-
     /// HTTP configurations and Kite user credentials.
     ///
     pub fn http_config(&self) -> &Config {
@@ -371,10 +366,11 @@ impl HTTPClient {
         User::new(self)
     }
 
-    /// To call [Session] related APIs using this client.
-    ///
-    pub fn session(&mut self) -> Session<'_> {
-        Session::new(self)
+    /// The session operations (token exchange and invalidation) for
+    /// `api_key`. This client needs no credentials for them, and its own
+    /// credentials are never attached to them.
+    pub fn session(&self, api_key: ApiKey) -> Session<'_> {
+        Session::new(self, api_key)
     }
 
     /// To call [Orders] related APIs using this client.
@@ -414,6 +410,7 @@ impl HTTPClient {
                     path,
                     BodyKind::Csv,
                     None,
+                    true,
                     &guard.dispatched,
                     |rb| rb,
                 )
@@ -429,7 +426,8 @@ impl HTTPClient {
     where
         Model: DeserializeOwned,
     {
-        self.json(reqwest::Method::GET, path, None, |rb| rb).await
+        self.json(reqwest::Method::GET, path, None, true, |rb| rb)
+            .await
     }
 
     /// GET `path` with a query and decode the response envelope.
@@ -442,52 +440,8 @@ impl HTTPClient {
         Q: Serialize + ?Sized,
         Model: DeserializeOwned,
     {
-        self.json(reqwest::Method::GET, path, None, |rb| rb.query(query))
+        self.json(reqwest::Method::GET, path, None, true, |rb| rb.query(query))
             .await
-    }
-
-    /// POST a form to `path` and decode the response envelope.
-    pub(crate) async fn post_form<Model, F>(
-        &self,
-        path: &str,
-        form: &F,
-        permit: Option<DispatchPermit>,
-    ) -> Result<KiteApiResponse<Model>>
-    where
-        Model: DeserializeOwned,
-        F: Serialize + ?Sized,
-    {
-        self.json(reqwest::Method::POST, path, permit, |rb| rb.form(form))
-            .await
-    }
-
-    /// DELETE `path` and decode the response envelope. With `with_auth`, the
-    /// API key and access token are also sent as query parameters, as the
-    /// session-logout endpoint documents
-    /// (`kite-api-docs/docs/connect/v3/user.md:321-323`).
-    pub(crate) async fn delete<Model>(
-        &self,
-        path: &str,
-        with_auth: bool,
-    ) -> Result<KiteApiResponse<Model>>
-    where
-        Model: DeserializeOwned,
-    {
-        let query: Vec<(&str, &str)> = match (&self.credentials, with_auth) {
-            (Some(c), true) => vec![
-                ("api_key", c.api_key().as_str()),
-                ("access_token", c.access_token().expose_secret()),
-            ],
-            _ => Vec::new(),
-        };
-        self.json(reqwest::Method::DELETE, path, None, |rb| {
-            if query.is_empty() {
-                rb
-            } else {
-                rb.query(&query)
-            }
-        })
-        .await
     }
 
     /// Send `pairs` form-encoded (`application/x-www-form-urlencoded`,
@@ -515,7 +469,7 @@ impl HTTPClient {
         if body.len() > self.transport.config.limits().request_body_bytes() {
             return Err(rejected("the request body exceeds its bound").into());
         }
-        self.json(method, path, permit, |rb| {
+        self.json(method, path, permit, true, |rb| {
             if pairs.is_empty() {
                 // Nothing to send: no body and no content type.
                 rb
@@ -556,9 +510,48 @@ impl HTTPClient {
         if body.len() > self.transport.config.limits().request_body_bytes() {
             return Err(rejected("the request body exceeds its bound").into());
         }
-        self.json(method, path, None, |rb| {
+        self.json(method, path, None, true, |rb| {
             rb.header(reqwest::header::CONTENT_TYPE, "application/json")
                 .body(body.clone())
+        })
+        .await
+    }
+
+    /// Form-encoded request without the client's `Authorization` header,
+    /// for the session operations.
+    pub(crate) async fn send_form_unauthenticated<Model>(
+        &self,
+        method: reqwest::Method,
+        path: &str,
+        pairs: Vec<(&'static str, String)>,
+    ) -> Result<KiteApiResponse<Model>>
+    where
+        Model: DeserializeOwned,
+    {
+        let body = form_urlencode(&pairs);
+        drop(pairs);
+        self.json(method, path, None, false, |rb| {
+            rb.header(
+                reqwest::header::CONTENT_TYPE,
+                "application/x-www-form-urlencoded",
+            )
+            .body(body.clone())
+        })
+        .await
+    }
+
+    /// DELETE with query parameters and without the client's
+    /// `Authorization` header, for session invalidation.
+    pub(crate) async fn delete_unauthenticated<Model>(
+        &self,
+        path: &str,
+        query: &[(&str, &str)],
+    ) -> Result<KiteApiResponse<Model>>
+    where
+        Model: DeserializeOwned,
+    {
+        self.json(reqwest::Method::DELETE, path, None, false, |rb| {
+            rb.query(query)
         })
         .await
     }
@@ -578,6 +571,7 @@ impl HTTPClient {
         method: reqwest::Method,
         path: &str,
         permit: Option<DispatchPermit>,
+        auth: bool,
         build: B,
     ) -> Result<KiteApiResponse<Model>>
     where
@@ -593,6 +587,7 @@ impl HTTPClient {
                     path,
                     BodyKind::Json,
                     permit,
+                    auth,
                     &guard.dispatched,
                     build,
                 )
@@ -606,12 +601,14 @@ impl HTTPClient {
     /// Run the operation under the scheduler and return the final status,
     /// body and attempt number. Non-2xx statuses become errors here so the
     /// scheduler can decide on retries.
+    #[allow(clippy::too_many_arguments)]
     async fn execute<B>(
         &self,
         method: reqwest::Method,
         path: &str,
         kind: BodyKind,
         permit: Option<DispatchPermit>,
+        auth: bool,
         op_dispatched: &Arc<AtomicBool>,
         build: B,
     ) -> std::result::Result<(u16, Vec<u8>, u32), HttpError>
@@ -632,7 +629,17 @@ impl HTTPClient {
             .run(spec, &self.transport.admission, permit, |ctx| async move {
                 let number = ctx.number;
                 let (status, body) = self
-                    .attempt(method, path, kind, build, m, endpoint, ctx, op_dispatched)
+                    .attempt(
+                        method,
+                        path,
+                        kind,
+                        auth,
+                        build,
+                        m,
+                        endpoint,
+                        ctx,
+                        op_dispatched,
+                    )
                     .await?;
                 if !(200..300).contains(&status) {
                     // Classify now so the scheduler sees the status.
@@ -655,6 +662,7 @@ impl HTTPClient {
         method: &reqwest::Method,
         path: &str,
         kind: BodyKind,
+        auth: bool,
         build: &B,
         m: Method,
         endpoint: Endpoint,
@@ -684,7 +692,7 @@ impl HTTPClient {
             .http
             .request(method.clone(), url)
             .header("X-Kite-Version", "3");
-        if let Some(creds) = &self.credentials {
+        if let (true, Some(creds)) = (auth, &self.credentials) {
             let mut value =
                 HeaderValue::from_str(creds.authorization_header().expose()).map_err(|_| {
                     not_started(

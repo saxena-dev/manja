@@ -322,7 +322,6 @@ pub(crate) fn encode_query_value(value: &str) -> String {
 #[derive(Clone)]
 pub struct KiteCredentials {
     api_key: Secret<String>,
-    api_secret: Secret<String>,
     user_id: Secret<String>,
     user_pwd: Secret<String>,
     totp_key: Secret<String>,
@@ -337,20 +336,15 @@ impl fmt::Debug for KiteCredentials {
 impl KiteCredentials {
     /// Creates `KiteCredentials` from explicitly supplied values.
     ///
-    /// It is __NOT__ safe to hardcode credentials in your application.
-    pub fn new<InS>(
-        api_key: InS,
-        api_secret: InS,
-        user_id: InS,
-        user_pwd: InS,
-        totp_key: InS,
-    ) -> Self
+    /// It holds no API secret: token exchange borrows the secret for the
+    /// call only. It is __NOT__ safe to hardcode credentials in your
+    /// application.
+    pub fn new<InS>(api_key: InS, user_id: InS, user_pwd: InS, totp_key: InS) -> Self
     where
         InS: Into<String>,
     {
         KiteCredentials {
             api_key: Secret::new(api_key.into()),
-            api_secret: Secret::new(api_secret.into()),
             user_id: Secret::new(user_id.into()),
             user_pwd: Secret::new(user_pwd.into()),
             totp_key: Secret::new(totp_key.into()),
@@ -360,11 +354,6 @@ impl KiteCredentials {
     /// Returns the API key.
     pub fn api_key(&self) -> Secret<String> {
         self.api_key.clone()
-    }
-
-    /// Returns the API secret.
-    pub fn api_secret(&self) -> Secret<String> {
-        self.api_secret.clone()
     }
 
     /// Returns the user ID.
@@ -413,7 +402,7 @@ mod test {
             format!("{:?}", RequestToken::new(SENTINEL).unwrap()),
             format!(
                 "{:?}",
-                KiteCredentials::new(SENTINEL, SENTINEL, SENTINEL, SENTINEL, SENTINEL)
+                KiteCredentials::new(SENTINEL, SENTINEL, SENTINEL, SENTINEL)
             ),
             // A nested value keeps the redaction.
             format!("{:?}", Some(vec![creds.clone()])),
