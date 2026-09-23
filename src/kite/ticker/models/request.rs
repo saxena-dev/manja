@@ -144,28 +144,14 @@ impl TickerRequest {
     }
 }
 
-impl ToString for TickerRequest {
-    /// Converts the `TickerRequest` to a JSON string.
+impl std::fmt::Display for TickerRequest {
+    /// Writes the `TickerRequest` as its JSON wire form, so `to_string()`
+    /// yields the message to send.
     ///
-    /// This method serializes the `TickerRequest` into a JSON string representation.
-    ///
-    /// # Returns
-    ///
-    /// A `String` containing the JSON representation of the `TickerRequest`.
-    ///
-    /// # Panics
-    ///
-    /// This method will panic if serialization fails.
-    ///
-    /// # Example
-    ///
-    /// ```ignore
-    /// let request = TickerRequest::subscribe(vec![12345, 67890]);
-    /// let json = request.to_string();
-    /// println!("JSON: {}", json);
-    /// ```
-    ///
-    fn to_string(&self) -> String {
-        serde_json::to_string(self).expect("failed to serialize TickerInput to JSON")
+    /// Serialization of this plain data type cannot fail; if it ever did,
+    /// formatting returns `fmt::Error`.
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let json = serde_json::to_string(self).map_err(|_| std::fmt::Error)?;
+        f.write_str(&json)
     }
 }

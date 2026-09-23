@@ -70,7 +70,7 @@ impl<'c> Market<'c> {
 
         for result in rdr.deserialize() {
             let record: Instrument =
-                result.map_err(|_| ManjaError::Internal(format!("CSV parse error")))?;
+                result.map_err(|_| ManjaError::Internal("CSV parse error".to_string()))?;
             records.push(record);
         }
 
@@ -85,7 +85,9 @@ impl<'c> Market<'c> {
     /// all exchanges (if not specified) that can be imported into a database.
     /// The dump is generated once everyday and hence last_price is not real time.
     pub async fn get_instruments_csv(&self, exchange: Option<Exchange>) -> Result<String> {
-        let path = exchange.map_or(format!("/instruments"), |x| format!("/instruments/{}", x));
+        let path = exchange.map_or("/instruments".to_string(), |x| {
+            format!("/instruments/{}", x)
+        });
         self.client.get_raw(&path, &self.backoff).await
     }
 
@@ -129,7 +131,7 @@ impl<'c> Market<'c> {
     #[allow(private_bounds)]
     pub async fn get_quotes<Q>(
         &self,
-        query: &Vec<(&str, &str)>,
+        query: &[(&str, &str)],
     ) -> Result<KiteApiResponse<HashMap<String, Q>>>
     where
         Q: KiteQuote,

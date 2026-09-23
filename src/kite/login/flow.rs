@@ -112,9 +112,9 @@ pub async fn browser_login_flow(config: Box<dyn KiteConfig>) -> Result<String> {
                     driver.kill().await.unwrap();
                     Ok(request_token)
                 }
-                None => Err(ManjaError::Internal(format!(
-                    "`request_token` not found in redirect URL."
-                ))),
+                None => Err(ManjaError::Internal(
+                    "`request_token` not found in redirect URL.".to_string(),
+                )),
             }
         }
         Err(e) => Err(e),

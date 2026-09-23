@@ -137,12 +137,12 @@ impl<'c> Session<'c> {
     /// # Arguments
     ///
     /// * `request_token` - The token received after the initial login step,
-    /// which is required to generate the session.
+    ///   which is required to generate the session.
     ///
     /// # Returns
     ///
     /// * A result containing the session details if successful, or an error
-    /// if the session generation fails.
+    ///   if the session generation fails.
     ///
     /// # Example
     ///

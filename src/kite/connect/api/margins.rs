@@ -72,7 +72,7 @@ impl<'c> Margins<'c> {
         request: OrderMarginRequest,
     ) -> Result<KiteApiResponse<OrderMargin>> {
         self.client
-            .post(&"/margins/orders", request, &self.backoff)
+            .post("/margins/orders", request, &self.backoff)
             .await
     }
 
@@ -223,7 +223,7 @@ impl<'c> Charges<'c> {
         requests: &[OrderChargesRequest],
     ) -> Result<KiteApiResponse<Vec<OrderCharges>>> {
         self.client
-            .post(&"/charges/orders", requests, &self.backoff)
+            .post("/charges/orders", requests, &self.backoff)
             .await
     }
 }

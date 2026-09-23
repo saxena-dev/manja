@@ -48,17 +48,17 @@ pub enum InstrumentType {
 /// # CSV response columns
 ///
 /// - `instrument_token`: Numerical identifier used for subscribing to live market
-///     quotes with the WebSocket API.
+///   quotes with the WebSocket API.
 /// - `exchange_token`: The numerical identifier issued by the exchange representing
-///     the instrument.
+///   the instrument.
 /// - `tradingsymbol`: Exchange tradingsymbol of the instrument.
 /// - `name`: Name of the company (for equity instruments). This can be `None` for
-///     non-equity instruments.
+///   non-equity instruments.
 /// - `last_price`: Last traded market price.
 /// - `expiry`: Expiry date (for derivatives). Optional because it may not be present
-///     for some instruments.
+///   for some instruments.
 /// - `strike`: Strike price (for options). Optional because it may not be present
-///     for some instruments.
+///   for some instruments.
 /// - `tick_size`: Value of a single price tick.
 /// - `lot_size`: Quantity of a single lot.
 /// - `instrument_type`: Type of the instrument (e.g., EQ, FUT, CE, PE).
@@ -136,6 +136,7 @@ impl Instrument {
 /// Represents the OHLC (Open, High, Low, Close) data of a market instrument.
 ///
 #[derive(Debug, Serialize, Deserialize)]
+#[allow(clippy::upper_case_acronyms)] // Public name kept for compatibility.
 pub struct OHLC {
     /// Price at market opening.
     pub open: f64,

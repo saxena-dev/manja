@@ -145,8 +145,7 @@ impl StreamState {
     ///
     pub fn from_credentials(credentials: KiteStreamCredentials) -> Self {
         let api_base = std::env::var("KITECONNECT_WSS_API_BASE")
-            .unwrap_or_else(|_| KITECONNECT_WSS_API_BASE.to_string())
-            .into();
+            .unwrap_or_else(|_| KITECONNECT_WSS_API_BASE.to_string());
         Self {
             api_base,
             credentials,
@@ -234,19 +233,19 @@ impl IntoClientRequest for StreamState {
 /// sequentially.
 ///
 /// 1. *Initialization*: When a `SubscriptionStream` is created, `current_key_idx`
-///     is initialized to 0. This means the stream will start processing from the
-///     first key in the keys vector.
+///    is initialized to 0. This means the stream will start processing from the
+///    first key in the keys vector.
 /// 2. *Iteration*: The `poll_next` method uses `current_key_idx` to determine the
-///     current `Mode` being processed.
+///    current `Mode` being processed.
 /// 3. *Processing*: If there are tokens associated with the current mode, a `TickerRequest`
-///     is created and serialized to JSON. The `current_key_idx` is then incremented
-///     to move to the next mode for the next poll.
+///    is created and serialized to JSON. The `current_key_idx` is then incremented
+///    to move to the next mode for the next poll.
 /// 4. *Completion*: If `current_key_idx` exceeds the length of the `keys` vector,
-///     it means all keys have been processed, and the stream signals completion
-///     by returning `Poll::Ready(None)`.
+///    it means all keys have been processed, and the stream signals completion
+///    by returning `Poll::Ready(None)`.
 /// 5. *Pending*: If there are no tokens for the current mode, `current_key_idx`
-///     is incremented, and the method signals that it is still pending by returning
-///     `Poll::Pending`.
+///    is incremented, and the method signals that it is still pending by returning
+///    `Poll::Pending`.
 ///
 /// The `current_key_idx` field ensures that each mode and its corresponding tokens
 /// are processed in order, and it keeps track of the current position within the
@@ -304,7 +303,7 @@ impl From<StreamState> for SubscriptionStream {
         let keys = value.subscription.keys().cloned().collect();
         Self {
             data: value.subscription,
-            keys: keys,
+            keys,
             current_key_idx: 0,
         }
     }

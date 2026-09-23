@@ -77,7 +77,7 @@ impl<'c> User<'c> {
     /// Refer to the Kite API [documentation](https://kite.trade/docs/connect/v3/user/#user-profile) for more details.
     ///
     pub async fn profile(&self) -> Result<KiteApiResponse<UserProfile>> {
-        self.client.get(&"/user/profile", &self.backoff).await
+        self.client.get("/user/profile", &self.backoff).await
     }
 
     /// Fetch the user margins from the API endpoint: `/user/margins`.
@@ -92,7 +92,7 @@ impl<'c> User<'c> {
     /// Refer to the Kite API [documentation](https://kite.trade/docs/connect/v3/user/#funds-and-margins) for more details.
     ///
     pub async fn margins(&self) -> Result<KiteApiResponse<UserMargins>> {
-        self.client.get(&"/user/margins", &self.backoff).await
+        self.client.get("/user/margins", &self.backoff).await
     }
 
     /// Fetch the user margins for a specific segment (`equity` or `commodity`)

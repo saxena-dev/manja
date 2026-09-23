@@ -9,11 +9,11 @@
 //! # Features
 //!
 //! - **Session Management**: Manages user sessions, including storing and retrieving
-//!     session tokens.
+//!   session tokens.
 //! - **Request Handling**: Provides methods for making `GET`, `POST`, `POST form`, and
-//!     `DELETE` requests.
+//!   `DELETE` requests.
 //! - **Configurable**: Allows configuration via the `Config` struct, which can
-//!     be loaded from environment variables or passed directly.
+//!   be loaded from environment variables or passed directly.
 //!
 //! # Examples
 //!
@@ -91,10 +91,9 @@ impl HTTPClient {
 
     fn get_access_token(&self) -> Option<Secret<String>> {
         // Clone and return the access token, if available
-        match self.session {
-            Some(ref user_session) => Some((user_session.access_token).clone()),
-            None => None,
-        }
+        self.session
+            .as_ref()
+            .map(|user_session| (user_session.access_token).clone())
     }
 
     /// Create a default HTTP client with config.
@@ -127,7 +126,6 @@ impl HTTPClient {
     ///
     pub fn set_user_session(&mut self, user_session: Option<UserSession>) {
         self.session = user_session;
-        ()
     }
 
     /// User session, if it exists.
@@ -352,8 +350,8 @@ impl HTTPClient {
                     (
                         "access_token",
                         self.user_session()
-                            .and_then(|session| Some(session.access_token.expose_secret().as_str()))
-                            .unwrap_or_else(|| &"(ﾉﾟ0ﾟ)ﾉ~"),
+                            .map(|session| session.access_token.expose_secret().as_str())
+                            .unwrap_or_else(|| "(ﾉﾟ0ﾟ)ﾉ~"),
                     ),
                 ];
                 http_request_builder = http_request_builder.query(&query_vec);
@@ -426,7 +424,7 @@ impl HTTPClient {
                     message: kite_response.message,
                     error_type: kite_response
                         .error_type
-                        .and_then(|error_type| Some(KiteApiException::from(error_type.as_str())))
+                        .map(|error_type| KiteApiException::from(error_type.as_str()))
                         // This unwrap is safe since From<&str> is implemented for `KiteApiException`.
                         .unwrap(),
                 };

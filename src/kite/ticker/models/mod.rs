@@ -8,9 +8,9 @@
 //! # Submodules
 //!
 //! - `mode`: Defines the `Mode` enum, which represents the different modes in which
-//!     data packets can be streamed.
+//!   data packets can be streamed.
 //! - `request`: Defines the `TickerRequest` struct, which represents the structure
-//!     of a WebSocket request.
+//!   of a WebSocket request.
 //!
 mod mode;
 pub use mode::Mode;

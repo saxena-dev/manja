@@ -81,13 +81,10 @@ where
                     }
                     Ok(TickerStream {
                         ws_stream,
-                        stream_state: stream_state,
+                        stream_state,
                     })
                 }
-                Err(e) => Err(io::Error::new(
-                    io::ErrorKind::Other,
-                    format!("Big problem := {}", e),
-                )),
+                Err(e) => Err(io::Error::other(format!("Big problem := {}", e))),
             }
         })
     }

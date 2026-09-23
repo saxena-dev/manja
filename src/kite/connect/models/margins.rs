@@ -42,6 +42,7 @@ pub struct OrderMarginRequest {
 /// This structure holds the realised and unrealised profit and loss values.
 ///
 #[derive(Serialize, Deserialize, Debug)]
+#[allow(clippy::upper_case_acronyms)] // Public name kept for compatibility.
 pub struct PNL {
     /// Realised profit and loss
     pub realised: f64,
@@ -54,6 +55,7 @@ pub struct PNL {
 /// This structure holds details about various GST components like IGST, CGST, and SGST.
 ///
 #[derive(Serialize, Deserialize, Debug)]
+#[allow(clippy::upper_case_acronyms)] // Public name kept for compatibility.
 pub struct GST {
     /// Integrated Goods and Services Tax
     pub igst: f64,

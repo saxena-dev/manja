@@ -74,9 +74,7 @@ impl<'c> Portfolio<'c> {
     /// DEMAT account, as settled by exchanges and clearing institutions.
     ///
     pub async fn get_holdings(&self) -> Result<KiteApiResponse<Vec<Holding>>> {
-        self.client
-            .get(&format!("/portfolio/holdings"), &self.backoff)
-            .await
+        self.client.get("/portfolio/holdings", &self.backoff).await
     }
 
     /// Retrieve the list of short term positions.
@@ -93,9 +91,7 @@ impl<'c> Portfolio<'c> {
     /// useful for computing intraday profits and losses for trading strategies.
     ///
     pub async fn get_positions(&self) -> Result<KiteApiResponse<Vec<Position>>> {
-        self.client
-            .get(&format!("/portfolio/positions"), &self.backoff)
-            .await
+        self.client.get("/portfolio/positions", &self.backoff).await
     }
 
     /// Convert the margin product of an open position.
@@ -111,7 +107,7 @@ impl<'c> Portfolio<'c> {
         request: PositionConversionRequest,
     ) -> Result<KiteApiResponse<bool>> {
         self.client
-            .put(&format!("/portfolio/positions"), request, &self.backoff)
+            .put("/portfolio/positions", request, &self.backoff)
             .await
     }
 
@@ -125,7 +121,7 @@ impl<'c> Portfolio<'c> {
     ///
     pub async fn get_auctions(&self) -> Result<KiteApiResponse<Vec<Auction>>> {
         self.client
-            .get(&format!("/portfolio/holdings/auctions"), &self.backoff)
+            .get("/portfolio/holdings/auctions", &self.backoff)
             .await
     }
 

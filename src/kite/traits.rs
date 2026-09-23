@@ -133,6 +133,5 @@ impl KiteAuth for HeaderMap {
             // `api_key:access_token` combination.
             self.insert("Authorization", value);
         }
-        ()
     }
 }
