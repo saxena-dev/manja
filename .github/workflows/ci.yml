@@ -1,0 +1,46 @@
+# Compile-only feature matrix (plans/sdk-contract.v0.md §8.4).
+#
+# One job per plan §8 feature row. CI resolves and fetches dependencies from
+# crates.io because Cargo.lock is not tracked; local evidence for the same rows
+# uses `--offline`. MSRV and dependency-graph jobs are added by S26.
+name: ci
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  feature-check:
+    name: cargo check ${{ matrix.row }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - row: no-default
+            args: --no-default-features
+          - row: decoder
+            args: --no-default-features --features decoder
+          - row: http
+            args: --no-default-features --features http
+          - row: ticker
+            args: --no-default-features --features ticker
+          - row: ticker,decoder
+            args: --no-default-features --features ticker,decoder
+          - row: http,ticker
+            args: --no-default-features --features http,ticker
+          - row: http,ticker,decoder
+            args: --no-default-features --features http,ticker,decoder
+          - row: default
+            args: ""
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Rust 1.98.0
+        run: |
+          rustup toolchain install 1.98.0 --profile minimal
+          rustup default 1.98.0
+      - name: cargo check
+        run: cargo check ${{ matrix.args }}

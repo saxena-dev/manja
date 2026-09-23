@@ -1,50 +1,37 @@
 //! Async WebSocket client and additional functionality.
 //!
-//! This module provides an easy-to-use interface for connecting to the Kite Connect
-//! WebSocket API, managing subscriptions to instrument tokens, and receiving real-time
-//! streaming market data in various modes such as `Full`, `Quote`, and `LTP` (Last
-//! Traded Price).
+//! This module is compiled with the `ticker` feature. It holds the legacy
+//! WebSocket client and its replacement, `actor`.
 //!
-//! # Features
+//! # Legacy client
 //!
-//! - **WebSocket Client**: Establishes and maintains a reliable, stateful WebSocket
-//!     connection to Kite Connect API.
-//! - **Subscription Management**: Allows subscribing and unsubscribing to specific
-//!     instrument tokens and managing the mode of data reception.
-//! - **Real-Time Data Streaming**: Stream market data such as price updates, order
-//!     book changes, and more in real-time through the WebSocket connection.
+//! [`WebSocketClient`] connects to the Kite Connect WebSocket API with the
+//! credentials and instrument tokens held in a [`StreamState`] and yields the
+//! `tungstenite` messages it receives, uninterpreted. It makes no readiness,
+//! reconnection or subscription-restoration guarantee: polling reads the
+//! current socket directly, and the initial requests it sends are built by
+//! [`TickerRequest::subscribe_with_mode`], which creates a `mode` action, not a
+//! `subscribe` action.
 //!
-//! # Example Usage
+//! Its migration disposition, set in the SDK contract, is deprecation with
+//! corrected documentation, not in-place repair, and the same disposition
+//! covers `subscribe_with_mode`. The legacy client stays compiled and exported
+//! during migration, its stream item type does not change, and it is removed
+//! only in a later documented breaking release after its replacement ships.
 //!
-//! ```ignore
-//! use kite::ticker::{KiteTickerClient, Mode, TickerRequest};
-//! use futures_util::stream::StreamExt;
+//! # Raw and typed streams
 //!
-//! #[tokio::main]
-//! async fn main() -> Result<(), Box<dyn std::error::Error>> {
-//!     // Assuming we have a request token
-//!     let kite_session = manja_client
-//!         .session()
-//!         .generate_session(&request_token)
-//!         .await?;
-//!     let stream_creds = KiteStreamCredentials::from(kite_session.data.unwrap());
-//!     let stream_state = StreamState::from_credentials(stream_creds)
-//!         .subscribe_token(Mode::Full, 408065)    // INFY
-//!         .subscribe_token(Mode::Full, 884737);   // TATAMOTORS
-//!      
-//!     if let Ok(mut ticker) = WebSocketClient::connect(stream_state).await {     
-//!         if let Some(maybe_msg) = ticker.next().await {
-//!             match maybe_msg {
-//!                 Ok(msg) => info!("Message: {}", msg),
-//!                 Err(e) => error!("Error: {}", e),
-//!             }
-//!         }
-//!     }
+//! The SDK contract specifies the replacement, built in `actor`, as one
+//! socket-owning task with typed commands, a status handle and a supervised task
+//! guard. Its primary receiver yields raw observations and lifecycle events
+//! before any interpretation, and it needs no decoder. Typed market events come
+//! from composing it with the `decoder` feature, which decodes those raw
+//! observations; typed events never replace the raw stream.
 //!
-//!     Ok(())
-//! }
-//! ```
-//!
+
+// The single-owner ticker: owner, subscriptions, lifecycle, delivery and
+// status.
+pub mod actor;
 
 // Contains the `WebSocketClient` and `TickerStream` structs, which are used to
 // connect to the WebSocket API and handle data streaming.

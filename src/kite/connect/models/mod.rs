@@ -7,19 +7,12 @@
 //! [`KiteApiResponse<T>`] is the wrapper struct that represents a response from
 //! Kite Connect API and is a good starting point to dig deeper. The generic type
 //! `T` is the specific data structure returned from an API endpoint. For example,
-//! the type `T` in the code below is [`UserSession`] representing the information
-//! returned by the API from the endpoint pointed at by the method `generate_session()`.
+//! a successful `Session::generate_session()` call yields
+//! `KiteApiResponse<UserSession>`, where [`UserSession`] holds the information
+//! returned by the token-exchange endpoint.
 //!
-//! ```ignore
-//! // Login flow I: request token
-//! let request_token: String = format!("xxx");
-//!
-//! // Login flow II: user session
-//! let _kite_session: KiteApiResponse<UserSession> = manja_client
-//!    .session()
-//!    .generate_session(&request_token)
-//!    .await?;
-//! ```
+//! These models are compiled in every feature build; the resource APIs that
+//! return them need the `http` feature.
 //!
 use serde::{Deserialize, Serialize};
 
