@@ -201,10 +201,11 @@ async fn a_500_is_not_retried() {
 
 #[tokio::test]
 async fn the_operation_deadline_bounds_stalled_retries() {
-    let harness =
-        HttpHarness::start(vec![Reply::Stall, Reply::Stall, Reply::Stall, Reply::Stall]).await;
+    let harness = HttpHarness::start((0..5).map(|_| Reply::Stall).collect()).await;
+    // Unbounded, five stalled 800 ms attempts would take about 4 s; the 1 s
+    // deadline leaves room for at most two.
     let tight = SchedulerLimits::default()
-        .with_attempt_timeout(Duration::from_millis(300))
+        .with_attempt_timeout(Duration::from_millis(800))
         .unwrap()
         .with_operation_deadline(Duration::from_secs(1))
         .unwrap()
@@ -219,7 +220,12 @@ async fn the_operation_deadline_bounds_stalled_retries() {
         .await
         .unwrap_err();
     let elapsed = start.elapsed();
-    assert!(elapsed < Duration::from_millis(1500), "{elapsed:?}");
+    assert!(elapsed < Duration::from_millis(2500), "{elapsed:?}");
+    assert!(
+        harness.requests().len() <= 2,
+        "{}",
+        harness.requests().len()
+    );
     let e = err.as_http().unwrap();
     assert!(e.is_timeout());
     assert!(e.may_have_reached_broker());
