@@ -61,6 +61,36 @@ fn rejected(path: &str, detail: &str) -> HttpError {
     .with_detail(detail)
 }
 
+/// The distinct keys of a valid quote request, or why it is invalid.
+fn check_keys<'k>(
+    instruments: &[&'k str],
+    max: usize,
+) -> std::result::Result<HashSet<&'k str>, String> {
+    if instruments.is_empty() {
+        return Err("at least one instrument is required".into());
+    }
+    if instruments.len() > max {
+        return Err(format!(
+            "{} instruments exceed the documented limit of {max}",
+            instruments.len()
+        ));
+    }
+    let mut seen = HashSet::with_capacity(instruments.len());
+    for key in instruments {
+        let well_formed = key.len() <= 128
+            && key
+                .split_once(':')
+                .is_some_and(|(e, s)| !e.is_empty() && !s.is_empty());
+        if !well_formed {
+            return Err("an instrument key is not EXCHANGE:TRADINGSYMBOL".into());
+        }
+        if !seen.insert(*key) {
+            return Err("an instrument key is repeated".into());
+        }
+    }
+    Ok(seen)
+}
+
 impl<'c> Market<'c> {
     /// Market APIs on `client`.
     pub fn new(client: &'c HTTPClient) -> Self {
@@ -68,7 +98,10 @@ impl<'c> Market<'c> {
     }
 
     /// Parse the instrument CSV, row by row.
-    fn parse_instruments(path: &str, data: &str) -> Result<Vec<Instrument>> {
+    fn parse_instruments(
+        path: &str,
+        data: &str,
+    ) -> std::result::Result<Vec<Instrument>, HttpError> {
         let mut rdr = csv::Reader::from_reader(data.as_bytes());
         let mut records = Vec::new();
         for (row, result) in rdr.deserialize().enumerate() {
@@ -105,14 +138,20 @@ impl<'c> Market<'c> {
     /// The dump is large; request it once a day and store it
     /// (`market-quotes.md:50-52`).
     pub async fn get_instruments_all(&self) -> Result<Vec<Instrument>> {
-        let csv = self.get_instruments_csv(None).await?;
-        Market::parse_instruments("/instruments", &csv)
+        self.client
+            .get_csv("/instruments", |csv| {
+                Market::parse_instruments("/instruments", csv)
+            })
+            .await
     }
 
     /// The instruments of one exchange, parsed.
     pub async fn get_instruments(&self, exchange: Exchange) -> Result<Vec<Instrument>> {
-        let csv = self.get_instruments_csv(Some(exchange)).await?;
-        Market::parse_instruments("/instruments/{exchange}", &csv)
+        self.client
+            .get_csv(&format!("/instruments/{exchange}"), |csv| {
+                Market::parse_instruments("/instruments/{exchange}", csv)
+            })
+            .await
     }
 
     /// Quotes of type `Q` for instrument keys such as `NSE:INFY`.
@@ -141,35 +180,8 @@ impl<'c> Market<'c> {
     {
         let mode = Q::mode();
         let path = mode.path();
-        if instruments.is_empty() {
-            return Err(rejected(path, "at least one instrument is required").into());
-        }
-        if instruments.len() > mode.max_instruments() {
-            return Err(rejected(
-                path,
-                &format!(
-                    "{} instruments exceed the documented limit of {}",
-                    instruments.len(),
-                    mode.max_instruments()
-                ),
-            )
-            .into());
-        }
-        let mut seen = HashSet::with_capacity(instruments.len());
-        for key in instruments {
-            let well_formed = key.len() <= 128
-                && key
-                    .split_once(':')
-                    .is_some_and(|(e, s)| !e.is_empty() && !s.is_empty());
-            if !well_formed {
-                return Err(
-                    rejected(path, "an instrument key is not EXCHANGE:TRADINGSYMBOL").into(),
-                );
-            }
-            if !seen.insert(*key) {
-                return Err(rejected(path, "an instrument key is repeated").into());
-            }
-        }
+        let seen = check_keys(instruments, mode.max_instruments())
+            .map_err(|detail| self.client.reject(rejected(path, &detail)))?;
         let query: Vec<(&str, &str)> = instruments.iter().map(|k| ("i", *k)).collect();
         let response = self
             .client

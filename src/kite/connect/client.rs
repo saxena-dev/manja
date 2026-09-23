@@ -37,14 +37,33 @@
 //! the client records a `Cancelled` entry with the stage reached in
 //! [`HTTPClient::diagnostics`].
 //!
+//! # Observability
+//!
+//! A client records in the [`Observability`] scope it was built with
+//! ([`HttpClientBuilder::observability`], [`HTTPClient::with_observability`]),
+//! or in a disabled scope. Clones and derived clients share it. Each polled
+//! operation gets one `manja.http.operation` span and one completion count
+//! and duration, covering admission, attempts and backoff; an operation
+//! rejected before admission counts with result `validation`, and an
+//! unpolled future records nothing. Each admission wait gets its own
+//! `manja.http.admission` span and wait histogram. Each dispatched attempt
+//! gets a child `manja.http.attempt` span, a count and a duration that
+//! excludes admission and backoff; a failure before dispatch makes no
+//! attempt, and a retry is counted only when another attempt is dispatched.
+//! The in-flight and waiter gauges are held by guards, so they settle on
+//! success, error and cancellation. Context is passed explicitly through
+//! the scheduler, never through a task-local or global. Labels are endpoint
+//! templates and closed outcome values only.
+//!
 use core::future::Future;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use reqwest::header::{HeaderValue, AUTHORIZATION};
 use serde::{de::DeserializeOwned, Serialize};
 use serde_json::Value;
+use tracing::{Instrument as _, Span};
 
 use crate::kite::{
     connect::{
@@ -53,13 +72,17 @@ use crate::kite::{
         config::Config,
         credentials::{AccessToken, ApiKey, Credentials},
         models::{KiteApiResponse, UserSession},
-        scheduler::{AttemptCtx, DispatchPermit, OpSpec, PermitTarget, Scheduler},
+        scheduler::{
+            AttemptCtx, DispatchPermit, OpObs, OpSpec, PermitTarget, RetryClass, Scheduler,
+        },
     },
     error::{
-        BrokerError, HttpError, HttpErrorKind, KiteApiException, Result, TransportStage as Stage,
+        BrokerError, HttpError, HttpErrorKind, KiteApiException, ManjaError, Result,
+        TransportStage as Stage,
     },
     obs::diagnostics::{BoundedText, FailureHistory, DEFAULT_HISTORY},
-    obs::schema::{Endpoint, Method},
+    obs::handle::{Labels, Observability},
+    obs::schema::{Endpoint, HttpOperationResult, Instrument, Method, QuotaClass},
     protocol::Inbound,
     traits::KiteConfig,
 };
@@ -72,6 +95,13 @@ struct Transport {
     in_flight: Arc<tokio::sync::Semaphore>,
     failures: Mutex<FailureHistory<HttpFailure>>,
     origin: Instant,
+    obs: Observability,
+    // This transport's operations waiting for admission, per quota class.
+    waiting: [AtomicUsize; 4],
+}
+
+fn quota_index(q: QuotaClass) -> usize {
+    QuotaClass::ALL.iter().position(|c| *c == q).unwrap_or(0)
 }
 
 /// One recorded failure or cancellation of an HTTP operation.
@@ -110,6 +140,9 @@ pub struct HttpDiagnostics {
     pub active_attempts: usize,
     /// Operations waiting for admission capacity in the scope.
     pub admission_waiters: usize,
+    /// This transport's operations waiting for admission, per quota class,
+    /// in [`QuotaClass::ALL`] order.
+    pub admission_waiters_by_class: Vec<(QuotaClass, usize)>,
     /// The most recent failures and cancellations, oldest first
     /// (`B-DIAG-01`).
     pub last_failures: Vec<HttpFailure>,
@@ -149,9 +182,18 @@ pub struct HttpClientBuilder {
     config: Config,
     admission: Option<Admission>,
     credentials: Option<Credentials>,
+    observability: Option<Observability>,
 }
 
 impl HttpClientBuilder {
+    /// Record spans and metrics in `obs`'s scope. Without it the client
+    /// uses [`Observability::disabled`]; its typed diagnostics work either
+    /// way.
+    pub fn observability(mut self, obs: Observability) -> Self {
+        self.observability = Some(obs);
+        self
+    }
+
     /// Draw quota from `admission`, shared with other clients.
     pub fn admission(mut self, admission: Admission) -> Self {
         self.admission = Some(admission);
@@ -167,19 +209,27 @@ impl HttpClientBuilder {
     /// Build the client. Fails with a configuration error if the HTTP
     /// transport cannot be built.
     pub fn build(self) -> Result<HTTPClient> {
-        let mut client =
-            HTTPClient::build_transport(self.config, self.admission.unwrap_or_default())?;
+        let mut client = HTTPClient::build_transport(
+            self.config,
+            self.admission.unwrap_or_default(),
+            self.observability.unwrap_or_default(),
+        )?;
         client.credentials = self.credentials;
         Ok(client)
     }
 }
 
-// Records an operation's outcome in the transport diagnostics, including
-// cancellation when its future is dropped before completing.
+// One polled logical operation: its span, its completion count and
+// duration, and its entry in the transport diagnostics. Dropped before
+// finishing, the operation was cancelled.
 struct OpGuard<'a> {
     transport: &'a Transport,
     method: Method,
     endpoint: Endpoint,
+    quota: QuotaClass,
+    span: Span,
+    operation_id: u64,
+    started: tokio::time::Instant,
     dispatched: Arc<AtomicBool>,
     done: bool,
 }
@@ -190,23 +240,39 @@ impl OpGuard<'_> {
         result: std::result::Result<T, HttpError>,
     ) -> std::result::Result<T, HttpError> {
         self.done = true;
-        if let Err(e) = &result {
-            self.transport.record(HttpFailure {
-                method: e.method(),
-                endpoint: e.endpoint(),
-                kind: e.kind(),
-                http_status: e.http_status(),
-                stage: e.stage(),
-                broker_error_type: e
-                    .broker()
-                    .and_then(|b| b.error_type())
-                    .map(|t| t.as_wire().to_string()),
-                message: e.broker().and_then(|b| b.message()).cloned(),
-                attempt: e.attempt(),
-                at: self.transport.origin.elapsed(),
-            });
+        match &result {
+            Ok(_) => self.complete(HttpOperationResult::Ok, Stage::ResponseReceived),
+            Err(e) => {
+                self.complete(operation_result(e), e.stage());
+                self.transport.record(HttpFailure {
+                    method: e.method(),
+                    endpoint: e.endpoint(),
+                    kind: e.kind(),
+                    http_status: e.http_status(),
+                    stage: e.stage(),
+                    broker_error_type: e
+                        .broker()
+                        .and_then(|b| b.error_type())
+                        .map(|t| t.as_wire().to_string()),
+                    message: e.broker().and_then(|b| b.message()).cloned(),
+                    attempt: e.attempt(),
+                    at: self.transport.origin.elapsed(),
+                });
+            }
         }
         result
+    }
+
+    fn complete(&self, result: HttpOperationResult, stage: Stage) {
+        let obs = &self.transport.obs;
+        let labels = |i| Labels::http_operation(i, self.method, self.endpoint, self.quota, result);
+        obs.counter(labels(Instrument::HttpOperationsTotal), 1);
+        obs.histogram(
+            labels(Instrument::HttpOperationDuration),
+            self.started.elapsed().as_secs_f64(),
+        );
+        self.span.record("result", result.as_str());
+        self.span.record("stage", stage.as_str());
     }
 }
 
@@ -222,6 +288,7 @@ impl Drop for OpGuard<'_> {
         } else {
             Stage::NotStarted
         };
+        self.complete(HttpOperationResult::Cancelled, stage);
         self.transport.record(HttpFailure {
             method: self.method,
             endpoint: self.endpoint,
@@ -233,6 +300,22 @@ impl Drop for OpGuard<'_> {
             attempt: 0,
             at: self.transport.origin.elapsed(),
         });
+    }
+}
+
+/// The normalized result of a finished operation.
+fn operation_result(e: &HttpError) -> HttpOperationResult {
+    match e.kind() {
+        HttpErrorKind::Validation | HttpErrorKind::Configuration => HttpOperationResult::Validation,
+        HttpErrorKind::Admission => HttpOperationResult::AdmissionRejected,
+        HttpErrorKind::Deadline => HttpOperationResult::Deadline,
+        HttpErrorKind::HttpStatus => HttpOperationResult::HttpStatus,
+        HttpErrorKind::Broker => HttpOperationResult::BrokerError,
+        HttpErrorKind::AuthRejected => HttpOperationResult::AuthRejected,
+        HttpErrorKind::Decode => HttpOperationResult::DecodeError,
+        HttpErrorKind::Cancelled => HttpOperationResult::Cancelled,
+        _ if e.is_timeout() => HttpOperationResult::Timeout,
+        _ => HttpOperationResult::TransportError,
     }
 }
 
@@ -252,6 +335,7 @@ impl HTTPClient {
             config,
             admission: None,
             credentials: None,
+            observability: None,
         }
     }
 
@@ -263,7 +347,13 @@ impl HTTPClient {
         Self::builder(config).build()
     }
 
-    fn build_transport(config: Config, admission: Admission) -> Result<Self> {
+    /// A client for `config` recording in `obs`'s scope, with no
+    /// credentials and its own budget scope.
+    pub fn with_observability(config: Config, obs: Observability) -> Result<Self> {
+        Self::builder(config).observability(obs).build()
+    }
+
+    fn build_transport(config: Config, admission: Admission, obs: Observability) -> Result<Self> {
         // Attempt timeouts are enforced by the scheduler, not the transport.
         let http = reqwest::ClientBuilder::new().build().map_err(|e| {
             HttpError::new(
@@ -286,9 +376,16 @@ impl HTTPClient {
                 in_flight,
                 failures: Mutex::new(FailureHistory::new(DEFAULT_HISTORY)),
                 origin: Instant::now(),
+                obs,
+                waiting: Default::default(),
             }),
             credentials: None,
         })
+    }
+
+    /// The observability scope this client records in.
+    pub fn observability(&self) -> &Observability {
+        &self.transport.obs
     }
 
     /// The admission scope this client draws quota from.
@@ -338,7 +435,7 @@ impl HTTPClient {
         Ok(self
             .transport
             .scheduler
-            .admit(&self.transport.admission, target)
+            .admit(&self.transport.admission, target, &self.transport.obs)
             .await?)
     }
 
@@ -353,6 +450,13 @@ impl HTTPClient {
             active_attempts: self.transport.config.limits().in_flight()
                 - self.transport.in_flight.available_permits(),
             admission_waiters: self.transport.admission.waiters(),
+            admission_waiters_by_class: QuotaClass::ALL
+                .iter()
+                .map(|q| {
+                    let n = self.transport.waiting[quota_index(*q)].load(Ordering::Relaxed);
+                    (*q, n)
+                })
+                .collect(),
             last_failures: failures.entries(),
             snapshot_revision: failures.revision(),
         }
@@ -401,24 +505,26 @@ impl HTTPClient {
 
     /// GET `path` and return the raw (CSV) body.
     pub(crate) async fn get_raw(&self, path: &str) -> Result<String> {
+        self.get_csv(path, |text| Ok(text.to_string())).await
+    }
+
+    /// GET `path` and parse its text (CSV) body with `parse`. A parse
+    /// failure is the operation's result.
+    pub(crate) async fn get_csv<T, P>(&self, path: &str, parse: P) -> Result<T>
+    where
+        P: Fn(&str) -> std::result::Result<T, HttpError>,
+    {
         let (m, endpoint) = labels(&reqwest::Method::GET, path);
-        let guard = self.guard(m, endpoint);
-        let result = async {
-            let (status, body, attempt) = self
-                .execute(
-                    reqwest::Method::GET,
-                    path,
-                    BodyKind::Csv,
-                    None,
-                    true,
-                    &guard.dispatched,
-                    |rb| rb,
-                )
-                .await?;
-            classify_text(status, &body, m, endpoint).map_err(|e| e.with_attempt(attempt))
-        }
-        .await;
-        Ok(guard.finish(result)?)
+        self.operation(
+            reqwest::Method::GET,
+            path,
+            BodyKind::Csv,
+            None,
+            true,
+            |rb| rb,
+            |status, body| classify_text(status, body, m, endpoint).and_then(|t| parse(&t)),
+        )
+        .await
     }
 
     /// GET `path` and decode the response envelope.
@@ -461,13 +567,15 @@ impl HTTPClient {
     {
         let (m, endpoint) = labels(&method, path);
         let rejected = |detail: &str| {
-            HttpError::new(HttpErrorKind::Validation, m, endpoint, Stage::NotStarted)
-                .with_detail(detail)
+            self.reject(
+                HttpError::new(HttpErrorKind::Validation, m, endpoint, Stage::NotStarted)
+                    .with_detail(detail),
+            )
         };
         validate.map_err(|e| rejected(&e.to_string()))?;
         let body = form_urlencode(&pairs);
         if body.len() > self.transport.config.limits().request_body_bytes() {
-            return Err(rejected("the request body exceeds its bound").into());
+            return Err(rejected("the request body exceeds its bound"));
         }
         self.json(method, path, permit, true, |rb| {
             if pairs.is_empty() {
@@ -501,14 +609,16 @@ impl HTTPClient {
     {
         let (m, endpoint) = labels(&method, path);
         let rejected = |detail: &str| {
-            HttpError::new(HttpErrorKind::Validation, m, endpoint, Stage::NotStarted)
-                .with_detail(detail)
+            self.reject(
+                HttpError::new(HttpErrorKind::Validation, m, endpoint, Stage::NotStarted)
+                    .with_detail(detail),
+            )
         };
         validate.map_err(|e| rejected(&e.to_string()))?;
         let body = serde_json::to_vec(body)
             .map_err(|_| rejected("the request body could not be serialized"))?;
         if body.len() > self.transport.config.limits().request_body_bytes() {
-            return Err(rejected("the request body exceeds its bound").into());
+            return Err(rejected("the request body exceeds its bound"));
         }
         self.json(method, path, None, true, |rb| {
             rb.header(reqwest::header::CONTENT_TYPE, "application/json")
@@ -557,12 +667,41 @@ impl HTTPClient {
     }
 
     fn guard(&self, method: Method, endpoint: Endpoint) -> OpGuard<'_> {
+        let class = RetryClass::of(method, endpoint);
+        let quota = class.quota_class();
+        let operation_id = self.transport.obs.next_operation_id();
+        let deadline = self.transport.scheduler.limits().deadline(class);
+        let span = tracing::debug_span!(
+            "manja.http.operation",
+            operation_id,
+            method = method.as_str(),
+            endpoint = endpoint.as_str(),
+            quota_class = quota.as_str(),
+            deadline_ms = deadline.as_millis().min(u64::MAX as u128) as u64,
+            result = tracing::field::Empty,
+            stage = tracing::field::Empty,
+        );
         OpGuard {
             transport: &self.transport,
             method,
             endpoint,
+            quota,
+            span,
+            operation_id,
+            started: tokio::time::Instant::now(),
             dispatched: Arc::new(AtomicBool::new(false)),
             done: false,
+        }
+    }
+
+    /// Complete an operation rejected before admission: it counts as one
+    /// operation with no attempt.
+    pub(crate) fn reject(&self, err: HttpError) -> ManjaError {
+        let guard = self.guard(err.method(), err.endpoint());
+        let _enter = guard.span.clone().entered();
+        match guard.finish::<()>(Err(err)) {
+            Err(e) => e.into(),
+            Ok(()) => unreachable!("finish returns its input"),
         }
     }
 
@@ -579,79 +718,104 @@ impl HTTPClient {
         B: Fn(reqwest::RequestBuilder) -> reqwest::RequestBuilder,
     {
         let (m, endpoint) = labels(&method, path);
-        let guard = self.guard(m, endpoint);
-        let result = async {
-            let (status, body, attempt) = self
-                .execute(
-                    method.clone(),
-                    path,
-                    BodyKind::Json,
-                    permit,
-                    auth,
-                    &guard.dispatched,
-                    build,
-                )
-                .await?;
-            classify_json(status, &body, m, endpoint).map_err(|e| e.with_attempt(attempt))
-        }
-        .await;
-        Ok(guard.finish(result)?)
+        self.operation(
+            method,
+            path,
+            BodyKind::Json,
+            permit,
+            auth,
+            build,
+            |status, body| classify_json(status, body, m, endpoint),
+        )
+        .await
     }
 
-    /// Run the operation under the scheduler and return the final status,
-    /// body and attempt number. Non-2xx statuses become errors here so the
-    /// scheduler can decide on retries.
+    /// Run one logical operation inside its span: every attempt's response
+    /// is classified by `classify`, so the scheduler and the attempt
+    /// accounting see the final result of each attempt.
     #[allow(clippy::too_many_arguments)]
-    async fn execute<B>(
+    async fn operation<T, B, C>(
         &self,
         method: reqwest::Method,
         path: &str,
         kind: BodyKind,
         permit: Option<DispatchPermit>,
         auth: bool,
-        op_dispatched: &Arc<AtomicBool>,
         build: B,
-    ) -> std::result::Result<(u16, Vec<u8>, u32), HttpError>
+        classify: C,
+    ) -> Result<T>
     where
         B: Fn(reqwest::RequestBuilder) -> reqwest::RequestBuilder,
+        C: Fn(u16, &[u8]) -> std::result::Result<T, HttpError>,
     {
         let (m, endpoint) = labels(&method, path);
+        let guard = self.guard(m, endpoint);
+        let span = guard.span.clone();
+        let result = self
+            .execute(method, path, kind, permit, auth, &guard, build, classify)
+            .instrument(span)
+            .await;
+        Ok(guard.finish(result)?)
+    }
+
+    /// Run the operation under the scheduler and return its classified
+    /// result.
+    #[allow(clippy::too_many_arguments)]
+    async fn execute<T, B, C>(
+        &self,
+        method: reqwest::Method,
+        path: &str,
+        kind: BodyKind,
+        permit: Option<DispatchPermit>,
+        auth: bool,
+        guard: &OpGuard<'_>,
+        build: B,
+        classify: C,
+    ) -> std::result::Result<T, HttpError>
+    where
+        B: Fn(reqwest::RequestBuilder) -> reqwest::RequestBuilder,
+        C: Fn(u16, &[u8]) -> std::result::Result<T, HttpError>,
+    {
+        let (m, endpoint) = (guard.method, guard.endpoint);
         let (_, order_id) = rate_key(m, endpoint, path);
         let spec = OpSpec {
             method: m,
             endpoint,
             order_id: order_id.as_deref(),
         };
-        let build = &build;
-        let method = &method;
+        let ctx = OpObs {
+            obs: &self.transport.obs,
+            span: &guard.span,
+            operation_id: guard.operation_id,
+            waiting: &self.transport.waiting[quota_index(guard.quota)],
+        };
+        let (build, classify, method) = (&build, &classify, &method);
+        let op_dispatched = &guard.dispatched;
         self.transport
             .scheduler
-            .run(spec, &self.transport.admission, permit, |ctx| async move {
-                let number = ctx.number;
-                let (status, body) = self
-                    .attempt(
-                        method,
-                        path,
-                        kind,
-                        auth,
-                        build,
-                        m,
-                        endpoint,
-                        ctx,
-                        op_dispatched,
-                    )
-                    .await?;
-                if !(200..300).contains(&status) {
-                    // Classify now so the scheduler sees the status.
-                    return Err(classify_json::<Value>(status, &body, m, endpoint)
-                        .err()
-                        .unwrap_or_else(|| {
-                            http_error(HttpErrorKind::HttpStatus, status, m, endpoint)
-                        })
-                        .with_attempt(number));
-                }
-                Ok((status, body, number))
-            })
+            .run(
+                spec,
+                &self.transport.admission,
+                permit,
+                &ctx,
+                |ctx| async move {
+                    let number = ctx.number;
+                    let (status, body) = self
+                        .attempt(
+                            method,
+                            path,
+                            kind,
+                            auth,
+                            build,
+                            m,
+                            endpoint,
+                            ctx,
+                            op_dispatched,
+                        )
+                        .await?;
+                    classify(status, &body).map_err(|e| e.with_attempt(number))
+                },
+            )
             .await
     }
 
@@ -712,8 +876,23 @@ impl HTTPClient {
         })?;
         // Dispatch now: the admitted capacity is used, and from here on the
         // broker may receive the request.
-        token.dispatch();
+        let span = token.dispatch();
         op_dispatched.store(true, Ordering::Release);
+        self.receive(request, kind, m, endpoint, attempt, &span)
+            .instrument(span.clone())
+            .await
+    }
+
+    // The dispatched part of an attempt, inside its span.
+    async fn receive(
+        &self,
+        request: reqwest::Request,
+        kind: BodyKind,
+        m: Method,
+        endpoint: Endpoint,
+        attempt: u32,
+        span: &Span,
+    ) -> std::result::Result<(u16, Vec<u8>), HttpError> {
         let mut response = self.transport.http.execute(request).await.map_err(|e| {
             // A connect failure is affirmative evidence that no request
             // bytes left the process; anything later is not.
@@ -732,6 +911,7 @@ impl HTTPClient {
             err.with_source(e.without_url())
         })?;
         let status = response.status().as_u16();
+        span.record("http_status", status);
         let limit = match kind {
             BodyKind::Json => self.transport.config.limits().json_body_bytes(),
             BodyKind::Csv => self.transport.config.limits().csv_body_bytes(),

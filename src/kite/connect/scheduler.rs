@@ -37,15 +37,20 @@
 //! valid one skips admission instead of queueing again.
 //!
 use std::fmt;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use tokio::time::Instant;
+use tracing::{Instrument as _, Span};
 
 use crate::kite::connect::admission::{Admission, AdmissionError, AdmissionGrant, RateClass};
 use crate::kite::error::{HttpError, HttpErrorKind, RetryInfo, TransportStage};
-use crate::kite::obs::schema::{Endpoint, Method, QuotaClass};
+use crate::kite::obs::handle::{GaugeGuard, Labels, Observability};
+use crate::kite::obs::schema::{
+    AdmissionResult, Endpoint, HttpAttemptResult, Instrument, Method, QuotaClass, RetryCause,
+    TransportLabel,
+};
 
 /// Retry class of an endpoint (see the module table).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -379,20 +384,220 @@ impl DispatchPermit {
 
 /// Hands admitted capacity to the transport at the moment of dispatch, and
 /// records that dispatch happened.
+///
+/// Dispatch is also where an attempt starts to exist for observability: its
+/// span, its in-flight gauge contribution and, for attempt n > 1, its retry
+/// count. An attempt that fails before dispatch leaves no trace.
 pub(crate) struct DispatchToken {
     grant: Option<AdmissionGrant>,
     dispatched: Arc<AtomicBool>,
+    obs: AttemptObs,
+    slot: Arc<Mutex<Option<AttemptRecord>>>,
+}
+
+// What the token needs to open the attempt's span and series.
+struct AttemptObs {
+    obs: Observability,
+    parent: Span,
+    operation_id: u64,
+    number: u32,
+    method: Method,
+    endpoint: Endpoint,
+    quota: QuotaClass,
+    retry_of: Option<RetryCause>,
+}
+
+// A dispatched attempt, finished by the scheduler.
+struct AttemptRecord {
+    span: Span,
+    dispatched_at: Instant,
+    _in_flight: GaugeGuard,
 }
 
 impl DispatchToken {
     /// Mark the attempt as dispatched: from here on the broker may receive
-    /// the request.
-    pub(crate) fn dispatch(&mut self) {
+    /// the request. Returns the attempt's span, a child of the operation's.
+    pub(crate) fn dispatch(&mut self) -> Span {
         if let Some(g) = self.grant.take() {
             g.consume();
         }
         self.dispatched.store(true, Ordering::Release);
+        let o = &self.obs;
+        let span = tracing::debug_span!(
+            parent: &o.parent,
+            "manja.http.attempt",
+            operation_id = o.operation_id,
+            attempt = o.number,
+            method = o.method.as_str(),
+            endpoint = o.endpoint.as_str(),
+            http_status = tracing::field::Empty,
+            error_class = tracing::field::Empty,
+            stage = tracing::field::Empty,
+        );
+        if let (true, Some(cause)) = (o.number > 1, o.retry_of) {
+            o.obs
+                .counter(Labels::http_retry(o.method, o.endpoint, cause), 1);
+        }
+        let in_flight = o
+            .obs
+            .gauge(Labels::quota(Instrument::HttpInFlight, o.quota));
+        in_flight.set(1);
+        *self.slot.lock().unwrap_or_else(|e| e.into_inner()) = Some(AttemptRecord {
+            span: span.clone(),
+            dispatched_at: Instant::now(),
+            _in_flight: in_flight,
+        });
+        span
     }
+}
+
+// Finishes the attempt in `slot`, if it was dispatched; an attempt dropped
+// before finishing (its operation was cancelled) is recorded as cancelled.
+struct AttemptFinisher<'a> {
+    obs: &'a Observability,
+    method: Method,
+    endpoint: Endpoint,
+    slot: Arc<Mutex<Option<AttemptRecord>>>,
+}
+
+impl AttemptFinisher<'_> {
+    fn finish(&self, result: HttpAttemptResult, stage: TransportStage) {
+        let Some(record) = self.slot.lock().unwrap_or_else(|e| e.into_inner()).take() else {
+            return;
+        };
+        let secs = record.dispatched_at.elapsed().as_secs_f64();
+        let labels = |i| Labels::http_attempt(i, self.method, self.endpoint, result);
+        self.obs.counter(labels(Instrument::HttpAttemptsTotal), 1);
+        self.obs
+            .histogram(labels(Instrument::HttpAttemptDuration), secs);
+        if result == HttpAttemptResult::AuthRejected {
+            self.obs
+                .counter(Labels::auth_rejection(TransportLabel::Http), 1);
+        }
+        if result != HttpAttemptResult::Ok {
+            record.span.record("error_class", result.as_str());
+        }
+        record.span.record("stage", stage.as_str());
+    }
+}
+
+impl Drop for AttemptFinisher<'_> {
+    fn drop(&mut self) {
+        self.finish(HttpAttemptResult::Cancelled, TransportStage::Started);
+    }
+}
+
+/// The normalized result of one dispatched attempt.
+pub(crate) fn attempt_result(e: &HttpError) -> HttpAttemptResult {
+    match e.kind() {
+        HttpErrorKind::HttpStatus => HttpAttemptResult::HttpStatus,
+        HttpErrorKind::Broker => HttpAttemptResult::BrokerError,
+        HttpErrorKind::AuthRejected => HttpAttemptResult::AuthRejected,
+        HttpErrorKind::Decode => HttpAttemptResult::DecodeError,
+        HttpErrorKind::Cancelled => HttpAttemptResult::Cancelled,
+        _ if e.is_timeout() => HttpAttemptResult::Timeout,
+        _ => HttpAttemptResult::TransportError,
+    }
+}
+
+// Measures one admission wait: its span, its waiter gauge contribution and
+// its duration. Dropped unfinished, the wait was cancelled.
+struct AdmissionWatch<'a> {
+    obs: &'a Observability,
+    quota: QuotaClass,
+    span: Span,
+    started: Instant,
+    _waiter: GaugeGuard,
+    waiting: Option<&'a AtomicUsize>,
+    done: bool,
+}
+
+impl<'a> AdmissionWatch<'a> {
+    fn start(
+        obs: &'a Observability,
+        quota: QuotaClass,
+        parent: Option<&Span>,
+        operation_id: Option<u64>,
+        waiting: Option<&'a AtomicUsize>,
+    ) -> Self {
+        let span = tracing::debug_span!(
+            parent: parent.and_then(Span::id),
+            "manja.http.admission",
+            operation_id = operation_id,
+            quota_class = quota.as_str(),
+            wait_ms = tracing::field::Empty,
+            admission_result = tracing::field::Empty,
+        );
+        let waiter = obs.gauge(Labels::quota(Instrument::HttpAdmissionWaiters, quota));
+        waiter.set(1);
+        if let Some(w) = waiting {
+            w.fetch_add(1, Ordering::Relaxed);
+        }
+        Self {
+            obs,
+            quota,
+            span,
+            started: Instant::now(),
+            _waiter: waiter,
+            waiting,
+            done: false,
+        }
+    }
+
+    fn finish(&mut self, result: AdmissionResult) {
+        if std::mem::replace(&mut self.done, true) {
+            return;
+        }
+        let waited = self.started.elapsed();
+        self.obs.histogram(
+            Labels::admission_wait(self.quota, result),
+            waited.as_secs_f64(),
+        );
+        self.span
+            .record("wait_ms", waited.as_millis().min(u64::MAX as u128) as u64);
+        self.span.record("admission_result", result.as_str());
+        if let Some(w) = self.waiting {
+            w.fetch_sub(1, Ordering::Relaxed);
+        }
+    }
+}
+
+impl Drop for AdmissionWatch<'_> {
+    fn drop(&mut self) {
+        self.finish(AdmissionResult::Cancelled);
+    }
+}
+
+// Wait for admission under an [`AdmissionWatch`].
+#[allow(clippy::too_many_arguments)]
+async fn acquire_observed(
+    admission: &Admission,
+    rate: RateClass,
+    order_id: Option<&str>,
+    wait: Duration,
+    deadline_bound: bool,
+    quota: QuotaClass,
+    ctx: Option<&OpObs<'_>>,
+    obs: &Observability,
+) -> Result<AdmissionGrant, AdmissionError> {
+    let mut watch = AdmissionWatch::start(
+        obs,
+        quota,
+        ctx.map(|c| c.span),
+        ctx.map(|c| c.operation_id),
+        ctx.map(|c| c.waiting),
+    );
+    let span = watch.span.clone();
+    let result = admission
+        .acquire(rate, order_id, wait)
+        .instrument(span)
+        .await;
+    watch.finish(match &result {
+        Ok(_) => AdmissionResult::Granted,
+        Err(AdmissionError::WaitExpired) if deadline_bound => AdmissionResult::Deadline,
+        Err(_) => AdmissionResult::Rejected,
+    });
+    result
 }
 
 /// Context of one attempt.
@@ -407,6 +612,17 @@ pub(crate) struct OpSpec<'a> {
     pub(crate) method: Method,
     pub(crate) endpoint: Endpoint,
     pub(crate) order_id: Option<&'a str>,
+}
+
+/// The instrumentation context of one operation, passed explicitly through
+/// every await point rather than held in a task-local.
+pub(crate) struct OpObs<'a> {
+    pub(crate) obs: &'a Observability,
+    /// The operation span; admission and attempt spans are its children.
+    pub(crate) span: &'a Span,
+    pub(crate) operation_id: u64,
+    /// The transport's count of its operations waiting in this quota class.
+    pub(crate) waiting: &'a AtomicUsize,
 }
 
 // A small, seedable PRNG for jitter (SplitMix64); jitter needs spread, not
@@ -424,8 +640,7 @@ impl SplitMix64 {
 }
 
 /// The retry cause of a failed attempt, if its class may retry it.
-pub(crate) fn retry_cause(e: &HttpError) -> Option<crate::kite::obs::schema::RetryCause> {
-    use crate::kite::obs::schema::RetryCause;
+pub(crate) fn retry_cause(e: &HttpError) -> Option<RetryCause> {
     match (e.kind(), e.http_status()) {
         (_, Some(429)) => Some(RetryCause::Http429),
         (_, Some(502..=504)) => Some(RetryCause::Http5xx),
@@ -478,13 +693,24 @@ impl Scheduler {
         &self,
         admission: &Admission,
         target: PermitTarget,
+        obs: &Observability,
     ) -> Result<DispatchPermit, HttpError> {
         let (method, endpoint) = target.operation();
         let wait = admission.limits().wait();
-        let grant = admission
-            .acquire(RateClass::of(method, endpoint), target.order_id(), wait)
-            .await
-            .map_err(|e| admission_error(e, method, endpoint, 0, false))?;
+        let quota = RetryClass::of(method, endpoint).quota_class();
+        let rate = RateClass::of(method, endpoint);
+        let grant = acquire_observed(
+            admission,
+            rate,
+            target.order_id(),
+            wait,
+            false,
+            quota,
+            None,
+            obs,
+        )
+        .await
+        .map_err(|e| admission_error(e, method, endpoint, 0, false))?;
         Ok(DispatchPermit {
             grant,
             expires_at: Instant::now() + self.limits.permit_validity,
@@ -499,6 +725,7 @@ impl Scheduler {
         spec: OpSpec<'_>,
         admission: &Admission,
         permit: Option<DispatchPermit>,
+        ctx: &OpObs<'_>,
         mut attempt: F,
     ) -> Result<T, HttpError>
     where
@@ -508,7 +735,9 @@ impl Scheduler {
         let (method, endpoint) = (spec.method, spec.endpoint);
         let class = RetryClass::of(method, endpoint);
         let rate = RateClass::of(method, endpoint);
+        let quota = class.quota_class();
         let max_attempts = self.limits.max_attempts(class);
+        let mut retry_of = None;
         let start = Instant::now();
         let deadline_at = start + self.limits.deadline(class);
         let mut permit = permit;
@@ -531,14 +760,22 @@ impl Scheduler {
                 Some(p) => p.grant,
                 None => {
                     let wait = admission.limits().wait().min(remaining);
-                    admission
-                        .acquire(rate, spec.order_id, wait)
-                        .await
-                        .map_err(|e| {
-                            let deadline_bound = wait < admission.limits().wait();
-                            admission_error(e, method, endpoint, n, deadline_bound)
-                                .with_retry(retry_info(n - 1))
-                        })?
+                    let deadline_bound = wait < admission.limits().wait();
+                    acquire_observed(
+                        admission,
+                        rate,
+                        spec.order_id,
+                        wait,
+                        deadline_bound,
+                        quota,
+                        Some(ctx),
+                        ctx.obs,
+                    )
+                    .await
+                    .map_err(|e| {
+                        admission_error(e, method, endpoint, n, deadline_bound)
+                            .with_retry(retry_info(n - 1))
+                    })?
                 }
             };
             let now = Instant::now();
@@ -548,15 +785,32 @@ impl Scheduler {
             }
             let attempt_timeout = self.limits.attempt_timeout.min(deadline_at - now);
             let dispatched = Arc::new(AtomicBool::new(false));
-            let ctx = AttemptCtx {
+            let finisher = AttemptFinisher {
+                obs: ctx.obs,
+                method,
+                endpoint,
+                slot: Arc::new(Mutex::new(None)),
+            };
+            let attempt_ctx = AttemptCtx {
                 number: n,
                 token: DispatchToken {
                     grant: Some(grant),
                     dispatched: dispatched.clone(),
+                    obs: AttemptObs {
+                        obs: ctx.obs.clone(),
+                        parent: ctx.span.clone(),
+                        operation_id: ctx.operation_id,
+                        number: n,
+                        method,
+                        endpoint,
+                        quota,
+                        retry_of,
+                    },
+                    slot: finisher.slot.clone(),
                 },
                 dispatched: dispatched.clone(),
             };
-            let result = match tokio::time::timeout(attempt_timeout, attempt(ctx)).await {
+            let result = match tokio::time::timeout(attempt_timeout, attempt(attempt_ctx)).await {
                 Ok(r) => r,
                 Err(_) => {
                     let stage = if dispatched.load(Ordering::Acquire) {
@@ -572,12 +826,17 @@ impl Scheduler {
                     )
                 }
             };
+            match &result {
+                Ok(_) => finisher.finish(HttpAttemptResult::Ok, TransportStage::ResponseReceived),
+                Err(e) => finisher.finish(attempt_result(e), e.stage()),
+            }
             let err = match result {
                 Ok(v) => return Ok(v),
                 Err(e) => e.with_retry(retry_info(n)),
             };
+            retry_of = retry_cause(&err);
             let retryable =
-                matches!(class, RetryClass::Read | RetryClass::Calc) && retry_cause(&err).is_some();
+                matches!(class, RetryClass::Read | RetryClass::Calc) && retry_of.is_some();
             if !retryable || n == max_attempts {
                 return Err(err);
             }
@@ -653,6 +912,41 @@ mod tests {
     use super::*;
     use crate::kite::connect::admission::{AdmissionLimits, QuotaProfile};
     use std::sync::atomic::AtomicU32;
+
+    impl Scheduler {
+        // `run` and `admit` with a disabled observability scope.
+        async fn run_q<T, F, Fut>(
+            &self,
+            spec: OpSpec<'_>,
+            admission: &Admission,
+            permit: Option<DispatchPermit>,
+            attempt: F,
+        ) -> Result<T, HttpError>
+        where
+            F: FnMut(AttemptCtx) -> Fut,
+            Fut: std::future::Future<Output = Result<T, HttpError>>,
+        {
+            let obs = Observability::disabled();
+            let span = Span::none();
+            let waiting = AtomicUsize::new(0);
+            let ctx = OpObs {
+                obs: &obs,
+                span: &span,
+                operation_id: 0,
+                waiting: &waiting,
+            };
+            self.run(spec, admission, permit, &ctx, attempt).await
+        }
+
+        async fn admit_q(
+            &self,
+            admission: &Admission,
+            target: PermitTarget,
+        ) -> Result<DispatchPermit, HttpError> {
+            self.admit(admission, target, &Observability::disabled())
+                .await
+        }
+    }
 
     fn scheduler() -> Scheduler {
         Scheduler::new(SchedulerLimits::default().with_jitter_seed(7))
@@ -753,7 +1047,7 @@ mod tests {
         let calls = AtomicU32::new(0);
         let start = Instant::now();
         let err = s
-            .run(spec(Method::Get, Endpoint::Orders), &a, None, |mut ctx| {
+            .run_q(spec(Method::Get, Endpoint::Orders), &a, None, |mut ctx| {
                 calls.fetch_add(1, Ordering::Relaxed);
                 ctx.token.dispatch();
                 async { Err::<(), _>(failing(429, Method::Get, Endpoint::Orders)) }
@@ -782,7 +1076,7 @@ mod tests {
             for status in [429, 502, 504] {
                 let calls = AtomicU32::new(0);
                 let err = s
-                    .run(spec(m, e), &a, None, |mut ctx| {
+                    .run_q(spec(m, e), &a, None, |mut ctx| {
                         calls.fetch_add(1, Ordering::Relaxed);
                         ctx.token.dispatch();
                         async move { Err::<(), _>(failing(status, m, e)) }
@@ -810,7 +1104,7 @@ mod tests {
         let start = Instant::now();
         // Every attempt stalls until its timeout.
         let err = s
-            .run(spec(Method::Get, Endpoint::Trades), &a, None, |mut ctx| {
+            .run_q(spec(Method::Get, Endpoint::Trades), &a, None, |mut ctx| {
                 ctx.token.dispatch();
                 std::future::pending::<Result<(), HttpError>>()
             })
@@ -833,7 +1127,7 @@ mod tests {
         let s = scheduler();
         let a = admission();
         let err = s
-            .run(
+            .run_q(
                 spec(Method::Post, Endpoint::OrdersVariety),
                 &a,
                 None,
@@ -843,7 +1137,7 @@ mod tests {
             .unwrap_err();
         assert_eq!(err.stage(), TransportStage::NotStarted);
         let err = s
-            .run(
+            .run_q(
                 spec(Method::Post, Endpoint::OrdersVariety),
                 &a,
                 None,
@@ -871,9 +1165,9 @@ mod tests {
         };
         // Wrong scope.
         let other = admission();
-        let p = s.admit(&other, PermitTarget::PlaceOrder).await.unwrap();
+        let p = s.admit_q(&other, PermitTarget::PlaceOrder).await.unwrap();
         let e = s
-            .run(
+            .run_q(
                 spec(Method::Post, Endpoint::OrdersVariety),
                 &a,
                 Some(p),
@@ -886,9 +1180,9 @@ mod tests {
             (HttpErrorKind::Admission, TransportStage::NotStarted)
         );
         // Wrong target.
-        let p = s.admit(&a, PermitTarget::CancelOrder).await.unwrap();
+        let p = s.admit_q(&a, PermitTarget::CancelOrder).await.unwrap();
         let e = s
-            .run(
+            .run_q(
                 spec(Method::Post, Endpoint::OrdersVariety),
                 &a,
                 Some(p),
@@ -898,10 +1192,10 @@ mod tests {
             .unwrap_err();
         assert_eq!(e.kind(), HttpErrorKind::Admission);
         // Expired.
-        let p = s.admit(&a, PermitTarget::PlaceOrder).await.unwrap();
+        let p = s.admit_q(&a, PermitTarget::PlaceOrder).await.unwrap();
         tokio::time::advance(Duration::from_secs(2)).await;
         let e = s
-            .run(
+            .run_q(
                 spec(Method::Post, Endpoint::OrdersVariety),
                 &a,
                 Some(p),
@@ -912,8 +1206,8 @@ mod tests {
         assert_eq!(e.kind(), HttpErrorKind::Deadline);
         // Valid: dispatched exactly once, without re-admission.
         let waiters_before = a.waiters();
-        let p = s.admit(&a, PermitTarget::PlaceOrder).await.unwrap();
-        s.run(
+        let p = s.admit_q(&a, PermitTarget::PlaceOrder).await.unwrap();
+        s.run_q(
             spec(Method::Post, Endpoint::OrdersVariety),
             &a,
             Some(p),
@@ -930,7 +1224,7 @@ mod tests {
         let s = scheduler();
         let a = admission();
         let p = s
-            .admit(
+            .admit_q(
                 &a,
                 PermitTarget::ModifyOrder {
                     order_id: "A".into(),
@@ -939,7 +1233,7 @@ mod tests {
             .await
             .unwrap();
         let e = s
-            .run(
+            .run_q(
                 OpSpec {
                     method: Method::Put,
                     endpoint: Endpoint::OrdersVarietyId,
