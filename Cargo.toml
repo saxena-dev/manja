@@ -145,3 +145,25 @@ required-features = ["decoder"]
 [[test]]
 name = "public_surface"
 required-features = ["http", "ticker", "decoder"]
+
+# Examples serve repository fixtures from 127.0.0.1; none contacts a live
+# endpoint unless asked with explicit inputs (see examples/session.rs).
+[[example]]
+name = "http_client"
+required-features = ["http"]
+
+[[example]]
+name = "session"
+required-features = ["http"]
+
+[[example]]
+name = "ticker"
+required-features = ["ticker"]
+
+[[example]]
+name = "ticker_typed"
+required-features = ["ticker", "decoder"]
+
+[[example]]
+name = "decode_offline"
+required-features = ["decoder"]
