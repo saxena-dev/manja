@@ -30,10 +30,117 @@ use crate::kite::protocol::{BrokerTimestamp, Inbound, InstrumentToken};
 /// API does not imply its successful execution"
 /// (`kite-api-docs/docs/connect/v3/orders.md:50-52`). The order's state is
 /// learned from the order book, order history or order updates.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+///
+/// An automatically sliced placement (`autoslice = true` above the freeze
+/// quantity, `orders.md:548`) carries one result per further slice in
+/// [`Self::slices`]. A slice can fail while others are placed, so check
+/// every entry: a receipt with a [`SliceResult::Failed`] slice is **not** a
+/// complete placement. The official mock (`autoslice_response.json`)
+/// returns `{order_id, children}` while the documentation shows an array
+/// whose first entry is that same order; both decode to the same receipt.
+/// A slice with neither an order ID nor an error is a decode error.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub struct OrderReceipt {
-    /// The order ID the request was registered against.
+    /// The order ID the request was registered against: the first slice
+    /// of a sliced placement.
     pub order_id: String,
+    /// The further slices of an automatically sliced placement, in broker
+    /// order; empty otherwise.
+    #[serde(rename = "children", skip_serializing_if = "Vec::is_empty")]
+    pub slices: Vec<SliceResult>,
+}
+
+impl OrderReceipt {
+    /// Whether any slice failed.
+    pub fn has_failed_slices(&self) -> bool {
+        self.slices
+            .iter()
+            .any(|s| matches!(s, SliceResult::Failed(_)))
+    }
+}
+
+/// The outcome of one slice of an automatically sliced placement.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+#[serde(untagged)]
+#[non_exhaustive]
+pub enum SliceResult {
+    /// The slice was registered as its own order.
+    Placed {
+        /// Its order ID.
+        order_id: String,
+    },
+    /// The slice was rejected.
+    Failed(SliceError),
+}
+
+/// Why one slice was rejected.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[non_exhaustive]
+pub struct SliceError {
+    /// HTTP-style code, if given.
+    #[serde(default)]
+    pub code: Option<u16>,
+    /// Broker error type, preserved if unknown.
+    #[serde(default)]
+    pub error_type: Option<Inbound<crate::kite::error::KiteApiException>>,
+    /// Broker message.
+    #[serde(default)]
+    pub message: Option<String>,
+}
+
+#[derive(Deserialize)]
+struct SliceWire {
+    #[serde(default)]
+    order_id: Option<String>,
+    #[serde(default)]
+    error: Option<SliceError>,
+}
+
+impl SliceWire {
+    fn resolve<E: serde::de::Error>(self) -> Result<SliceResult, E> {
+        match (self.order_id, self.error) {
+            (Some(order_id), None) => Ok(SliceResult::Placed { order_id }),
+            (None, Some(e)) => Ok(SliceResult::Failed(e)),
+            _ => Err(E::custom("a slice needs exactly one of order_id and error")),
+        }
+    }
+}
+
+impl<'de> Deserialize<'de> for OrderReceipt {
+    fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        #[derive(Deserialize)]
+        #[serde(untagged)]
+        enum Shape {
+            Object {
+                order_id: String,
+                #[serde(default)]
+                children: Vec<SliceWire>,
+            },
+            Array(Vec<SliceWire>),
+        }
+        let (order_id, rest) = match Shape::deserialize(d)? {
+            Shape::Object { order_id, children } => (order_id, children),
+            Shape::Array(mut all) => {
+                if all.is_empty() {
+                    return Err(serde::de::Error::custom("an empty slice list"));
+                }
+                let first = all.remove(0);
+                match first.resolve::<D::Error>()? {
+                    SliceResult::Placed { order_id } => (order_id, all),
+                    _ => {
+                        return Err(serde::de::Error::custom(
+                            "the first slice of a placement was not placed",
+                        ))
+                    }
+                }
+            }
+        };
+        let slices = rest
+            .into_iter()
+            .map(SliceWire::resolve::<D::Error>)
+            .collect::<Result<_, _>>()?;
+        Ok(Self { order_id, slices })
+    }
 }
 
 /// An order as reported by the order book or order history.

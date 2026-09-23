@@ -17,7 +17,7 @@ use manja::kite::connect::config::{Config, HttpLimits};
 use manja::kite::connect::credentials::Credentials;
 use manja::kite::connect::models::{
     Exchange, ModifyOrderRequest, OrderType, OrderValidity, OrderVariety, PlaceOrderRequest,
-    PositionConversionRequest, PositionType, ProductType, TransactionType,
+    PositionConversionRequest, PositionType, ProductType, SliceResult, TransactionType,
 };
 use manja::kite::connect::scheduler::{PermitTarget, SchedulerLimits};
 use manja::kite::error::{HttpErrorKind, ManjaError, TransportStage};
@@ -402,4 +402,83 @@ async fn a_mismatched_or_expired_permit_cannot_start_transport() {
         .unwrap_err();
     assert_eq!(e.as_http().unwrap().kind(), HttpErrorKind::Admission);
     assert!(h.requests().is_empty());
+}
+
+#[tokio::test]
+async fn a_sliced_placement_reports_every_slice_including_failures() {
+    // Official autoslice_response.json: a parent order and four further
+    // slices, one rejected for margin.
+    let h = serve("autoslice_response.json").await;
+    let mut request = market_buy();
+    request.autoslice = Some(true);
+    let receipt = client(&h.base_url())
+        .orders()
+        .place_order(&request)
+        .await
+        .unwrap()
+        .data
+        .unwrap();
+    assert_eq!(receipt.order_id, "1914227164488687616");
+    assert_eq!(receipt.slices.len(), 4);
+    assert!(
+        receipt.has_failed_slices(),
+        "a failed slice is never hidden"
+    );
+    match &receipt.slices[2] {
+        SliceResult::Failed(e) => {
+            assert_eq!(e.code, Some(400));
+            assert_eq!(e.error_type.as_ref().unwrap().as_wire(), "MarginException");
+            assert!(e
+                .message
+                .as_deref()
+                .unwrap()
+                .starts_with("Insufficient funds"));
+        }
+        other => panic!("{other:?}"),
+    }
+    assert!(String::from_utf8(only(&h).body)
+        .unwrap()
+        .contains("autoslice=true"));
+
+    // Supplemental, derived from the same fixture: the array form the
+    // documentation shows (orders.md:548-560), whose first entry is the
+    // same order. It decodes to the same receipt.
+    let array = r#"{"status":"success","data":[
+        {"order_id":"1914227164488687616"},
+        {"order_id":"1914227164534824960"},
+        {"order_id":"1914227164580962304"},
+        {"error":{"code":400,"error_type":"MarginException","message":"Insufficient funds. Required margin is 228365.92 but available margin is 228358.50.","data":null}},
+        {"order_id":"1914227164681625600"}
+    ]}"#;
+    let h = HttpHarness::start(vec![Reply::json(array)]).await;
+    let same = client(&h.base_url())
+        .orders()
+        .place_order(&request)
+        .await
+        .unwrap()
+        .data
+        .unwrap();
+    assert_eq!(same, receipt);
+
+    // A plain placement has no slices.
+    let h = serve("order_response.json").await;
+    let plain = client(&h.base_url())
+        .orders()
+        .place_order(&market_buy())
+        .await
+        .unwrap()
+        .data
+        .unwrap();
+    assert!(plain.slices.is_empty() && !plain.has_failed_slices());
+
+    // A slice with neither an order ID nor an error is evidence, not
+    // success.
+    let bad = r#"{"status":"success","data":{"order_id":"1","children":[{"code":1}]}}"#;
+    let h = HttpHarness::start(vec![Reply::json(bad)]).await;
+    let err = client(&h.base_url())
+        .orders()
+        .place_order(&request)
+        .await
+        .unwrap_err();
+    assert_eq!(err.as_http().unwrap().kind(), HttpErrorKind::Decode);
 }

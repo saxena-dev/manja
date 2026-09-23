@@ -84,7 +84,7 @@ impl fmt::Debug for UnknownValue {
 }
 
 /// A known enum value, or the original text of an unknown one.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum Inbound<T> {
     /// A value this build recognizes.
     Known(T),

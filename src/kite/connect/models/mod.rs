@@ -49,7 +49,10 @@ mod order;
 mod order_enums;
 #[cfg(feature = "http")]
 pub(crate) use order::check_order_id;
-pub use order::{ModifyOrderRequest, Order, OrderReceipt, PlaceOrderRequest, RequestError, Trade};
+pub use order::{
+    ModifyOrderRequest, Order, OrderReceipt, PlaceOrderRequest, RequestError, SliceError,
+    SliceResult, Trade,
+};
 #[allow(unused_imports)]
 pub use order_enums::{
     OrderStatus, OrderType, OrderValidity, OrderVariety, ProductType, TransactionType,
