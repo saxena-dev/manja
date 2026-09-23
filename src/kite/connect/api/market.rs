@@ -8,14 +8,11 @@
 //!
 use std::collections::HashMap;
 
-use crate::kite::connect::api::create_backoff_policy;
 use crate::kite::connect::{
     client::HTTPClient,
     models::{Exchange, Instrument, KiteApiResponse, KiteQuote, QuoteMode},
 };
 use crate::kite::error::{ManjaError, Result};
-
-use backoff::ExponentialBackoff;
 
 /// The market quotes APIs enable you to retrieve market data snapshots of
 /// various instruments, including the security master. Market data snapshots
@@ -25,8 +22,6 @@ use backoff::ExponentialBackoff;
 pub struct Market<'c> {
     /// Reference to the HTTP client used for making API requests.
     pub client: &'c HTTPClient,
-    /// Backoff policy for retrying API requests.
-    backoff: ExponentialBackoff,
 }
 
 impl<'c> Market<'c> {
@@ -40,25 +35,7 @@ impl<'c> Market<'c> {
     ///
     /// A new instance of `Market`.
     pub fn new(client: &'c HTTPClient) -> Self {
-        Self {
-            client,
-            // Default API rate limit: 10 req/sec
-            backoff: create_backoff_policy(10),
-        }
-    }
-
-    /// Sets a custom backoff policy for the `Market` instance.
-    ///
-    /// # Arguments
-    ///
-    /// * `backoff` - An `ExponentialBackoff` instance specifying the backoff policy.
-    ///
-    /// # Returns
-    ///
-    /// The `Market` instance with the updated backoff policy.
-    pub fn with_backoff(mut self, backoff: ExponentialBackoff) -> Self {
-        self.backoff = backoff;
-        self
+        Self { client }
     }
 
     // Parses the CSV response into a vector of `Instrument`.
@@ -88,7 +65,7 @@ impl<'c> Market<'c> {
         let path = exchange.map_or("/instruments".to_string(), |x| {
             format!("/instruments/{}", x)
         });
-        self.client.get_raw(&path, &self.backoff).await
+        self.client.get_raw(&path).await
     }
 
     /// Retrieve all tradable instruments.
@@ -141,8 +118,6 @@ impl<'c> Market<'c> {
             QuoteMode::OHLC => ("/quote/ohlc", std::cmp::min(1000, query.len())),
             QuoteMode::LTP => ("/quote/ltp", std::cmp::min(1000, query.len())),
         };
-        self.client
-            .get_with_query(path, &query[..limit], &self.backoff)
-            .await
+        self.client.get_with_query(path, &query[..limit]).await
     }
 }

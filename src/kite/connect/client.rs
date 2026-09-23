@@ -1,10 +1,18 @@
 //! Asynchronous HTTP client.
 //!
-//! [`HTTPClient`] owns a pooled HTTP transport, its [`Config`], and an
-//! optional immutable [`Credentials`] snapshot, and hands out the resource
-//! facades (`user()`, `orders()`, …). Cloning a client shares its transport;
-//! [`HTTPClient::with_credentials`] builds a client for different
-//! credentials on the same transport without changing the original.
+//! [`HTTPClient`] owns a pooled HTTP transport, its [`Config`], a shared
+//! [`Admission`] scope, and an optional immutable [`Credentials`] snapshot,
+//! and hands out the resource facades (`user()`, `orders()`, …). Cloning a
+//! client shares its transport; [`HTTPClient::with_credentials`] builds a
+//! client for different credentials on the same transport and budget scope
+//! without changing the original.
+//!
+//! Every operation runs under the scheduler
+//! ([`crate::kite::connect::scheduler`]): a total deadline covering
+//! admission, attempts and backoff, an attempt timeout, and an
+//! endpoint-class retry policy under which placement, modification,
+//! cancellation, position conversion and the session operations make at most
+//! one actual attempt.
 //!
 //! Every response is classified totally and without panicking:
 //!
@@ -20,12 +28,20 @@
 //! [`crate::kite::error`]. Client construction failures are returned, never
 //! replaced by a differently configured transport.
 //!
+//! # Cancellation
+//!
+//! Operation futures are lazy: dropping one before it is first polled sends
+//! nothing. Dropping one while it waits for admission or before dispatch
+//! cancels local work only. Dropping one after dispatch does not cancel
+//! anything at the broker; the request may still be processed. Either way
+//! the client records a `Cancelled` entry with the stage reached in
+//! [`HTTPClient::diagnostics`].
+//!
 use core::future::Future;
-use std::sync::atomic::{AtomicU32, Ordering};
-use std::sync::Arc;
-use std::time::Duration;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
 
-use backoff::ExponentialBackoff;
 use reqwest::header::{HeaderValue, AUTHORIZATION};
 use serde::{de::DeserializeOwned, Serialize};
 use serde_json::Value;
@@ -37,21 +53,69 @@ use crate::kite::{
         config::Config,
         credentials::{AccessToken, ApiKey, Credentials},
         models::{KiteApiResponse, UserSession},
+        scheduler::{AttemptCtx, DispatchPermit, OpSpec, PermitTarget, Scheduler},
     },
-    error::{BrokerError, HttpError, HttpErrorKind, KiteApiException, ManjaError, Result},
+    error::{
+        BrokerError, HttpError, HttpErrorKind, KiteApiException, Result, TransportStage as Stage,
+    },
+    obs::diagnostics::{BoundedText, FailureHistory, DEFAULT_HISTORY},
     obs::schema::{Endpoint, Method},
     protocol::Inbound,
     traits::KiteConfig,
 };
 
-/// Attempt timeout applied by the underlying transport.
-const ATTEMPT_TIMEOUT: Duration = Duration::from_secs(10);
-
 struct Transport {
     http: reqwest::Client,
     config: Config,
     admission: Admission,
+    scheduler: Scheduler,
     in_flight: Arc<tokio::sync::Semaphore>,
+    failures: Mutex<FailureHistory<HttpFailure>>,
+    origin: Instant,
+}
+
+/// One recorded failure or cancellation of an HTTP operation.
+///
+/// It carries no URL, body, header or credential; the message is the
+/// broker's, bounded and sanitized.
+#[derive(Clone, Debug, PartialEq)]
+#[non_exhaustive]
+pub struct HttpFailure {
+    /// HTTP method.
+    pub method: Method,
+    /// Endpoint template.
+    pub endpoint: Endpoint,
+    /// Error category.
+    pub kind: HttpErrorKind,
+    /// HTTP status, if a response was received.
+    pub http_status: Option<u16>,
+    /// Stage reached.
+    pub stage: Stage,
+    /// Broker `error_type` text, if any.
+    pub broker_error_type: Option<String>,
+    /// Broker message, bounded and sanitized.
+    pub message: Option<BoundedText>,
+    /// Attempt number of the failure.
+    pub attempt: u32,
+    /// Monotonic time of the failure since the transport was created.
+    pub at: Duration,
+}
+
+/// A bounded diagnostics snapshot of one transport. Available without any
+/// telemetry consumer.
+#[derive(Clone, Debug, PartialEq)]
+#[non_exhaustive]
+pub struct HttpDiagnostics {
+    /// Transport attempts in progress.
+    pub active_attempts: usize,
+    /// Operations waiting for admission capacity in the scope.
+    pub admission_waiters: usize,
+    /// The most recent failures and cancellations, oldest first
+    /// (`B-DIAG-01`).
+    pub last_failures: Vec<HttpFailure>,
+    /// Incremented on every recorded failure, so a stale snapshot is
+    /// detectable.
+    pub snapshot_revision: u64,
 }
 
 /// An asynchronous Kite Connect HTTP client.
@@ -63,7 +127,6 @@ struct Transport {
 pub struct HTTPClient {
     transport: Arc<Transport>,
     credentials: Option<Credentials>,
-    backoff: ExponentialBackoff,
 }
 
 impl std::fmt::Debug for HTTPClient {
@@ -111,6 +174,77 @@ impl HttpClientBuilder {
     }
 }
 
+// Records an operation's outcome in the transport diagnostics, including
+// cancellation when its future is dropped before completing.
+struct OpGuard<'a> {
+    transport: &'a Transport,
+    method: Method,
+    endpoint: Endpoint,
+    dispatched: Arc<AtomicBool>,
+    done: bool,
+}
+
+impl OpGuard<'_> {
+    fn finish<T>(
+        mut self,
+        result: std::result::Result<T, HttpError>,
+    ) -> std::result::Result<T, HttpError> {
+        self.done = true;
+        if let Err(e) = &result {
+            self.transport.record(HttpFailure {
+                method: e.method(),
+                endpoint: e.endpoint(),
+                kind: e.kind(),
+                http_status: e.http_status(),
+                stage: e.stage(),
+                broker_error_type: e
+                    .broker()
+                    .and_then(|b| b.error_type())
+                    .map(|t| t.as_wire().to_string()),
+                message: e.broker().and_then(|b| b.message()).cloned(),
+                attempt: e.attempt(),
+                at: self.transport.origin.elapsed(),
+            });
+        }
+        result
+    }
+}
+
+impl Drop for OpGuard<'_> {
+    fn drop(&mut self) {
+        if self.done {
+            return;
+        }
+        // Dropped mid-operation: record what the SDK knows, and nothing
+        // about whether the broker acted.
+        let stage = if self.dispatched.load(Ordering::Acquire) {
+            Stage::Started
+        } else {
+            Stage::NotStarted
+        };
+        self.transport.record(HttpFailure {
+            method: self.method,
+            endpoint: self.endpoint,
+            kind: HttpErrorKind::Cancelled,
+            http_status: None,
+            stage,
+            broker_error_type: None,
+            message: None,
+            attempt: 0,
+            at: self.transport.origin.elapsed(),
+        });
+    }
+}
+
+impl Transport {
+    fn record(&self, failure: HttpFailure) {
+        self.failures
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .push(failure);
+    }
+}
+
 impl HTTPClient {
     /// A builder for a client using `config`.
     pub fn builder(config: Config) -> HttpClientBuilder {
@@ -130,29 +264,30 @@ impl HTTPClient {
     }
 
     fn build_transport(config: Config, admission: Admission) -> Result<Self> {
-        let http = reqwest::ClientBuilder::new()
-            .timeout(ATTEMPT_TIMEOUT)
-            .build()
-            .map_err(|e| {
-                HttpError::new(
-                    HttpErrorKind::Configuration,
-                    Method::Get,
-                    Endpoint::Unknown,
-                    crate::kite::error::TransportStage::NotStarted,
-                )
-                .with_detail("the HTTP transport could not be built")
-                .with_source(e.without_url())
-            })?;
+        // Attempt timeouts are enforced by the scheduler, not the transport.
+        let http = reqwest::ClientBuilder::new().build().map_err(|e| {
+            HttpError::new(
+                HttpErrorKind::Configuration,
+                Method::Get,
+                Endpoint::Unknown,
+                Stage::NotStarted,
+            )
+            .with_detail("the HTTP transport could not be built")
+            .with_source(e.without_url())
+        })?;
         let in_flight = Arc::new(tokio::sync::Semaphore::new(config.limits().in_flight()));
+        let scheduler = Scheduler::new(config.limits().scheduler().clone());
         Ok(Self {
             transport: Arc::new(Transport {
                 http,
                 config,
                 admission,
+                scheduler,
                 in_flight,
+                failures: Mutex::new(FailureHistory::new(DEFAULT_HISTORY)),
+                origin: Instant::now(),
             }),
             credentials: None,
-            backoff: Default::default(),
         })
     }
 
@@ -164,13 +299,6 @@ impl HTTPClient {
     /// Same as [`Self::new`].
     pub fn with_config(config: Config) -> Result<Self> {
         Self::new(config)
-    }
-
-    /// Exponential backoff for retrying [rate limited](https://kite.trade/docs/connect/v3/exceptions/#api-rate-limit) requests.
-    ///
-    pub fn with_backoff(mut self, backoff: backoff::ExponentialBackoff) -> Self {
-        self.backoff = backoff;
-        self
     }
 
     /// A client sharing this client's transport, authenticated with
@@ -203,6 +331,36 @@ impl HTTPClient {
     ///
     pub fn http_config(&self) -> &Config {
         &self.transport.config
+    }
+
+    /// Admit capacity for `target` now, returning a [`DispatchPermit`] to
+    /// pass to the matching operation.
+    ///
+    /// This is the explicit point between admission and dispatch: the
+    /// caller may run its own checks before using the permit. The permit
+    /// expires after `B-HTTP-12`; dropping it unused returns its capacity.
+    pub async fn admit(&self, target: PermitTarget) -> Result<DispatchPermit> {
+        Ok(self
+            .transport
+            .scheduler
+            .admit(&self.transport.admission, target)
+            .await?)
+    }
+
+    /// A bounded diagnostics snapshot of this client's transport.
+    pub fn diagnostics(&self) -> HttpDiagnostics {
+        let failures = self
+            .transport
+            .failures
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        HttpDiagnostics {
+            active_attempts: self.transport.config.limits().in_flight()
+                - self.transport.in_flight.available_permits(),
+            admission_waiters: self.transport.admission.waiters(),
+            last_failures: failures.entries(),
+            snapshot_revision: failures.revision(),
+        }
     }
 
     // --- [ API Groups ] ---
@@ -246,25 +404,32 @@ impl HTTPClient {
     // --- [ HTTP verb functions ] ---
 
     /// GET `path` and return the raw (CSV) body.
-    pub(crate) async fn get_raw(&self, path: &str, backoff: &ExponentialBackoff) -> Result<String> {
-        let (status, body, attempt) = self
-            .execute(reqwest::Method::GET, path, backoff, BodyKind::Csv, |rb| rb)
-            .await?;
-        let (method, endpoint) = labels(&reqwest::Method::GET, path);
-        classify_text(status, &body, method, endpoint).map_err(|e| e.with_attempt(attempt).into())
+    pub(crate) async fn get_raw(&self, path: &str) -> Result<String> {
+        let (m, endpoint) = labels(&reqwest::Method::GET, path);
+        let guard = self.guard(m, endpoint);
+        let result = async {
+            let (status, body, attempt) = self
+                .execute(
+                    reqwest::Method::GET,
+                    path,
+                    BodyKind::Csv,
+                    None,
+                    &guard.dispatched,
+                    |rb| rb,
+                )
+                .await?;
+            classify_text(status, &body, m, endpoint).map_err(|e| e.with_attempt(attempt))
+        }
+        .await;
+        Ok(guard.finish(result)?)
     }
 
     /// GET `path` and decode the response envelope.
-    pub(crate) async fn get<Model>(
-        &self,
-        path: &str,
-        backoff: &ExponentialBackoff,
-    ) -> Result<KiteApiResponse<Model>>
+    pub(crate) async fn get<Model>(&self, path: &str) -> Result<KiteApiResponse<Model>>
     where
         Model: DeserializeOwned,
     {
-        self.json(reqwest::Method::GET, path, backoff, |rb| rb)
-            .await
+        self.json(reqwest::Method::GET, path, None, |rb| rb).await
     }
 
     /// GET `path` with a query and decode the response envelope.
@@ -272,13 +437,12 @@ impl HTTPClient {
         &self,
         path: &str,
         query: &Q,
-        backoff: &ExponentialBackoff,
     ) -> Result<KiteApiResponse<Model>>
     where
         Q: Serialize + ?Sized,
         Model: DeserializeOwned,
     {
-        self.json(reqwest::Method::GET, path, backoff, |rb| rb.query(query))
+        self.json(reqwest::Method::GET, path, None, |rb| rb.query(query))
             .await
     }
 
@@ -287,13 +451,12 @@ impl HTTPClient {
         &self,
         path: &str,
         data: Payload,
-        backoff: &ExponentialBackoff,
     ) -> Result<KiteApiResponse<Model>>
     where
         Model: DeserializeOwned,
         Payload: Serialize,
     {
-        self.json(reqwest::Method::POST, path, backoff, |rb| rb.json(&data))
+        self.json(reqwest::Method::POST, path, None, |rb| rb.json(&data))
             .await
     }
 
@@ -302,13 +465,13 @@ impl HTTPClient {
         &self,
         path: &str,
         form: &F,
-        backoff: &ExponentialBackoff,
+        permit: Option<DispatchPermit>,
     ) -> Result<KiteApiResponse<Model>>
     where
         Model: DeserializeOwned,
         F: Serialize + ?Sized,
     {
-        self.json(reqwest::Method::POST, path, backoff, |rb| rb.form(form))
+        self.json(reqwest::Method::POST, path, permit, |rb| rb.form(form))
             .await
     }
 
@@ -317,13 +480,12 @@ impl HTTPClient {
         &self,
         path: &str,
         data: Payload,
-        backoff: &ExponentialBackoff,
     ) -> Result<KiteApiResponse<Model>>
     where
         Model: DeserializeOwned,
         Payload: Serialize,
     {
-        self.json(reqwest::Method::PUT, path, backoff, |rb| rb.json(&data))
+        self.json(reqwest::Method::PUT, path, None, |rb| rb.json(&data))
             .await
     }
 
@@ -335,7 +497,6 @@ impl HTTPClient {
         &self,
         path: &str,
         with_auth: bool,
-        backoff: &ExponentialBackoff,
     ) -> Result<KiteApiResponse<Model>>
     where
         Model: DeserializeOwned,
@@ -347,7 +508,7 @@ impl HTTPClient {
             ],
             _ => Vec::new(),
         };
-        self.json(reqwest::Method::DELETE, path, backoff, |rb| {
+        self.json(reqwest::Method::DELETE, path, None, |rb| {
             if query.is_empty() {
                 rb
             } else {
@@ -357,69 +518,93 @@ impl HTTPClient {
         .await
     }
 
-    async fn json<Model, B>(
+    fn guard(&self, method: Method, endpoint: Endpoint) -> OpGuard<'_> {
+        OpGuard {
+            transport: &self.transport,
+            method,
+            endpoint,
+            dispatched: Arc::new(AtomicBool::new(false)),
+            done: false,
+        }
+    }
+
+    pub(crate) async fn json<Model, B>(
         &self,
         method: reqwest::Method,
         path: &str,
-        backoff: &ExponentialBackoff,
+        permit: Option<DispatchPermit>,
         build: B,
     ) -> Result<KiteApiResponse<Model>>
     where
         Model: DeserializeOwned,
         B: Fn(reqwest::RequestBuilder) -> reqwest::RequestBuilder,
     {
-        let (status, body, attempt) = self
-            .execute(method.clone(), path, backoff, BodyKind::Json, build)
-            .await?;
         let (m, endpoint) = labels(&method, path);
-        classify_json(status, &body, m, endpoint).map_err(|e| e.with_attempt(attempt).into())
+        let guard = self.guard(m, endpoint);
+        let result = async {
+            let (status, body, attempt) = self
+                .execute(
+                    method.clone(),
+                    path,
+                    BodyKind::Json,
+                    permit,
+                    &guard.dispatched,
+                    build,
+                )
+                .await?;
+            classify_json(status, &body, m, endpoint).map_err(|e| e.with_attempt(attempt))
+        }
+        .await;
+        Ok(guard.finish(result)?)
     }
 
-    /// Run attempts under the legacy backoff policy, which retries only
-    /// HTTP 429, and return the final status, body and attempt number.
+    /// Run the operation under the scheduler and return the final status,
+    /// body and attempt number. Non-2xx statuses become errors here so the
+    /// scheduler can decide on retries.
     async fn execute<B>(
         &self,
         method: reqwest::Method,
         path: &str,
-        backoff: &ExponentialBackoff,
         kind: BodyKind,
+        permit: Option<DispatchPermit>,
+        op_dispatched: &Arc<AtomicBool>,
         build: B,
-    ) -> Result<(u16, Vec<u8>, u32)>
+    ) -> std::result::Result<(u16, Vec<u8>, u32), HttpError>
     where
         B: Fn(reqwest::RequestBuilder) -> reqwest::RequestBuilder,
     {
-        let attempts = AtomicU32::new(0);
         let (m, endpoint) = labels(&method, path);
-        backoff::future::retry(backoff.clone(), || async {
-            let attempt = attempts.fetch_add(1, Ordering::Relaxed) + 1;
-            let (status, body) = self
-                .attempt(&method, path, kind, &build, m, endpoint, attempt)
-                .await
-                .map_err(|e| backoff::Error::Permanent(ManjaError::from(e)))?;
-            if status == 429 {
-                tracing::warn!(endpoint = endpoint.as_str(), "rate limited");
-                let err = classify_json::<Value>(status, &body, m, endpoint)
-                    .err()
-                    .unwrap_or_else(|| {
-                        HttpError::new(
-                            HttpErrorKind::HttpStatus,
-                            m,
-                            endpoint,
-                            crate::kite::error::TransportStage::ResponseReceived,
-                        )
-                        .with_status(429)
-                    })
-                    .with_attempt(attempt);
-                return Err(backoff::Error::transient(ManjaError::from(err)));
-            }
-            Ok((status, body, attempt))
-        })
-        .await
+        let (_, order_id) = rate_key(m, endpoint, path);
+        let spec = OpSpec {
+            method: m,
+            endpoint,
+            order_id: order_id.as_deref(),
+        };
+        let build = &build;
+        let method = &method;
+        self.transport
+            .scheduler
+            .run(spec, &self.transport.admission, permit, |ctx| async move {
+                let number = ctx.number;
+                let (status, body) = self
+                    .attempt(method, path, kind, build, m, endpoint, ctx, op_dispatched)
+                    .await?;
+                if !(200..300).contains(&status) {
+                    // Classify now so the scheduler sees the status.
+                    return Err(classify_json::<Value>(status, &body, m, endpoint)
+                        .err()
+                        .unwrap_or_else(|| {
+                            http_error(HttpErrorKind::HttpStatus, status, m, endpoint)
+                        })
+                        .with_attempt(number));
+                }
+                Ok((status, body, number))
+            })
+            .await
     }
 
-    /// One transport attempt: build, send and read a bounded body.
-    // Internal error path; the error is boxed into `ManjaError::Http`.
-    #[allow(clippy::too_many_arguments, clippy::result_large_err)]
+    /// One transport attempt: build, dispatch and read a bounded body.
+    #[allow(clippy::too_many_arguments)]
     async fn attempt<B>(
         &self,
         method: &reqwest::Method,
@@ -428,34 +613,26 @@ impl HTTPClient {
         build: &B,
         m: Method,
         endpoint: Endpoint,
-        attempt: u32,
+        ctx: AttemptCtx,
+        op_dispatched: &AtomicBool,
     ) -> std::result::Result<(u16, Vec<u8>), HttpError>
     where
         B: Fn(reqwest::RequestBuilder) -> reqwest::RequestBuilder,
     {
-        use crate::kite::error::TransportStage as Stage;
-        let not_started = |detail: &str| {
-            HttpError::new(HttpErrorKind::Configuration, m, endpoint, Stage::NotStarted)
+        let attempt = ctx.number;
+        let mut token = ctx.token;
+        let not_started = |kind: HttpErrorKind, detail: &str| {
+            HttpError::new(kind, m, endpoint, Stage::NotStarted)
                 .with_attempt(attempt)
                 .with_detail(detail)
         };
-        let admission = &self.transport.admission;
-        let wait = admission.limits().wait();
-        let (class, order_id) = rate_key(m, endpoint, path);
-        let admitted = |e: &dyn std::fmt::Display| {
-            HttpError::new(HttpErrorKind::Admission, m, endpoint, Stage::NotStarted)
-                .with_attempt(attempt)
-                .with_detail(&e.to_string())
-        };
-        let grant = admission
-            .acquire(class, order_id.as_deref(), wait)
+        let _in_flight = self
+            .transport
+            .in_flight
+            .clone()
+            .acquire_owned()
             .await
-            .map_err(|e| admitted(&e))?;
-        let _in_flight =
-            tokio::time::timeout(wait, self.transport.in_flight.clone().acquire_owned())
-                .await
-                .map_err(|_| admitted(&"no in-flight attempt slot within the admission wait"))?
-                .map_err(|_| admitted(&"the transport is closed"))?;
+            .map_err(|_| not_started(HttpErrorKind::Admission, "the transport is closed"))?;
         let url = self.transport.config.url(path);
         let mut rb = self
             .transport
@@ -463,16 +640,27 @@ impl HTTPClient {
             .request(method.clone(), url)
             .header("X-Kite-Version", "3");
         if let Some(creds) = &self.credentials {
-            let mut value = HeaderValue::from_str(creds.authorization_header().expose())
-                .map_err(|_| not_started("the Authorization header could not be built"))?;
+            let mut value =
+                HeaderValue::from_str(creds.authorization_header().expose()).map_err(|_| {
+                    not_started(
+                        HttpErrorKind::Configuration,
+                        "the Authorization header could not be built",
+                    )
+                })?;
             value.set_sensitive(true);
             rb = rb.header(AUTHORIZATION, value);
         }
         let request = build(rb).build().map_err(|e| {
-            not_started("the request could not be built").with_source(e.without_url())
+            not_started(
+                HttpErrorKind::Configuration,
+                "the request could not be built",
+            )
+            .with_source(e.without_url())
         })?;
-        // Dispatch now: the admitted capacity is used from here on.
-        grant.consume();
+        // Dispatch now: the admitted capacity is used, and from here on the
+        // broker may receive the request.
+        token.dispatch();
+        op_dispatched.store(true, Ordering::Release);
         let mut response = self.transport.http.execute(request).await.map_err(|e| {
             // A connect failure is affirmative evidence that no request
             // bytes left the process; anything later is not.
@@ -636,7 +824,6 @@ fn error_response(status: u16, body: &Value, method: Method, endpoint: Endpoint)
 
 /// Total classification of a JSON response.
 // Internal error path; the error is boxed into `ManjaError::Http`.
-#[allow(clippy::result_large_err)]
 pub(crate) fn classify_json<T: DeserializeOwned>(
     status: u16,
     body: &[u8],
@@ -684,7 +871,6 @@ pub(crate) fn classify_json<T: DeserializeOwned>(
 }
 
 /// Total classification of a text (CSV) response.
-#[allow(clippy::result_large_err)]
 fn classify_text(
     status: u16,
     body: &[u8],

@@ -9,9 +9,7 @@
 //!
 //! Refer to the official [API documentation](https://kite.trade/docs/connect/v3/portfolio/).
 //!
-use backoff::ExponentialBackoff;
 
-use crate::kite::connect::api::create_backoff_policy;
 use crate::kite::connect::{
     client::HTTPClient,
     models::{Auction, Holding, KiteApiResponse, Position, PositionConversionRequest},
@@ -25,8 +23,6 @@ use crate::kite::error::Result;
 pub struct Portfolio<'c> {
     /// Reference to the HTTP client used for making API requests.
     pub client: &'c HTTPClient,
-    /// Backoff policy for retrying API requests.
-    backoff: ExponentialBackoff,
 }
 
 impl<'c> Portfolio<'c> {
@@ -41,26 +37,7 @@ impl<'c> Portfolio<'c> {
     /// A new instance of `Portfolio`.
     ///
     pub fn new(client: &'c HTTPClient) -> Self {
-        Self {
-            client,
-            // Default API rate limit: 10 req/sec
-            backoff: create_backoff_policy(10),
-        }
-    }
-
-    /// Sets a custom backoff policy for the `Portfolio` instance.
-    ///
-    /// # Arguments
-    ///
-    /// * `backoff` - An `ExponentialBackoff` instance specifying the backoff policy.
-    ///
-    /// # Returns
-    ///
-    /// The `Portfolio` instance with the updated backoff policy.
-    ///
-    pub fn with_backoff(mut self, backoff: ExponentialBackoff) -> Self {
-        self.backoff = backoff;
-        self
+        Self { client }
     }
 
     // ===== [ KiteConnect API endpoints ] =====
@@ -74,7 +51,7 @@ impl<'c> Portfolio<'c> {
     /// DEMAT account, as settled by exchanges and clearing institutions.
     ///
     pub async fn get_holdings(&self) -> Result<KiteApiResponse<Vec<Holding>>> {
-        self.client.get("/portfolio/holdings", &self.backoff).await
+        self.client.get("/portfolio/holdings").await
     }
 
     /// Retrieve the list of short term positions.
@@ -91,7 +68,7 @@ impl<'c> Portfolio<'c> {
     /// useful for computing intraday profits and losses for trading strategies.
     ///
     pub async fn get_positions(&self) -> Result<KiteApiResponse<Vec<Position>>> {
-        self.client.get("/portfolio/positions", &self.backoff).await
+        self.client.get("/portfolio/positions").await
     }
 
     /// Convert the margin product of an open position.
@@ -106,9 +83,7 @@ impl<'c> Portfolio<'c> {
         &self,
         request: PositionConversionRequest,
     ) -> Result<KiteApiResponse<bool>> {
-        self.client
-            .put("/portfolio/positions", request, &self.backoff)
-            .await
+        self.client.put("/portfolio/positions", request).await
     }
 
     /// Retrieve the list of auctions that are currently being held.
@@ -120,9 +95,7 @@ impl<'c> Portfolio<'c> {
     /// you hold in your demat account will be shown in the auctions list.
     ///
     pub async fn get_auctions(&self) -> Result<KiteApiResponse<Vec<Auction>>> {
-        self.client
-            .get("/portfolio/holdings/auctions", &self.backoff)
-            .await
+        self.client.get("/portfolio/holdings/auctions").await
     }
 
     // TODO!

@@ -18,6 +18,7 @@ use reqwest::header::{HeaderMap, HeaderValue};
 use secrecy::{ExposeSecret, Secret};
 
 use crate::kite::connect::credentials::KiteCredentials;
+use crate::kite::connect::scheduler::SchedulerLimits;
 use crate::kite::traits::{KiteAuth, KiteConfig};
 
 /// Default v3 API base url.
@@ -95,7 +96,9 @@ const MIB: usize = 1024 * KIB;
 /// | `B-HTTP-08` instrument CSV body | 64 MiB | 1 MiB ..= 256 MiB |
 /// | `B-HTTP-10` in-flight attempts per transport | 32 | 1 ..= 256 |
 ///
-/// Admission bounds (`B-HTTP-06`, `B-HTTP-07`) belong to the shared
+/// Deadline, attempt and retry bounds (`B-HTTP-01`–`05`, `-11`, `-12`) are
+/// the [`SchedulerLimits`]. Admission bounds (`B-HTTP-06`, `B-HTTP-07`)
+/// belong to the shared
 /// [`Admission`](crate::kite::connect::admission::Admission) scope.
 ///
 /// A response larger than its bound is a `Decode` error that preserves the
@@ -108,6 +111,7 @@ pub struct HttpLimits {
     json_body_bytes: usize,
     csv_body_bytes: usize,
     in_flight: usize,
+    scheduler: SchedulerLimits,
 }
 
 impl Default for HttpLimits {
@@ -116,6 +120,7 @@ impl Default for HttpLimits {
             json_body_bytes: 4 * MIB,
             csv_body_bytes: 64 * MIB,
             in_flight: 32,
+            scheduler: SchedulerLimits::default(),
         }
     }
 }
@@ -135,6 +140,17 @@ impl HttpLimits {
     pub fn with_json_body_bytes(mut self, bytes: usize) -> Result<Self, LimitError> {
         self.json_body_bytes = check_range("B-HTTP-08 (JSON)", bytes, 64 * KIB, 64 * MIB)?;
         Ok(self)
+    }
+
+    /// Deadline, attempt-timeout, retry and permit bounds.
+    pub fn scheduler(&self) -> &SchedulerLimits {
+        &self.scheduler
+    }
+
+    /// Replace the deadline, attempt-timeout, retry and permit bounds.
+    pub fn with_scheduler(mut self, scheduler: SchedulerLimits) -> Self {
+        self.scheduler = scheduler;
+        self
     }
 
     /// Maximum concurrent transport attempts on one transport.

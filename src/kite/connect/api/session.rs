@@ -20,11 +20,9 @@ use std::collections::HashMap;
 use std::future::Future;
 use std::pin::Pin;
 
-use backoff::ExponentialBackoff;
 use secrecy::ExposeSecret;
 
 use crate::kite::connect::{
-    api::create_backoff_policy,
     client::HTTPClient,
     models::{KiteApiResponse, UserSession},
     utils::create_checksum,
@@ -43,8 +41,6 @@ pub struct Session<'c> {
     /// A mutable reference to the HTTP client used for making API requests
     /// and storing a `UserSession` object after a successful login flow.
     pub client: &'c mut HTTPClient,
-    /// Backoff policy for retrying API requests.
-    backoff: ExponentialBackoff,
 }
 
 impl<'c> KiteLoginFlow for Session<'c> {
@@ -104,25 +100,7 @@ impl<'c> Session<'c> {
     /// ```
     ///
     pub fn new(client: &'c mut HTTPClient) -> Self {
-        Self {
-            client,
-            // Default API rate limit
-            backoff: create_backoff_policy(10),
-        }
-    }
-
-    /// Sets a custom backoff policy for the `Session` instance.
-    ///
-    /// # Arguments
-    ///
-    /// * `backoff` - An `ExponentialBackoff` instance specifying the backoff policy.
-    ///
-    /// # Returns
-    ///
-    /// The `User` instance with the updated backoff policy.
-    pub fn with_backoff(mut self, backoff: ExponentialBackoff) -> Self {
-        self.backoff = backoff;
-        self
+        Self { client }
     }
 
     // ===== [ KiteConnect API endpoints ] =====
@@ -174,10 +152,8 @@ impl<'c> Session<'c> {
         params.insert("request_token", request_token);
         params.insert("checksum", checksum.as_str());
         // info!("Params: {:?}", params);
-        let kite_response: Result<KiteApiResponse<UserSession>> = self
-            .client
-            .post_form("/session/token", &params, &self.backoff)
-            .await;
+        let kite_response: Result<KiteApiResponse<UserSession>> =
+            self.client.post_form("/session/token", &params, None).await;
         match kite_response {
             Ok(kite_response) => {
                 // Legacy behavior, removed by the explicit session resource:
@@ -203,11 +179,7 @@ impl<'c> Session<'c> {
     /// This is useful for logging out a user or resetting their session for security reasons.
     ///
     pub async fn delete_session(&mut self) -> Result<KiteApiResponse<bool>> {
-        match self
-            .client
-            .delete("/session/token", true, &self.backoff)
-            .await
-        {
+        match self.client.delete("/session/token", true).await {
             Ok(kite_response) => {
                 // Legacy behavior: drop this client's credentials.
                 self.client.replace_credentials(None);

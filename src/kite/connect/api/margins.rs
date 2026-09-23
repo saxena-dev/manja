@@ -6,7 +6,6 @@
 //!
 //! Refer to the official API [documentation](https://kite.trade/docs/connect/v3/market-quotes/).
 //!
-use crate::kite::connect::api::create_backoff_policy;
 use crate::kite::connect::{
     client::HTTPClient,
     models::{
@@ -16,16 +15,12 @@ use crate::kite::connect::{
 };
 use crate::kite::error::Result;
 
-use backoff::ExponentialBackoff;
-
 /// Margin calculation APIs lets you calculate `span`, `exposure`, `option premium`,
 /// `additional`, `bo`, `cash`, `var`, `pnl` values for a list of orders.
 ///
 pub struct Margins<'c> {
     /// Reference to the HTTP client used for making API requests.
     pub client: &'c HTTPClient,
-    /// Backoff policy for retrying API requests.
-    backoff: ExponentialBackoff,
 }
 
 impl<'c> Margins<'c> {
@@ -40,26 +35,7 @@ impl<'c> Margins<'c> {
     /// A new instance of `Margins`.
     ///
     pub fn new(client: &'c HTTPClient) -> Self {
-        Self {
-            client,
-            // Default API rate limit: 10 req/sec
-            backoff: create_backoff_policy(10),
-        }
-    }
-
-    /// Sets a custom backoff policy for the `Margins` instance.
-    ///
-    /// # Arguments
-    ///
-    /// * `backoff` - An `ExponentialBackoff` instance specifying the backoff policy.
-    ///
-    /// # Returns
-    ///
-    /// The `Margins` instance with the updated backoff policy.
-    ///
-    pub fn with_backoff(mut self, backoff: ExponentialBackoff) -> Self {
-        self.backoff = backoff;
-        self
+        Self { client }
     }
 
     // ===== [ KiteConnect API endpoints ] =====
@@ -71,9 +47,7 @@ impl<'c> Margins<'c> {
         &self,
         request: OrderMarginRequest,
     ) -> Result<KiteApiResponse<OrderMargin>> {
-        self.client
-            .post("/margins/orders", request, &self.backoff)
-            .await
+        self.client.post("/margins/orders", request).await
     }
 
     /// Calculates margins for spread orders.
@@ -118,7 +92,6 @@ impl<'c> Margins<'c> {
             .post(
                 &format!("/margins/basket?consider_positions={}", consider_positions),
                 requests,
-                &self.backoff,
             )
             .await
     }
@@ -130,8 +103,6 @@ impl<'c> Margins<'c> {
 pub struct Charges<'c> {
     /// Reference to the HTTP client used for making API requests.
     pub client: &'c HTTPClient,
-    /// Backoff policy for retrying API requests.
-    backoff: ExponentialBackoff,
 }
 
 impl<'c> Charges<'c> {
@@ -146,26 +117,7 @@ impl<'c> Charges<'c> {
     /// A new instance of `Charges`.
     ///
     pub fn new(client: &'c HTTPClient) -> Self {
-        Self {
-            client,
-            // Default API rate limit: 10 req/sec
-            backoff: create_backoff_policy(10),
-        }
-    }
-
-    /// Sets a custom backoff policy for the `Charges` instance.
-    ///
-    /// # Arguments
-    ///
-    /// * `backoff` - An `ExponentialBackoff` instance specifying the backoff policy.
-    ///
-    /// # Returns
-    ///
-    /// The `Charges` instance with the updated backoff policy.
-    ///
-    pub fn with_backoff(mut self, backoff: ExponentialBackoff) -> Self {
-        self.backoff = backoff;
-        self
+        Self { client }
     }
 
     // ===== [ KiteConnect API endpoints ] =====
@@ -222,8 +174,6 @@ impl<'c> Charges<'c> {
         &self,
         requests: &[OrderChargesRequest],
     ) -> Result<KiteApiResponse<Vec<OrderCharges>>> {
-        self.client
-            .post("/charges/orders", requests, &self.backoff)
-            .await
+        self.client.post("/charges/orders", requests).await
     }
 }

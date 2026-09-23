@@ -47,7 +47,7 @@ pub type Result<T> = std::result::Result<T, ManjaError>;
 pub enum ManjaError {
     /// A failed HTTP operation, with inspectable stage evidence.
     #[error("{0}")]
-    Http(Box<HttpError>),
+    Http(HttpError),
 
     /// Invalid credential material supplied to a constructor.
     #[error("invalid credentials: {0}")]
@@ -99,7 +99,7 @@ impl From<&str> for ManjaError {
 
 impl From<HttpError> for ManjaError {
     fn from(e: HttpError) -> Self {
-        ManjaError::Http(Box::new(e))
+        ManjaError::Http(e)
     }
 }
 
@@ -206,10 +206,12 @@ pub struct RetryInfo {
     pub max_attempts: u32,
 }
 
-/// A failed HTTP operation.
+/// A failed HTTP operation. Pointer-sized: the details are boxed.
 #[derive(Debug)]
-#[non_exhaustive]
-pub struct HttpError {
+pub struct HttpError(Box<HttpErrorInner>);
+
+#[derive(Debug)]
+struct HttpErrorInner {
     kind: HttpErrorKind,
     method: Method,
     endpoint: Endpoint,
@@ -230,7 +232,7 @@ impl HttpError {
         endpoint: Endpoint,
         stage: TransportStage,
     ) -> Self {
-        Self {
+        Self(Box::new(HttpErrorInner {
             kind,
             method,
             endpoint,
@@ -242,36 +244,36 @@ impl HttpError {
             retry: None,
             detail: None,
             source: None,
-        }
+        }))
     }
 
     pub(crate) fn with_status(mut self, status: u16) -> Self {
-        self.http_status = Some(status);
+        self.0.http_status = Some(status);
         self
     }
 
     pub(crate) fn with_broker(mut self, broker: BrokerError) -> Self {
-        self.broker = Some(broker);
+        self.0.broker = Some(broker);
         self
     }
 
     pub(crate) fn with_attempt(mut self, attempt: u32) -> Self {
-        self.attempt = attempt;
+        self.0.attempt = attempt;
         self
     }
 
     pub(crate) fn with_timeout(mut self) -> Self {
-        self.timed_out = true;
+        self.0.timed_out = true;
         self
     }
 
     pub(crate) fn with_retry(mut self, retry: RetryInfo) -> Self {
-        self.retry = Some(retry);
+        self.0.retry = Some(retry);
         self
     }
 
     pub(crate) fn with_detail(mut self, detail: &str) -> Self {
-        self.detail = Some(BoundedText::sanitize(
+        self.0.detail = Some(BoundedText::sanitize(
             detail,
             crate::kite::obs::diagnostics::DEFAULT_TEXT_BYTES,
         ));
@@ -282,71 +284,71 @@ impl HttpError {
         mut self,
         source: impl std::error::Error + Send + Sync + 'static,
     ) -> Self {
-        self.source = Some(Box::new(source));
+        self.0.source = Some(Box::new(source));
         self
     }
 
     /// The category.
     pub fn kind(&self) -> HttpErrorKind {
-        self.kind
+        self.0.kind
     }
 
     /// HTTP method.
     pub fn method(&self) -> Method {
-        self.method
+        self.0.method
     }
 
     /// Endpoint template, never a concrete path or URL.
     pub fn endpoint(&self) -> Endpoint {
-        self.endpoint
+        self.0.endpoint
     }
 
     /// HTTP status, if a response status was received.
     pub fn http_status(&self) -> Option<u16> {
-        self.http_status
+        self.0.http_status
     }
 
     /// The broker error envelope, if one was received.
     pub fn broker(&self) -> Option<&BrokerError> {
-        self.broker.as_ref()
+        self.0.broker.as_ref()
     }
 
     /// Attempt number (1-based) of the reported failure; 0 when no attempt
     /// started.
     pub fn attempt(&self) -> u32 {
-        self.attempt
+        self.0.attempt
     }
 
     /// How far the attempt got.
     pub fn stage(&self) -> TransportStage {
-        self.stage
+        self.0.stage
     }
 
     /// Whether an attempt or operation timeout caused the failure.
     pub fn is_timeout(&self) -> bool {
-        self.timed_out
+        self.0.timed_out
     }
 
     /// Whether the operation was cancelled.
     pub fn is_cancelled(&self) -> bool {
-        self.kind == HttpErrorKind::Cancelled
+        self.0.kind == HttpErrorKind::Cancelled
     }
 
     /// Retry metadata, when a retry policy applied.
     pub fn retry(&self) -> Option<RetryInfo> {
-        self.retry
+        self.0.retry
     }
 
     /// A bounded, sanitized description, such as why a body failed to
     /// decode. Never a body dump.
     pub fn detail(&self) -> Option<&BoundedText> {
-        self.detail.as_ref()
+        self.0.detail.as_ref()
     }
 
     /// Whether the request may have reached the broker. `true` unless the
     /// SDK has affirmative evidence that it did not.
     pub fn may_have_reached_broker(&self) -> bool {
-        self.stage != TransportStage::NotStarted
+        self.0.stage != TransportStage::NotStarted
     }
 }
 
@@ -355,26 +357,26 @@ impl fmt::Display for HttpError {
         write!(
             f,
             "{:?} error on {} {} (stage {}",
-            self.kind,
-            self.method.as_str(),
-            self.endpoint.as_str(),
-            self.stage.as_str()
+            self.0.kind,
+            self.0.method.as_str(),
+            self.0.endpoint.as_str(),
+            self.0.stage.as_str()
         )?;
-        if let Some(status) = self.http_status {
+        if let Some(status) = self.0.http_status {
             write!(f, ", HTTP {status}")?;
         }
-        if self.attempt > 0 {
-            write!(f, ", attempt {}", self.attempt)?;
+        if self.0.attempt > 0 {
+            write!(f, ", attempt {}", self.0.attempt)?;
         }
         f.write_str(")")?;
-        if let Some(b) = &self.broker {
+        if let Some(b) = &self.0.broker {
             if let Some(t) = &b.error_type {
                 write!(f, ": {t}")?;
             }
             if let Some(m) = &b.message {
                 write!(f, ": {m}")?;
             }
-        } else if let Some(d) = &self.detail {
+        } else if let Some(d) = &self.0.detail {
             write!(f, ": {d}")?;
         }
         Ok(())
@@ -383,7 +385,8 @@ impl fmt::Display for HttpError {
 
 impl std::error::Error for HttpError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
-        self.source
+        self.0
+            .source
             .as_deref()
             .map(|e| e as &(dyn std::error::Error + 'static))
     }

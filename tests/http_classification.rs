@@ -13,6 +13,7 @@ mod support;
 use manja::kite::connect::client::HTTPClient;
 use manja::kite::connect::config::{Config, HttpLimits};
 use manja::kite::connect::credentials::{Credentials, KiteCredentials};
+use manja::kite::connect::scheduler::SchedulerLimits;
 use manja::kite::error::{HttpError, HttpErrorKind, KiteApiException, ManjaError, TransportStage};
 use manja::kite::obs::schema::{Endpoint, Method};
 use manja::kite::protocol::Inbound;
@@ -38,9 +39,15 @@ fn reply(status: u16, content_type: &'static str, body: &str) -> Reply {
     }
 }
 
+/// Classification is tested one attempt at a time; retry policy is
+/// exercised in tests/http_scheduling.rs.
+fn one_attempt() -> HttpLimits {
+    HttpLimits::default().with_scheduler(SchedulerLimits::default().with_read_attempts(1).unwrap())
+}
+
 async fn profile_with(replies: Vec<Reply>) -> (Result<(), ManjaError>, HttpHarness) {
     let harness = HttpHarness::start(replies).await;
-    let result = client(&harness.base_url(), HttpLimits::default())
+    let result = client(&harness.base_url(), one_attempt())
         .user()
         .profile()
         .await
@@ -313,7 +320,7 @@ async fn response_loss_does_not_claim_the_request_was_not_sent() {
 #[tokio::test]
 async fn connect_failure_is_affirmative_evidence_of_no_dispatch() {
     let base = refused_base_url().await;
-    let err = client(&base, HttpLimits::default())
+    let err = client(&base, one_attempt())
         .user()
         .profile()
         .await
@@ -361,17 +368,13 @@ async fn broker_messages_are_sanitized_before_retention() {
 #[tokio::test]
 async fn rate_limited_response_is_an_error_with_its_status() {
     // Supplemental: documented error envelope with HTTP 429
-    // (exceptions.md:39). The legacy retry policy is told to give up at once
-    // so the classified 429 itself is observed; retry policy is S06.
+    // (exceptions.md:39). One read attempt is allowed so the classified 429
+    // itself is observed; retries are covered in tests/http_scheduling.rs.
     let body =
         r#"{"status":"error","message":"Too many requests","error_type":"NetworkException"}"#;
     let harness = HttpHarness::start(vec![reply(429, "application/json", body)]).await;
-    let give_up = backoff::ExponentialBackoffBuilder::new()
-        .with_max_elapsed_time(Some(std::time::Duration::ZERO))
-        .build();
-    let err = client(&harness.base_url(), HttpLimits::default())
+    let err = client(&harness.base_url(), one_attempt())
         .user()
-        .with_backoff(give_up)
         .profile()
         .await
         .unwrap_err();

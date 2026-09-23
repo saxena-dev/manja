@@ -6,9 +6,7 @@
 //!
 //! Refer to the official API [documentation](https://kite.trade/docs/connect/v3/user/#user).
 //!
-use backoff::ExponentialBackoff;
 
-use crate::kite::connect::api::create_backoff_policy;
 use crate::kite::connect::{
     client::HTTPClient,
     models::{KiteApiResponse, Segment, SegmentKind, UserMargins, UserProfile},
@@ -25,8 +23,6 @@ use crate::kite::error::Result;
 pub struct User<'c> {
     /// Reference to the HTTP client used for making API requests.
     pub client: &'c HTTPClient,
-    /// Backoff policy for retrying API requests.
-    backoff: ExponentialBackoff,
 }
 
 impl<'c> User<'c> {
@@ -41,26 +37,7 @@ impl<'c> User<'c> {
     /// A new instance of `User`.
     ///
     pub fn new(client: &'c HTTPClient) -> Self {
-        Self {
-            client,
-            // Default API rate limit
-            backoff: create_backoff_policy(10),
-        }
-    }
-
-    /// Sets a custom backoff policy for the `User` instance.
-    ///
-    /// # Arguments
-    ///
-    /// * `backoff` - An `ExponentialBackoff` instance specifying the backoff policy.
-    ///
-    /// # Returns
-    ///
-    /// The `User` instance with the updated backoff policy.
-    ///
-    pub fn with_backoff(mut self, backoff: ExponentialBackoff) -> Self {
-        self.backoff = backoff;
-        self
+        Self { client }
     }
 
     // ===== [ KiteConnect API endpoints ] =====
@@ -77,7 +54,7 @@ impl<'c> User<'c> {
     /// Refer to the Kite API [documentation](https://kite.trade/docs/connect/v3/user/#user-profile) for more details.
     ///
     pub async fn profile(&self) -> Result<KiteApiResponse<UserProfile>> {
-        self.client.get("/user/profile", &self.backoff).await
+        self.client.get("/user/profile").await
     }
 
     /// Fetch the user margins from the API endpoint: `/user/margins`.
@@ -92,7 +69,7 @@ impl<'c> User<'c> {
     /// Refer to the Kite API [documentation](https://kite.trade/docs/connect/v3/user/#funds-and-margins) for more details.
     ///
     pub async fn margins(&self) -> Result<KiteApiResponse<UserMargins>> {
-        self.client.get("/user/margins", &self.backoff).await
+        self.client.get("/user/margins").await
     }
 
     /// Fetch the user margins for a specific segment (`equity` or `commodity`)
@@ -116,10 +93,7 @@ impl<'c> User<'c> {
         segment: SegmentKind,
     ) -> Result<KiteApiResponse<Segment>> {
         self.client
-            .get(
-                &format!("/user/margins/{}", segment.as_ref()),
-                &self.backoff,
-            )
+            .get(&format!("/user/margins/{}", segment.as_ref()))
             .await
     }
 }
