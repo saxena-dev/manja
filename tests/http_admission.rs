@@ -43,7 +43,7 @@ async fn a_refused_admission_sends_nothing() {
         .credentials(Credentials::new("k", "t").unwrap())
         .build()
         .unwrap();
-    let query = [("i", "NSE:INFY")];
+    let query = ["NSE:INFY"];
     client
         .market()
         .get_quotes::<LTPQuote>(&query)

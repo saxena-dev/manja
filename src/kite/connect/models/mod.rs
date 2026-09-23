@@ -67,10 +67,10 @@ pub use portfolio::{
 /// and instrument information.
 ///
 mod market;
-pub(crate) use market::KiteQuote;
 #[allow(unused_imports)]
 pub use market::{
-    Depth, DepthLevel, FullQuote, Instrument, InstrumentType, LTPQuote, OHLCQuote, QuoteMode, OHLC,
+    Depth, DepthLevel, FullQuote, Instrument, InstrumentType, KiteQuote, LTPQuote, OHLCQuote,
+    QuoteMode, Quotes, OHLC,
 };
 
 /// Models for the `/margins/` and `/charges/` API group, dealing with margin

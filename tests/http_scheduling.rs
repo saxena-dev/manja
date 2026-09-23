@@ -262,7 +262,7 @@ async fn cancellation_during_admission_is_recorded_as_not_started() {
     ])
     .await;
     let mut c = client(&harness.base_url());
-    let query = [("i", "NSE:INFY")];
+    let query = ["NSE:INFY"];
     c.market()
         .get_quotes::<manja::kite::connect::models::LTPQuote>(&query)
         .await

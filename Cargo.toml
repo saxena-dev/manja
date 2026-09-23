@@ -87,3 +87,7 @@ required-features = ["http"]
 [[test]]
 name = "http_margins"
 required-features = ["http"]
+
+[[test]]
+name = "http_market"
+required-features = ["http"]
