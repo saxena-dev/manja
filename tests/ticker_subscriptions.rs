@@ -1,6 +1,6 @@
-//! Desired subscriptions, revisions and wire order through the owner
-//! (plan task S17), against loopback WebSocket servers. Request shapes follow
-//! `kite-api-docs/docs/connect/v3/websocket.md:26-45`.
+//! Desired subscriptions, revisions and wire order through the owner,
+//! against loopback WebSocket servers. Request shapes follow
+//! `kite:websocket.md:22-47`.
 
 mod support;
 

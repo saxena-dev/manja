@@ -1,7 +1,7 @@
 //! Margin and charges calculation API group: `/margins/` and `/charges/`.
 //!
 //! Order margins, basket margins and the virtual contract note are JSON
-//! POST calculations (`kite-api-docs/docs/connect/v3/margins.md:1-13`). They
+//! POST calculations (`kite:margins.md:1-13`). They
 //! change no order or position, so the scheduler classifies them as `Calc`
 //! and may retry them after 429, 502, 503, 504 or a transport fault, within
 //! the operation deadline, like reads.
@@ -11,8 +11,9 @@
 //! the broker sent them; no entry is invented for an order the response
 //! omits.
 //!
-//! The documented sandbox excludes every margin calculation endpoint (arch
-//! §21.3, D1), so these contracts are verified only against local fixtures.
+//! The documented sandbox excludes every margin calculation endpoint
+//! (`kite:sandbox.md:294-300`), so these contracts are verified only
+//! against local fixtures.
 //! No test or example falls back to a sandbox or production host.
 //!
 use crate::kite::connect::{

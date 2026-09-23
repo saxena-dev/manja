@@ -1,10 +1,10 @@
-//! Order margins, basket margins and the virtual contract note (plan task
-//! S10, charges under decision branch (a)).
+//! Order margins, basket margins and the virtual contract note (order
+//! charges), each a supported calculation (`docs/contract.md` §5).
 //!
 //! Baselines are the official `order_margins.json`, `basket_margins.json`
 //! and `virtual_contract_note.json`, served unchanged. Request bodies are
 //! asserted against the documented examples
-//! (`kite-api-docs/docs/connect/v3/margins.md:21-36,138-167,350-388`).
+//! (`kite:margins.md:21-36,138-167,350-388`).
 //! Negative and partial responses are labelled supplements.
 
 mod support;

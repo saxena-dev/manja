@@ -110,7 +110,7 @@ use crate::kite::ticker::actor::subscriptions::{
 use crate::kite::ticker::models::Mode;
 
 /// The Kite Connect WebSocket endpoint
-/// (`kite-api-docs/docs/connect/v3/websocket.md:20`).
+/// (`kite:websocket.md:20`).
 pub const KITE_TICKER_URL: &str = "wss://ws.kite.trade";
 
 // ---- limits -------------------------------------------------------------
@@ -127,7 +127,7 @@ impl fmt::Display for TickerLimitError {
 
 impl std::error::Error for TickerLimitError {}
 
-/// Runtime bounds of one ticker instance (SDK contract §5.3).
+/// Runtime bounds of one ticker instance (`docs/contract.md` §3.3).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct TickerLimits {
     handshake_timeout: Duration,
@@ -315,8 +315,8 @@ pub enum TickerEvent {
     Lifecycle(LifecycleEvent),
 }
 
-/// Connection state (architecture §7.1). `Active` is not quote freshness
-/// and not permission to trade.
+/// Connection state (`docs/contract.md` §2.7). `Active` means the desired
+/// subscriptions were written to the connection, not that quotes are current.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 #[non_exhaustive]
 pub enum TickerState {

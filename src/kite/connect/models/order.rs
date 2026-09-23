@@ -2,8 +2,7 @@
 //!
 //! These are broker evidence types: what the order book, order history and
 //! trade book endpoints returned at the time of the request
-//! (`kite-api-docs/docs/connect/v3/orders.md`). They are not reconciled
-//! account state.
+//! (`kite:orders.md`).
 //!
 //! Timestamps are offset-free IST strings parsed with the crate's single
 //! broker datetime parser into `DateTime<FixedOffset>` at +05:30; `null`
@@ -28,11 +27,11 @@ use crate::kite::protocol::{BrokerTimestamp, Inbound, InstrumentToken};
 /// **not** a fill, not confirmation that a modification took effect, and not
 /// confirmation of cancellation: "Successful placement of an order via the
 /// API does not imply its successful execution"
-/// (`kite-api-docs/docs/connect/v3/orders.md:50-52`). The order's state is
+/// (`kite:orders.md:50-52`). The order's state is
 /// learned from the order book, order history or order updates.
 ///
 /// An automatically sliced placement (`autoslice = true` above the freeze
-/// quantity, `orders.md:548`) carries one result per further slice in
+/// quantity, `kite:orders.md:548`) carries one result per further slice in
 /// [`Self::slices`]. A slice can fail while others are placed, so check
 /// every entry: a receipt with a [`SliceResult::Failed`] slice is **not** a
 /// complete placement. The official mock (`autoslice_response.json`)
@@ -356,7 +355,7 @@ fn check_price(field: &'static str, p: Option<f64>) -> Result<(), RequestError> 
     }
 }
 
-// orders.md:37,101: greater than 0 and up to 100, or -1 for automatic.
+// kite:orders.md:37,101: greater than 0 and up to 100, or -1 for automatic.
 fn check_market_protection(p: Option<f64>) -> Result<(), RequestError> {
     match p {
         Some(v) if v == -1.0 || (v > 0.0 && v <= 100.0) => Ok(()),
@@ -390,7 +389,7 @@ fn push<T: std::fmt::Display>(
 }
 
 /// A new order: `POST /orders/{variety}`, form-encoded
-/// (`kite-api-docs/docs/connect/v3/orders.md:58-103`).
+/// (`kite:orders.md:58-103`).
 ///
 /// It has no order ID, status, fill or timestamp: those are response-only
 /// facts, and a request type that cannot hold them cannot fabricate them:
@@ -406,8 +405,8 @@ fn push<T: std::fmt::Display>(
 /// ```
 ///
 /// [`Self::validate`] checks the protocol shape only: the route, identifiers,
-/// quantities and order-type field combinations. It is not a risk, exposure
-/// or authority check; applications add those.
+/// quantities and order-type field combinations. Nothing that depends on the
+/// account, such as funds or margins, is checked; the broker does that.
 #[derive(Clone, Debug, PartialEq)]
 pub struct PlaceOrderRequest {
     /// Order variety; selects the route.
@@ -591,7 +590,7 @@ impl PlaceOrderRequest {
 }
 
 /// Changes to an open or pending order: `PUT /orders/{variety}/{order_id}`,
-/// form-encoded (`kite-api-docs/docs/connect/v3/orders.md:105-146`).
+/// form-encoded (`kite:orders.md:105-146`).
 ///
 /// Only the fields that are set are sent. A successful modification returns
 /// an [`OrderReceipt`], which does not prove the modification took effect.

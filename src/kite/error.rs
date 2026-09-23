@@ -102,7 +102,7 @@ pub enum HttpErrorKind {
     /// The broker returned an error envelope.
     Broker,
     /// The broker rejected the credentials (`TokenException` or HTTP 403,
-    /// `kite-api-docs/docs/connect/v3/exceptions.md:20,35`).
+    /// `kite:exceptions.md:20,35`).
     AuthRejected,
     /// A response was received but could not be decoded, was oversized, or
     /// lacked the required success envelope or payload.
@@ -363,7 +363,7 @@ impl std::error::Error for HttpError {
 }
 
 /// The documented broker exception types
-/// (`kite-api-docs/docs/connect/v3/exceptions.md:18-28`).
+/// (`kite:exceptions.md:18-28`).
 ///
 /// An undocumented `error_type` is preserved as
 /// [`Inbound::Unknown`] rather than

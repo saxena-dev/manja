@@ -1,4 +1,4 @@
-//! Downstream-style reachability (plan task S25): every public signature's
+//! Downstream-style reachability: every public signature's
 //! request, response, error, command, status, guard and bound types are
 //! named here through their documented public paths. It compiles against
 //! the default features and touches no network.

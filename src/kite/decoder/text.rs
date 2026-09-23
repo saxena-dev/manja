@@ -1,4 +1,4 @@
-//! Text messages (`kite-api-docs/docs/connect/v3/websocket.md:165-183`).
+//! Text messages (`kite:websocket.md:165-184`).
 //!
 //! A text message is a JSON object `{"type": …, "data": …}`:
 //!

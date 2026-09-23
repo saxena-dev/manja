@@ -1,6 +1,7 @@
-//! Binary framing against the vendored corpus (plan task S21).
+//! Binary framing against the vendored corpus.
 //!
-//! The qdx `<case>.json` files are an oracle, not protocol truth; the
+//! The qdx `<case>.json` files (`docs/verification.md` §1.2) are a
+//! cross-check, not protocol truth; the
 //! dispositions of their differences are in `manja::kite::decoder::framing`.
 
 mod support;

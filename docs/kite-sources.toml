@@ -1,0 +1,96 @@
+# Kite Connect v3 documentation pages cited by this repository.
+#
+# A citation in source, tests or docs has the form `kite:<page>.md:<lines>`,
+# for example `kite:orders.md:42-52`, or `kite:<page>.md` for a whole page.
+# <page> is a [[page]] entry below. <lines> are 1-based line numbers, as
+# comma-separated numbers or ranges, in the exact bytes that were fetched
+# from `url` at `accessed`. `sha256` and `bytes` identify those bytes, and
+# `lines` is their newline count.
+#
+# The pages are Markdown served by Kite Connect: append `index.md` to a page
+# path of https://kite.trade/docs/connect/v3/. `scripts/verify-kite-sources.sh`
+# fetches every page again and reports any page whose content has changed
+# since it was accessed. `tests/references.rs` checks, without a network,
+# that every citation names a page listed here and stays within its lines.
+
+manifest_version = 1
+
+[[page]]
+name = "exceptions.md"
+url = "https://kite.trade/docs/connect/v3/exceptions/index.md"
+accessed = "2026-09-23T14:42:30Z"
+sha256 = "03bbb4044baa71e9ab77bba1e6be62cfb9819ef4d4b488ede6a27ca3e27a1729"
+bytes = 5935
+lines = 58
+
+[[page]]
+name = "margins.md"
+url = "https://kite.trade/docs/connect/v3/margins/index.md"
+accessed = "2026-09-23T14:42:26Z"
+sha256 = "3d7bd29fc0cbdd8d31a11465ad394bf6d2c2f5e433c736d0bb1f27b8b2eb039d"
+bytes = 22270
+lines = 500
+
+[[page]]
+name = "market-quotes.md"
+url = "https://kite.trade/docs/connect/v3/market-quotes/index.md"
+accessed = "2026-09-23T14:42:26Z"
+sha256 = "3ec02cc208da0def2c635be164fe46a13f7f23f0338ffeb7c1799d4dd6a67eaa"
+bytes = 18205
+lines = 278
+
+[[page]]
+name = "orders.md"
+url = "https://kite.trade/docs/connect/v3/orders/index.md"
+accessed = "2026-09-23T14:42:26Z"
+sha256 = "c8ee7c194e0a2980f529b5d0afbba0df6cc99b237e4f5eae917b008cc0cbaba6"
+bytes = 51863
+lines = 954
+
+[[page]]
+name = "portfolio.md"
+url = "https://kite.trade/docs/connect/v3/portfolio/index.md"
+accessed = "2026-09-23T14:42:28Z"
+sha256 = "0a7dd052b8ce2375331353f6a399c0363215e9a9a32d852599e26df709192641"
+bytes = 27386
+lines = 541
+
+[[page]]
+name = "postbacks.md"
+url = "https://kite.trade/docs/connect/v3/postbacks/index.md"
+accessed = "2026-09-23T14:42:28Z"
+sha256 = "5ceaea0b57acd907adf18c193a9bd79c8a43e3d0c360311609b778f0ab599dec"
+bytes = 10458
+lines = 97
+
+[[page]]
+name = "response-structure.md"
+url = "https://kite.trade/docs/connect/v3/response-structure/index.md"
+accessed = "2026-09-23T14:42:31Z"
+sha256 = "0295e17ce0470417f4f361efae573d01af0bc86c8a08501ef8793e3e9d0ea43f"
+bytes = 1419
+lines = 35
+
+[[page]]
+name = "sandbox.md"
+url = "https://kite.trade/docs/connect/v3/sandbox/index.md"
+accessed = "2026-09-23T14:43:05Z"
+sha256 = "026672fb9abff3806cb9ab7a8473e9e7401556370b87c2e832e7c4cd525c55ee"
+bytes = 7702
+lines = 309
+
+[[page]]
+name = "user.md"
+url = "https://kite.trade/docs/connect/v3/user/index.md"
+accessed = "2026-09-23T14:42:27Z"
+sha256 = "bdaf819193ef17bf1d5637485eb1863aed34c93a549a277de82d0c7f9d698ec6"
+bytes = 18625
+lines = 310
+
+[[page]]
+name = "websocket.md"
+url = "https://kite.trade/docs/connect/v3/websocket/index.md"
+accessed = "2026-09-23T14:42:25Z"
+sha256 = "3296aae249a1081207fb34fa27f2cf6913265bdeb2a6b01aa65a1bbe2d8ec9cc"
+bytes = 10916
+lines = 184

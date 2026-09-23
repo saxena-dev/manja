@@ -2,7 +2,7 @@
 //!
 //! Placing an order registers it with the OMS. That does not guarantee its
 //! receipt at the exchange, and its status is not known when placement
-//! returns (`kite-api-docs/docs/connect/v3/orders.md:42-52`). The
+//! returns (`kite:orders.md:42-52`). The
 //! acknowledgements returned here ([`OrderReceipt`]) therefore assert no
 //! fill, no final modification and no confirmed cancellation; the order book,
 //! order history and order updates report what happened.
@@ -130,8 +130,8 @@ impl<'c> Orders<'c> {
     ///
     /// Only the `Authorization` header authenticates the request; neither
     /// the API key nor the access token is placed in the URL
-    /// (`kite-api-docs/docs/connect/v3/orders.md:148-162`). The receipt
-    /// acknowledges the request, not a confirmed cancellation.
+    /// (`kite:orders.md:147-162`). The receipt acknowledges the request, not a
+    /// confirmed cancellation.
     pub async fn cancel_order(
         &self,
         variety: OrderVariety,

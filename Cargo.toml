@@ -14,7 +14,7 @@ exclude = [
     "tests/*",
     "examples/*",
     "benches/*",
-    "*.md",
+    "/*.md",
     ".*",
     ".temp/*",
     "kiteconnect-mocks",
@@ -40,7 +40,7 @@ tokio-tungstenite = { version = "0.23.1", features = ["native-tls"], optional = 
 tracing = "0.1.40"
 tungstenite = { version = "0.23.0", optional = true }
 
-# Feature slices (plans/sdk-contract.v0.md §8). The default enables every
+# Feature slices (docs/contract.md §1). The default enables every
 # slice: both live transports and the decoder.
 [features]
 default = ["http", "ticker", "decoder"]
@@ -179,7 +179,7 @@ required-features = ["ticker", "decoder"]
 name = "decode_offline"
 required-features = ["decoder"]
 
-# Observability overhead measurements (SDK contract §6.8); see
+# Observability overhead measurements (docs/verification.md §5.2); see
 # benches/overhead.rs.
 [[bench]]
 name = "overhead"

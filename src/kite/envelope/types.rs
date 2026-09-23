@@ -16,9 +16,9 @@
 //!
 //! Every portable field is plain data. No `Instant`, socket, task handle or
 //! credential appears in an envelope, and nothing here requires an async
-//! runtime, a storage format or a decoder. Consumers define their own
-//! persistent record schemas; [`ENVELOPE_VERSION`] versions only this
-//! in-memory/portable form, independently of decoder and archive versions.
+//! runtime, a storage format or a decoder. [`ENVELOPE_VERSION`] versions
+//! only this in-memory and serializable form, independently of the decoder
+//! version (`docs/contract.md` §2.8).
 //!
 //! ```
 //! use manja::kite::envelope::{

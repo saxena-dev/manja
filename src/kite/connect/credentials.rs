@@ -264,7 +264,7 @@ impl Credentials {
     }
 
     /// The `Authorization` header value, `token api_key:access_token`
-    /// (`kite-api-docs/docs/connect/v3/user.md:124`).
+    /// (`kite:user.md:124`).
     pub fn authorization_header(&self) -> SecretText {
         SecretText(Secret::new(format!(
             "token {}:{}",
@@ -274,7 +274,7 @@ impl Credentials {
     }
 
     /// The WebSocket connection query string,
-    /// `api_key=…&access_token=…` (`kite-api-docs/docs/connect/v3/websocket.md:20`).
+    /// `api_key=…&access_token=…` (`kite:websocket.md:20`).
     ///
     /// Both values are validated printable ASCII; the reserved query
     /// characters `&`, `=`, `#`, `+`, `%` and `?` are percent-encoded.

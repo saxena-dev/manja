@@ -1,4 +1,4 @@
-//! Admission wired into the HTTP client (plan task S05): a request refused
+//! Admission wired into the HTTP client: a request refused
 //! by the shared budget scope fails before transport, with affirmative
 //! `NotStarted` evidence and no request on the wire.
 

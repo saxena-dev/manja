@@ -13,15 +13,15 @@
 //! [`TickerRequest::subscribe_with_mode`], which creates a `mode` action, not a
 //! `subscribe` action.
 //!
-//! Its migration disposition, set in the SDK contract, is deprecation with
-//! corrected documentation, not in-place repair, and the same disposition
+//! It is deprecated with corrected documentation, not repaired in place
+//! (`docs/migration.md` §5), and the same disposition
 //! covers `subscribe_with_mode`. The legacy client stays compiled and exported
 //! during migration, its stream item type does not change, and it is removed
 //! only in a later documented breaking release after its replacement ships.
 //!
 //! # Raw and typed streams
 //!
-//! The SDK contract specifies the replacement, built in `actor`, as one
+//! The replacement, built in `actor` (`docs/contract.md` §2.5), is one
 //! socket-owning task with typed commands, a status handle and a supervised task
 //! guard. Its primary receiver yields raw observations and lifecycle events
 //! before any interpretation, and it needs no decoder. Typed market events come

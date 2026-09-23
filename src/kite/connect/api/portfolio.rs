@@ -7,7 +7,7 @@
 //! positions. The portfolio APIs return instruments in a portfolio with up-to-date
 //! profit and loss computations.
 //!
-//! Refer to the official [API documentation](https://kite.trade/docs/connect/v3/portfolio/).
+//! Refer to the official API documentation (`kite:portfolio.md`).
 //!
 
 use crate::kite::connect::{
@@ -76,7 +76,7 @@ impl<'c> Portfolio<'c> {
     /// `PUT /portfolio/positions`, form-encoded, one attempt.
     ///
     /// The request is validated first; an invalid one sends nothing. The
-    /// `true` result is the broker's response, not reconciled position state.
+    /// `true` result is the broker's response.
     pub async fn convert_position(
         &self,
         request: &PositionConversionRequest,

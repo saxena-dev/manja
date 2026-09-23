@@ -1,6 +1,13 @@
 manja
 =====
 
+[![CI](https://github.com/saxena-dev/manja/actions/workflows/ci.yml/badge.svg)](https://github.com/saxena-dev/manja/actions/workflows/ci.yml)
+[![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+[![Rust 1.95+](https://img.shields.io/badge/rust-1.95%2B-orange.svg)](https://www.rust-lang.org/)
+[![Docs.rs](https://docs.rs/manja/badge.svg)](https://docs.rs/manja)
+[![Crates.io](https://img.shields.io/crates/v/manja.svg)](https://crates.io/crates/manja)
+[![Downloads](https://img.shields.io/crates/d/manja.svg)](https://crates.io/crates/manja)
+
 > **Manja** (IPA: /maːŋdʒʱaː/) n.: A type of abrasive string utilized primarily for flying fighter kites, especially prevalent in South Asian countries. It is crafted by coating cotton string with powdered glass or a similar abrasive substance.
 
 An asynchronous Rust client library for [Zerodha](https://zerodha.com/)'s
@@ -120,7 +127,7 @@ a clean shutdown; any other end yields one error first.
 when the owner accepts it, with a revision; `CommandsSent` means it was written to the
 socket, not that the broker acted on it. `Active` means the desired map was written to a
 connection, not that quotes are current. An order receipt means the broker accepted the
-request, not that it filled. Freshness, readiness to trade and risk are yours to decide.
+request, not that it filled. Whether market data is current is yours to decide.
 
 **Cancellation and concurrency.** Futures are lazy: dropping one before its first poll
 does nothing. Dropping an HTTP future after dispatch does not cancel anything at the
@@ -132,6 +139,17 @@ with no client-wide lock.
 your own `MetricRecorder` (or none), and your own `tracing` subscriber; spans and metrics
 use closed label domains only. `HTTPClient::diagnostics` and `TickerHandle::status` work
 with no collector at all.
+
+## Documentation
+
+- [`docs/contract.md`](docs/contract.md): capabilities, runtime bounds with their
+  defaults and ranges, the observability schema, and the decisions behind them.
+- [`docs/verification.md`](docs/verification.md): fixtures, test targets, decoder
+  qualification and observability budgets.
+- [`docs/migration.md`](docs/migration.md): changes from 0.1.
+- [`docs/kite-sources.toml`](docs/kite-sources.toml): the Kite Connect documentation
+  pages cited as `kite:<page>.md:<lines>`, with the time each was accessed and its
+  SHA-256. `scripts/verify-kite-sources.sh` checks them against the live pages.
 
 ## Supported Kite Connect 3.0 endpoints
 
@@ -154,10 +172,11 @@ Not supported: GTT, historical candles, mutual funds, and holdings authorisation
 ## Migrating from 0.1
 
 The browser login flow is removed, several response types and error behaviors were
-corrected, and the legacy WebSocket client is deprecated. The migration notes list
-every change; the short version: obtain the request token yourself, call
-`client.session(api_key).exchange(...)`, build `Credentials` from the returned session,
-and use `TickerBuilder` instead of `WebSocketClient`.
+corrected, and the legacy WebSocket client is deprecated.
+[`docs/migration.md`](docs/migration.md) lists every change. The short version: obtain
+the request token yourself, call `client.session(api_key).exchange(...)`, build
+`Credentials` from the returned session, and use `TickerBuilder` instead of
+`WebSocketClient`.
 
 ## Disclaimer
 

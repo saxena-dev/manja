@@ -1,11 +1,12 @@
-//! Packet families decoded field by field (plan task S22).
+//! Packet families decoded field by field.
 //!
 //! Baselines: the official `ticker_quote.packet` and `ticker_full.packet`
 //! (base64 text of one bare packet) with their JSON, the vendored qdx
-//! single-packet and multi-packet pairs, and every packet of the real
+//! reference outputs (`docs/verification.md` §1.2) for the
+//! single-packet and multi-packet cases, and every packet of the real
 //! capture. `ticker_ltp.json` has no packet file, so the LTP layout is
 //! covered by the qdx `single_ltp` pair only. The real capture holds only
-//! full and index-full packets (plan A-02), so it cannot exercise the LTP,
+//! full and index-full packets, so it cannot exercise the LTP,
 //! quote or index-quote layouts.
 
 mod support;

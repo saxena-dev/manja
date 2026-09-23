@@ -3,15 +3,15 @@
 //! Binary ticker packets carry prices as `int32`. The protocol reference
 //! states: "For currencies, the `int32` price values should be divided by
 //! 10000000 ... For everything else, the price values should be divided by
-//! 100" (`kite-api-docs/docs/connect/v3/websocket.md:89`). That sentence also
+//! 100" (`kite:websocket.md:89`). That sentence also
 //! says the currency divisor yields "four decimal places", which a divisor of
 //! 10 000 000 does not; the explicit divisor is what this policy implements.
 //!
 //! | Segment | Divisor | Status and evidence |
 //! |---|---|---|
-//! | CDS | 10 000 000 | supported: websocket.md:89 "currencies"; owner decision DEC-Q3 |
+//! | CDS | 10 000 000 | supported: `kite:websocket.md:89` "currencies" (`docs/contract.md` §5) |
 //! | BCD | — | **disabled**: the reference names no BCD rule; [`ScaleError::UnsupportedSegment`] |
-//! | NSE, NFO, BSE, BFO, MCX, MCXSX, INDICES | 100 | supported: websocket.md:89 "everything else" |
+//! | NSE, NFO, BSE, BFO, MCX, MCXSX, INDICES | 100 | supported: `kite:websocket.md:89` "everything else" |
 //!
 //! The previous helper's CDS 1 000 000 and BCD 1 000 values had no protocol
 //! evidence and are not used. Raw integers stay available for every segment,
@@ -113,7 +113,7 @@ mod tests {
         assert_eq!(price_divisor(Segment::Indices), Ok(100));
         assert_eq!(price_divisor(Segment::Cds), Ok(10_000_000));
         // Golden: an NSE raw price of 157 610 paise is 1576.10 rupees
-        // (qdx single_full oracle, raw last_traded_price 157610).
+        // (the vendored single_full case, raw last_traded_price 157610).
         let p = ScaledPrice::from_raw(157_610, Segment::Nse).unwrap();
         assert_eq!((p.raw(), p.divisor()), (157_610, 100));
         assert_eq!(p.to_f64(), 1576.10);

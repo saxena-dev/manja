@@ -1,4 +1,4 @@
-//! Ticker instrumentation and queryable status (plan task S20), against the
+//! Ticker instrumentation and queryable status, against the
 //! loopback WebSocket harness, with the SDK's in-memory recorder and a
 //! test-local `tracing` capture layer. Nothing global is installed.
 
@@ -167,7 +167,7 @@ fn gauges_settled(obs: &Observability) -> bool {
     obs.collect_gauges().iter().all(|g| g.value == 0.0)
 }
 
-// ---- R-02 ---------------------------------------------------------------
+// ---- message counts -----------------------------------------------------
 
 async fn raw_count(events: &mut TickerEvents, n: usize) {
     let mut seen = 0;
@@ -212,7 +212,7 @@ async fn complete_messages_are_counted_heartbeats_included_never_packets() {
     handle.shutdown().await.unwrap();
 }
 
-// ---- R-01 ---------------------------------------------------------------
+// ---- connection, restore and command facts ------------------------------
 
 #[tokio::test]
 async fn handshakes_sockets_reconnects_restores_and_commands_have_their_own_facts() {
@@ -362,7 +362,7 @@ async fn caller_context_survives_the_mailbox_without_mixing_callers() {
     handle.shutdown().await.unwrap();
 }
 
-// ---- R-03 / R-04 --------------------------------------------------------
+// ---- status, ages and failure history -----------------------------------
 
 #[tokio::test]
 async fn status_ages_advance_at_inspection_and_teardown_leaves_no_ghost_gauge() {
@@ -456,7 +456,7 @@ async fn failures_are_kept_in_bounded_history_and_changes_are_notified() {
     handle.shutdown().await.unwrap();
 }
 
-// ---- R-05 / R-06 --------------------------------------------------------
+// ---- telemetry independence and label content ---------------------------
 
 async fn scripted(obs: Observability) -> Vec<String> {
     let h = WsHarness::start(vec![

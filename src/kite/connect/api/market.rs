@@ -1,15 +1,15 @@
 //! Market quotes and instruments API group: `/quote/` and `/instruments/`
-//! (`kite-api-docs/docs/connect/v3/market-quotes.md`).
+//! (`kite:market-quotes.md`).
 //!
 //! # Quote requests
 //!
 //! Each quote endpoint has a documented instrument limit: 500 for `/quote`,
-//! 1000 for `/quote/ohlc` and `/quote/ltp` (`market-quotes.md:272-278`). The
+//! 1000 for `/quote/ohlc` and `/quote/ltp` (`kite:market-quotes.md:272-278`). The
 //! policy for more instruments is **explicit rejection**: a request over the
 //! limit is a `Validation` error before admission and nothing is sent. The
 //! SDK never truncates a request and never splits it into hidden batches;
 //! at the documented quote rate of one request per second
-//! (`exceptions.md:49`) a batch would be several separate snapshots and
+//! (`kite:exceptions.md:49`) a batch would be several separate snapshots and
 //! seconds of waiting. Callers that need more instruments issue several
 //! requests and combine them knowingly.
 //!
@@ -21,7 +21,7 @@
 //!
 //! # Instruments
 //!
-//! The instrument dump is CSV (`market-quotes.md:15-48`). It is read under
+//! The instrument dump is CSV (`kite:market-quotes.md:15-48`). It is read under
 //! the CSV body bound (`B-HTTP-08`, 64 MiB by default) and parsed row by row;
 //! a malformed row is a `Decode` error naming its row number. Its
 //! `last_price` is not a live quote.
@@ -136,7 +136,7 @@ impl<'c> Market<'c> {
     /// Every tradable instrument, parsed.
     ///
     /// The dump is large; request it once a day and store it
-    /// (`market-quotes.md:50-52`).
+    /// (`kite:market-quotes.md:50-52`).
     pub async fn get_instruments_all(&self) -> Result<Vec<Instrument>> {
         self.client
             .get_csv("/instruments", |csv| {

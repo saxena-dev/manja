@@ -1,8 +1,8 @@
 //! The partial order-update DTO.
 //!
 //! [`OrderUpdate`] is the payload of an order postback
-//! (`kite-api-docs/docs/connect/v3/postbacks.md:13-93`) and of the `data`
-//! field of a WebSocket `order` text message (`websocket.md:167-182`). It is
+//! (`kite:postbacks.md:13-93`) and of the `data`
+//! field of a WebSocket `order` text message (`kite:websocket.md:167-182`). It is
 //! the crate's single order-update type, shared by HTTP-side postback
 //! handling and the text decoder.
 //!
@@ -16,7 +16,7 @@
 //! An update is broker evidence about one order at one moment. It is not a
 //! fill confirmation unless its own fields say so, and combining updates into
 //! account state is the application's job. Checksum verification of HTTP
-//! postbacks (`postbacks.md:54-56`) needs the API secret and belongs to a
+//! postbacks (`kite:postbacks.md:54-56`) needs the API secret and belongs to a
 //! webhook-ingestion boundary this crate does not provide.
 //!
 use std::fmt;

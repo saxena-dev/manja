@@ -1,12 +1,12 @@
 //! Margin and charges calculation types
-//! (`kite-api-docs/docs/connect/v3/margins.md`).
+//! (`kite:margins.md`).
 //!
 //! These endpoints take JSON bodies, not form fields: "Requests to the above
 //! endpoints are JSON POST and it needs `application/json` header"
-//! (`margins.md:13`). Order margins take and return arrays
-//! (`margins.md:15-85`); basket margins return initial, final and per-order
-//! margins (`margins.md:135-172`); the virtual contract note returns
-//! order-wise charges (`margins.md:345-500`).
+//! (`kite:margins.md:13`). Order margins take and return arrays
+//! (`kite:margins.md:15-85`); basket margins return initial, final and per-order
+//! margins (`kite:margins.md:135-344`); the virtual contract note returns
+//! order-wise charges (`kite:margins.md:345-500`).
 //!
 //! Results are broker calculations at the time of the request, not reserved
 //! or blocked margin.
@@ -40,7 +40,7 @@ fn check_non_negative(field: &'static str, v: f64) -> Result<(), RequestError> {
 }
 
 /// One order in an order-margin or basket-margin calculation
-/// (`margins.md:87-98`).
+/// (`kite:margins.md:87-98`).
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct OrderMarginRequest {
     /// Exchange. `NONE` and `INDICES` are rejected.
@@ -72,7 +72,7 @@ impl OrderMarginRequest {
     }
 }
 
-/// One order in a virtual contract note calculation (`margins.md:391-401`).
+/// One order in a virtual contract note calculation (`kite:margins.md:391-403`).
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct OrderChargesRequest {
     /// Order ID; for a hypothetical order it may be any string.
@@ -133,7 +133,7 @@ pub struct GST {
     pub total: f64,
 }
 
-/// The charges breakdown of an order (`margins.md:119-133`).
+/// The charges breakdown of an order (`kite:margins.md:119-133`).
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Charges {
     /// Tax levied for each transaction on the exchanges.
@@ -155,7 +155,7 @@ pub struct Charges {
 }
 
 /// The margins of one order, or an aggregate in a basket
-/// (`margins.md:100-117`).
+/// (`kite:margins.md:100-117`).
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct OrderMargin {
     /// `equity` or `commodity`; empty in basket aggregates.
@@ -188,7 +188,7 @@ pub struct OrderMargin {
     pub total: f64,
 }
 
-/// Basket margins (`margins.md:135-172`).
+/// Basket margins (`kite:margins.md:135-344`).
 ///
 /// The `charges` field can omit `transaction_tax` for baskets that mix
 /// segments with different tax types; the per-order `orders` carry the
@@ -206,7 +206,7 @@ pub struct BasketMargin {
 }
 
 /// The charges of one order in a virtual contract note
-/// (`margins.md:488-500`).
+/// (`kite:margins.md:488-500`).
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct OrderCharges {
     /// BUY or SELL.

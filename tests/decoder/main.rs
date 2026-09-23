@@ -1,5 +1,6 @@
-//! Decoder qualification (plan task S28): the golden corpus mapped to the S01
-//! inventory, and a seeded, budgeted property campaign.
+//! Decoder qualification: the golden corpus mapped to the coverage
+//! inventory (`docs/verification.md` §2), and a seeded, budgeted property
+//! campaign (`docs/verification.md` §4).
 //!
 //! The campaign uses an in-crate SplitMix64 generator: no fuzzing crate is
 //! added. Every case derives from one recorded seed, so a failure replays
@@ -94,7 +95,7 @@ fn campaign(name: &str, base: u64, salt: u64) -> (Rng, u64) {
     (Rng(s ^ salt), n)
 }
 
-// ---- oracles ----------------------------------------------------------
+// ---- reference outputs ------------------------------------------------
 
 fn batch(packets: &[Vec<u8>]) -> Vec<u8> {
     let mut out = (packets.len() as u16).to_be_bytes().to_vec();
@@ -218,7 +219,7 @@ fn assert_frames_exact(
     }
 }
 
-// ---- R-01: golden corpus mapped to the S01 inventory -------------------
+// ---- golden corpus mapped to the coverage inventory --------------------
 
 fn packets_of(name: &str) -> Vec<Packet> {
     let bytes = read_ticker_fixture(&format!("protocol/{name}.bin"));
@@ -373,7 +374,7 @@ fn a_mutated_vendored_byte_is_caught() {
     assert_ne!(after, before, "the regression suite detects a changed byte");
 }
 
-// ---- R-03: raw evidence and clock independence -------------------------
+// ---- raw bytes and clock independence ----------------------------------
 
 #[test]
 fn outputs_ignore_clocks_and_leave_raw_bytes_intact() {
@@ -419,7 +420,7 @@ fn outputs_ignore_clocks_and_leave_raw_bytes_intact() {
     assert_eq!(o.payload().as_bytes(), bad);
 }
 
-// ---- R-02: seeded property campaign ------------------------------------
+// ---- seeded property campaign ------------------------------------------
 
 const FAMILIES: [usize; 5] = [8, 28, 32, 44, 184];
 

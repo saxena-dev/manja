@@ -1,4 +1,4 @@
-//! HTTP operation, attempt and admission instrumentation (plan task S15).
+//! HTTP operation, attempt and admission instrumentation.
 //!
 //! Spans are captured by a test-local `tracing` layer installed as the
 //! thread's default subscriber; metrics by the SDK's `InMemoryRecorder`.
@@ -142,7 +142,7 @@ fn gauges_settled(obs: &Observability) -> bool {
     obs.collect_gauges().iter().all(|g| g.value == 0.0)
 }
 
-// ---- R-01 ---------------------------------------------------------------
+// ---- operations and attempts --------------------------------------------
 
 #[tokio::test]
 async fn one_operation_span_and_count_with_one_child_per_actual_attempt() {
@@ -309,7 +309,7 @@ async fn mutations_never_count_a_retry() {
     );
 }
 
-// ---- R-02 ---------------------------------------------------------------
+// ---- durations ----------------------------------------------------------
 
 #[tokio::test]
 async fn operation_time_includes_admission_and_attempt_time_excludes_it() {
@@ -343,7 +343,7 @@ async fn operation_time_includes_admission_and_attempt_time_excludes_it() {
     );
 }
 
-// ---- R-03 ---------------------------------------------------------------
+// ---- gauges -------------------------------------------------------------
 
 #[tokio::test]
 async fn gauges_settle_on_success_error_cancellation_and_teardown() {
@@ -420,7 +420,7 @@ async fn gauges_settle_on_success_error_cancellation_and_teardown() {
     assert!(gauges_settled(&obs));
 }
 
-// ---- R-04 ---------------------------------------------------------------
+// ---- caller context -----------------------------------------------------
 
 #[tokio::test]
 async fn concurrent_callers_keep_their_own_context() {
@@ -484,7 +484,7 @@ async fn concurrent_callers_keep_their_own_context() {
     assert_eq!(rec.counter_total(Instrument::HttpRetriesTotal), 3);
 }
 
-// ---- R-05 / R-06 --------------------------------------------------------
+// ---- label content and telemetry independence ---------------------------
 
 const ORDER_ID: &str = "151220000000000";
 const SECRET: &str = "test_api_secret";

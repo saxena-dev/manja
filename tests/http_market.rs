@@ -1,8 +1,8 @@
-//! Quote completeness and the instrument master (plan task S11).
+//! Quote completeness and the instrument master.
 //!
 //! Baselines are the official `quote.json`, `ohlc.json`, `ltp.json`,
 //! `instruments_all.csv` and `instruments_nse.csv`, served unchanged.
-//! Limits come from `kite-api-docs/docs/connect/v3/market-quotes.md:272-278`.
+//! Limits come from `kite:market-quotes.md:272-278`.
 //! Missing-key, unexpected-key and malformed variants are labelled
 //! supplements derived from those files.
 

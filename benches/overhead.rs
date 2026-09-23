@@ -1,4 +1,4 @@
-//! Observability overhead (plan task S29, SDK contract §6.8).
+//! Observability overhead (`docs/verification.md` §5.2).
 //!
 //! `cargo bench --offline --bench overhead`. Release profile; each case runs
 //! a warm-up sample that is discarded, then 30 measured samples. Four
@@ -15,7 +15,7 @@
 //! and the decoder.
 //!
 //! With `MANJA_BUDGETS=check` the run fails when a measured delta against
-//! `disabled` exceeds the approved budget (see `BUDGETS`).
+//! `disabled` exceeds its budget (see `BUDGETS`, `docs/verification.md` §5.3).
 
 #[path = "../tests/support/mod.rs"]
 mod support;
@@ -420,7 +420,7 @@ fn decode_replay(
 
 // ---- budgets ----------------------------------------------------------
 
-// Budgets approved at S29 against the recorded host (Beads AUX-mv1.38):
+// Budgets set against the recorded host (`docs/verification.md` §5.3):
 // the maximum median time per operation of each configuration over
 // `disabled` for the same case, as a ratio plus an absolute allowance.
 const BUDGETS: &[(&str, f64, f64)] = &[

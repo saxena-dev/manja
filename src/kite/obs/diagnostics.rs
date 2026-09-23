@@ -1,9 +1,9 @@
 //! Bounded, redacted building blocks for typed diagnostics.
 //!
 //! Diagnostics are available without any subscriber, recorder or exporter.
-//! They are bounded in memory and history ([`FailureHistory`], `B-DIAG-01`)
-//! and in text ([`BoundedText`], `B-DIAG-02`), carry revisions so a stale view
-//! is detectable, and are not an audit database.
+//! They are bounded in history ([`FailureHistory`], `B-DIAG-01`) and in text
+//! ([`BoundedText`], `B-DIAG-02`), and they carry revisions so a stale view is
+//! detectable.
 //!
 //! Redaction happens before text is retained. Structurally, SDK code never
 //! places credentials, request or response bodies, payloads or URLs in a
@@ -218,7 +218,7 @@ impl<T: Clone> FailureHistory<T> {
     }
 }
 
-/// Kind of a decoder-adapter diagnostic (contract §6.5).
+/// Kind of a decoder-adapter diagnostic (`docs/contract.md` §4.5).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 #[non_exhaustive]
 pub enum DecodeDiagnosticKind {
@@ -237,8 +237,7 @@ pub enum DecodeDiagnosticKind {
     /// A text message had a type this build does not know.
     UnknownTextType,
     /// A packet field held a value its documented type cannot have, such
-    /// as a negative quantity. An additive kind beside the contract's
-    /// seven.
+    /// as a negative quantity.
     InvalidField,
 }
 

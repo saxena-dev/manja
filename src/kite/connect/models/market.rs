@@ -1,11 +1,11 @@
 //! Market quote and instrument types
-//! (`kite-api-docs/docs/connect/v3/market-quotes.md`).
+//! (`kite:market-quotes.md`).
 //!
 //! Quotes are snapshots gathered at the time of the request. Instruments
 //! come from the daily instrument dump: its `last_price` is not a live quote
-//! (`market-quotes.md:17`), and an instrument token may be reused for a
+//! (`kite:market-quotes.md:17`), and an instrument token may be reused for a
 //! different derivative after expiry, so `(exchange, tradingsymbol)` is the
-//! documented storage key (`market-quotes.md:54-56`). This crate owns no
+//! documented storage key (`kite:market-quotes.md:54-56`). This crate owns no
 //! instrument registry.
 //!
 use std::collections::HashMap;
@@ -19,7 +19,7 @@ use chrono::{DateTime, FixedOffset, NaiveDate};
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 
-/// The type of an instrument (`market-quotes.md:46`).
+/// The type of an instrument (`kite:market-quotes.md:46`).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum InstrumentType {
     /// Equity.
@@ -39,7 +39,7 @@ wire_enum!(InstrumentType {
     PutOption => "PE",
 });
 
-/// One row of the instrument dump (`market-quotes.md:33-48`).
+/// One row of the instrument dump (`kite:market-quotes.md:33-48`).
 ///
 /// `last_price` is from the daily dump and is not a live quote. An
 /// `instrument_token` identifies the instrument only while it trades;
@@ -74,7 +74,7 @@ pub struct Instrument {
 
 impl Instrument {
     /// The quote key of the instrument, `EXCHANGE:TRADINGSYMBOL`
-    /// (`market-quotes.md:66`).
+    /// (`kite:market-quotes.md:66`).
     pub fn quote_key(&self) -> String {
         format!("{}:{}", self.exchange.as_wire(), self.tradingsymbol)
     }
@@ -83,7 +83,7 @@ impl Instrument {
 /// Quotes for a set of requested instruments.
 ///
 /// "If there is no data available for a given key, the key will be absent
-/// from the response" (`market-quotes.md:66`): such instruments are listed in
+/// from the response" (`kite:market-quotes.md:66`): such instruments are listed in
 /// [`Self::missing`], never filled with a zero quote. One request is one
 /// snapshot; quotes of different requests are not an atomic set.
 #[derive(Clone, Debug, PartialEq)]
@@ -154,7 +154,7 @@ pub struct Depth {
 }
 
 /// The quote endpoints and their documented request limits
-/// (`market-quotes.md:272-278`).
+/// (`kite:market-quotes.md:272-278`).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 #[allow(clippy::upper_case_acronyms)] // Public names kept for compatibility.
 pub enum QuoteMode {

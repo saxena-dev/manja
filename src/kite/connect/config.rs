@@ -2,10 +2,10 @@
 //!
 //! [`Config`] holds the API base URL and the runtime limits.
 //!
-//! [`HttpLimits`] holds the validated runtime bounds of the SDK contract
-//! (`B-HTTP-*`). Every bound has a default, a minimum and a maximum; building
-//! limits outside those ranges is a configuration error, and no bound means
-//! "unlimited".
+//! [`HttpLimits`] holds validated runtime bounds (`B-HTTP-*`,
+//! `docs/contract.md` §3.2). Every bound has a default, a minimum and a
+//! maximum; building limits outside those ranges is a configuration error,
+//! and no bound means "unlimited".
 //!
 //! Configuration is always explicit. Nothing here reads environment
 //! variables: [`Config::default`] is the documented production endpoint, and
@@ -63,7 +63,7 @@ fn check_range<T: PartialOrd + std::fmt::Debug>(
 const KIB: usize = 1024;
 const MIB: usize = 1024 * KIB;
 
-/// Validated HTTP runtime bounds (SDK contract §5.2).
+/// Validated HTTP runtime bounds (`docs/contract.md` §3.2).
 ///
 /// | Bound | Default | Range |
 /// |---|---|---|
@@ -78,10 +78,10 @@ const MIB: usize = 1024 * KIB;
 /// [`Admission`](crate::kite::connect::admission::Admission) scope.
 ///
 /// A response larger than its bound is a `Decode` error that preserves the
-/// HTTP status; the body is not buffered past the bound. The kite-api-docs
-/// snapshot gives no size for the instrument dump
-/// (`docs/connect/v3/market-quotes.md:17,52`); 64 MiB is roughly 300 000
-/// rows of 200 bytes, several times the official sample's row width.
+/// HTTP status; the body is not buffered past the bound. The documentation
+/// gives no size for the instrument dump (`kite:market-quotes.md:17,52`);
+/// 64 MiB is roughly 300 000 rows of 200 bytes, several times the official
+/// sample's row width.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct HttpLimits {
     json_body_bytes: usize,

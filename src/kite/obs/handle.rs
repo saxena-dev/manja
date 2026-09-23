@@ -223,7 +223,9 @@ impl fmt::Display for ObsConfigError {
         match self {
             Self::TooManyDimensions => write!(f, "at most {MAX_STATIC_DIMENSIONS} dimensions"),
             Self::InvalidDimension => f.write_str("invalid static dimension"),
-            Self::Capacity { min, max } => write!(f, "capacity must be in {min}..={max}"),
+            Self::Capacity { min, max } => {
+                write!(f, "B-DIAG-03: capacity must be in {min}..={max}")
+            }
         }
     }
 }

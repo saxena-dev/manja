@@ -17,10 +17,16 @@
 //! they pass, alongside the raw ones.
 //!
 //! What the SDK does not do: it never logs in on your behalf, stores or
-//! refreshes credentials, persists observations, or decides whether data is
-//! fresh enough to trade on. `Active` means the desired subscriptions were
+//! refreshes credentials, persists observations, or judges whether market
+//! data is current. `Active` means the desired subscriptions were
 //! written to a connection, not that quotes are current. Delivery ends with a
 //! terminal error, never silently.
+//!
+//! The behavior and bounds are specified in `docs/contract.md`, which the
+//! documentation cites as `docs/contract.md §N` and by bound IDs such as
+//! `B-HTTP-01`. Citations of the form `kite:<page>.md:<lines>` point into the
+//! Kite Connect v3 documentation pages listed, with access time and SHA-256,
+//! in `docs/kite-sources.toml`.
 //!
 //! # Example
 //!

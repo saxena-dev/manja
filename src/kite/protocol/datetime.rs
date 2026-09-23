@@ -2,7 +2,7 @@
 //!
 //! Kite represents timestamps as offset-free `yyyy-mm-dd hh:mm:ss` strings
 //! in Indian Standard Time, UTC+05:30, and dates as `yyyy-mm-dd`
-//! (`kite-api-docs/docs/connect/v3/response-structure.md:33-35`).
+//! (`kite:response-structure.md:33-35`).
 //! [`parse_broker_datetime`] is the crate's single parser for that form: it
 //! parses the text as a naive local time and then attaches the explicit
 //! +05:30 offset. It never guesses: an offset-bearing, `T`-separated, empty or

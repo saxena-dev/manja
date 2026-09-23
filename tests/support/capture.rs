@@ -4,8 +4,8 @@
 // each a little-endian `u64` receipt time in Unix nanoseconds, a little-endian
 // `u32` payload length, then that many bytes of an unchanged big-endian Kite
 // binary WebSocket message. This container is a TEST INPUT FORMAT ONLY: it is
-// not part of manja's public API, not a manja format, and not a persistent
-// capture-log format. The reader exists only in test support code.
+// not part of manja's public API and not a manja format. The reader exists
+// only in test support code.
 //
 // This file holds only items and depends only on `std`, so both the fixture
 // manifest test and the decoder tests can include it with `#[path]`.

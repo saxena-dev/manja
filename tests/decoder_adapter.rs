@@ -1,8 +1,8 @@
-//! Provenance adaptation and deterministic replay (plan task S24).
+//! Provenance adaptation and deterministic replay.
 //!
 //! "Live" observations are built as the ticker builds them; "captured"
 //! copies are the same envelopes serialized and read back, which is enough
-//! to model a captured origin without a storage format (plan A-01).
+//! to model a captured origin without a storage format.
 
 mod support;
 

@@ -1,11 +1,11 @@
-//! Observability conformance (plan task S29): redaction across every sink,
+//! Observability conformance: redaction across every sink,
 //! adversarial cardinality, adapter failure, notification lag, aggregation
 //! and teardown, and the absence of per-tick tasks and spans.
 //!
 //! Per-subsystem cases live in `http_observability`, `ticker_status`,
-//! `decoder_adapter` and `obs_schema`; the conformance record maps every
-//! §12.4 scenario to its test. Nothing global is installed: spans go to a
-//! thread-default capture layer.
+//! `decoder_adapter` and `obs_schema`; `docs/verification.md` §5.1 maps
+//! every conformance scenario to its test. Nothing global is installed:
+//! spans go to a thread-default capture layer.
 
 #[path = "../support/mod.rs"]
 mod support;
@@ -118,8 +118,7 @@ fn http_config(base: &str) -> Config {
     )
 }
 
-// ---- R-02: redaction sweep over spans, labels, snapshots and adapter
-// buffers -------------------------------------------------------------------
+// ---- redaction sweep over every sink ------------------------------------
 
 // Credential-shaped sentinels (24 or more letters and digits) and short
 // correlation inputs.
@@ -280,7 +279,7 @@ async fn no_seeded_value_reaches_any_telemetry_sink() {
     assert!(format!("{:?}", c.diagnostics()).contains("<redacted>"));
 }
 
-// ---- R-04: adversarial cardinality ------------------------------------
+// ---- adversarial cardinality ------------------------------------------
 
 #[tokio::test]
 async fn a_hundred_thousand_dynamic_identifiers_stay_within_series_bounds() {
@@ -327,7 +326,7 @@ async fn a_hundred_thousand_dynamic_identifiers_stay_within_series_bounds() {
     assert_eq!(rec.dump().len(), total);
 }
 
-// ---- R-03: supported-adapter failure ------------------------------------
+// ---- adapter failure ----------------------------------------------------
 
 fn flood(n: usize) -> Vec<Step> {
     (0..n)
@@ -543,7 +542,7 @@ async fn gauges_aggregate_across_clones_and_owners_and_unregister_on_teardown() 
     );
 }
 
-// ---- R-06: no task or span per tick -------------------------------------
+// ---- no task or span per message ----------------------------------------
 
 #[tokio::test]
 async fn streaming_creates_no_task_or_span_per_message() {

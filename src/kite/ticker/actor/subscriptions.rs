@@ -14,7 +14,7 @@
 //! changes the map is assigned the next [`Revision`]; one that changes
 //! nothing, such as a repeated identical subscribe, keeps the current
 //! revision and sends nothing. More than `B-TK-11` desired tokens is an
-//! error. That bound is per connection (`kite-api-docs/docs/connect/v3/websocket.md:7`);
+//! error. That bound is per connection (`kite:websocket.md:7`);
 //! the limit of three connections per API key is not enforced by one ticker
 //! and must be coordinated by the caller.
 //!
@@ -26,7 +26,7 @@
 //! each revision as `CommandsSent` (written to the socket, not confirmed),
 //! `Superseded` (replaced before it was sent) or `SendFailed`. `Active`
 //! says that the desired map was written to the connection; it says nothing
-//! about quote freshness or readiness to trade.
+//! about quote freshness.
 //!
 //! # Wire order
 //!
@@ -44,7 +44,7 @@ use crate::kite::protocol::InstrumentToken;
 use crate::kite::ticker::models::{Mode, TickerRequest};
 
 /// The largest `B-TK-11`: instruments per connection
-/// (`kite-api-docs/docs/connect/v3/websocket.md:7`).
+/// (`kite:websocket.md:7`).
 pub const MAX_INSTRUMENTS_PER_CONNECTION: usize = 3000;
 
 /// A desired-state revision. 0 is the initial, empty map.

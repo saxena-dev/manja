@@ -1,7 +1,7 @@
-//! Wrap every record of the vendored real capture (FX-01 manifest entry
-//! `tick_set_0__2026_01_21.bin`, kite-data-feed 24f82a2, SHA-256
-//! a54f73d1…cb912) in raw-observation envelopes and check that bytes and
-//! receive times survive unchanged. Needs no async runtime or feature.
+//! Wrap every record of the vendored real capture (manifest entry
+//! `tick_set_0__2026_01_21.bin`, SHA-256 a54f73d1…cb912) in raw-observation
+//! envelopes and check that bytes and receive times survive unchanged. Needs
+//! no async runtime or feature.
 
 #[allow(dead_code)]
 #[path = "support/capture.rs"]

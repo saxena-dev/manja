@@ -1,4 +1,4 @@
-//! Bounded reconnect, liveness and credential rejection (plan task S18),
+//! Bounded reconnect, liveness and credential rejection,
 //! against the loopback WebSocket harness.
 //!
 //! These run on the real clock with the smallest documented bounds

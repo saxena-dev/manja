@@ -1,8 +1,8 @@
-//! Deadlines, retries, single-attempt operations and cancellation evidence
-//! (plan task S06), against a counting loopback server.
+//! Deadlines, retries, single-attempt operations and cancellation evidence,
+//! against a counting loopback server.
 //!
 //! Error bodies are labelled supplemental fixtures in the documented error
-//! envelope shape (`kite-api-docs/docs/connect/v3/response-structure.md:17-28`).
+//! envelope shape (`kite:response-structure.md:17-28`).
 
 mod support;
 

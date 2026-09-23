@@ -5,17 +5,16 @@
 //! `HTTPClient::with_credentials`, draws from the same windows. It enforces
 //! a versioned [`QuotaProfile`] locally. It cannot see requests made by other
 //! processes, other applications or other SDK instances using the same API
-//! key or account; coordinating those is the application's responsibility.
+//! key or account.
 //!
-//! Admission decides only *when* a request may start. It makes no approval,
-//! risk or trading-health decision, performs no retry, and knows nothing
-//! about deadlines beyond the wait bound it is given.
+//! Admission decides only *when* a request may start. It performs no retry
+//! and knows nothing about deadlines beyond the wait bound it is given.
 //!
 //! # The default profile
 //!
 //! [`QuotaProfile::kite_v3`] encodes the limits documented in
-//! `kite-api-docs/docs/connect/v3/exceptions.md:45-58`, as configuration
-//! rather than verified broker truth:
+//! `kite:exceptions.md:45-58`, as configuration rather than verified broker
+//! truth:
 //!
 //! | Class | Endpoints | Windows |
 //! |---|---|---|
@@ -100,11 +99,11 @@ impl Window {
 #[derive(Clone, Debug, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum QuotaError {
-    /// A window has a zero limit or a period under 1 ms (`Q-3`).
+    /// A window has a zero limit or a period under 1 ms (`docs/contract.md §3.6`).
     InvalidWindow,
     /// A class has no window.
     MissingWindows(RateClass),
-    /// The order-placement class exceeds 10 per second (`Q-2`).
+    /// The order-placement class exceeds 10 per second (`docs/contract.md §3.6`).
     PlacementAboveTenPerSecond,
     /// The daily ceiling or modification limit is zero.
     InvalidCeiling,

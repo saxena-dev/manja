@@ -1,4 +1,4 @@
-//! Read response DTOs (plan task S08) against the official
+//! Read response DTOs against the official
 //! `kiteconnect-mocks/` fixtures, served unchanged through the loopback
 //! harness. Expected values are written out from the fixtures by hand, never
 //! obtained by parsing the fixture a second time. Supplemental variants are
@@ -119,8 +119,9 @@ async fn margins_all_and_by_segment() {
 
 #[tokio::test]
 async fn order_book_parses_documented_timestamps() {
-    // Regression (arch §2, finding F12): records with valid offset-free
-    // timestamps used to fail deserialization entirely.
+    // Regression: records with valid offset-free timestamps
+    // (`kite:response-structure.md:33-35`) used to fail deserialization
+    // entirely.
     let h = serve("orders.json").await;
     let c = client(&h.base_url());
     let orders = c.orders().list_orders().await.unwrap().data.unwrap();
@@ -259,7 +260,7 @@ async fn positions_are_the_net_and_day_object() {
     assert_eq!(first.exchange, Inbound::Known(Exchange::MCX));
     assert_eq!(first.multiplier, 1000);
     assert_eq!(first.value, -161050.0);
-    // The fixture's "CO" product is undocumented in orders.md and preserved.
+    // The fixture's "CO" product is undocumented in kite:orders.md and preserved.
     assert!(p
         .net
         .iter()

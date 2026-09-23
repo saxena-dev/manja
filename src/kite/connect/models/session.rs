@@ -1,4 +1,4 @@
-//! The token exchange response (`kite-api-docs/docs/connect/v3/user.md:33-120`).
+//! The token exchange response (`kite:user.md:33-120`).
 //!
 //! [`UserSession`] holds the user profile and the tokens a successful
 //! exchange returns. Every token is secret-wrapped: `Debug` redacts it, and
@@ -32,8 +32,8 @@ pub struct Meta {
 /// A successful token exchange.
 ///
 /// The access token expires at 6 AM the next day unless invalidated earlier
-/// (`user.md:115`). A refresh token is issued only to certain approved
-/// platforms (`user.md:117`); an empty value is `None`.
+/// (`kite:user.md:115`). A refresh token is issued only to certain approved
+/// platforms (`kite:user.md:117`); an empty value is `None`.
 #[derive(Clone, Debug)]
 pub struct UserSession {
     /// User's registered role, `individual` for retail users.

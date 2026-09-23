@@ -1,4 +1,4 @@
-//! The supervised single-owner raw ticker (plan task S16), against the
+//! The supervised single-owner raw ticker, against the
 //! loopback WebSocket harness. No HTTP session API, decoder or storage is
 //! used.
 //!
@@ -130,7 +130,7 @@ async fn raw_messages_arrive_in_source_order_before_any_decoding_and_shutdown_is
     assert_eq!(status.terminal, None);
 
     // The handshake carried the supplied credentials in the documented
-    // query (`websocket.md:20`), and nothing else authenticates.
+    // query (`kite:websocket.md:20`), and nothing else authenticates.
     let [hs] = h.handshakes().try_into().unwrap();
     assert_eq!(
         hs.target,

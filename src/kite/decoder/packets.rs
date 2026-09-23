@@ -1,5 +1,5 @@
 //! Binary packet families, field by field
-//! (`kite-api-docs/docs/connect/v3/websocket.md:88-128`).
+//! (`kite:websocket.md:87-163`).
 //!
 //! Every field is read with explicit big-endian byte order at its
 //! documented offset; nothing is cast from a native struct. Values stay as
@@ -8,24 +8,24 @@
 //! - prices are raw `int32` in the segment's minor unit; turn one into a
 //!   [`ScaledPrice`] with [`scaled`] and a caller-supplied [`Segment`]
 //!   (currencies divide by 10 000 000, everything else by 100,
-//!   `websocket.md:89`; the BSE currency segment has no verified scale and
+//!   `kite:websocket.md:89`; the BSE currency segment has no verified scale and
 //!   is refused);
 //! - quantities and order counts are unsigned. The wire type is signed, so
 //!   a negative value is not a quantity: it is refused with
 //!   [`PacketErrorKind::NegativeQuantity`] rather than reinterpreted;
 //! - timestamps are the raw Unix seconds the exchange sent.
 //!
-//! Index packets (`websocket.md:110-124`) are their own types, never padded
+//! Index packets (`kite:websocket.md:111-125`) are their own types, never padded
 //! tradable quotes. Full packets carry exactly five bids and five offers;
 //! each depth entry is `int32` quantity, `int32` price and `int16` orders
-//! followed by two padding bytes (`websocket.md:126`). The commented byte
-//! table after that paragraph (`websocket.md:128-162`) contradicts the prose
+//! followed by two padding bytes (`kite:websocket.md:129`). The commented byte
+//! table after that paragraph (`kite:websocket.md:131-163`) contradicts the prose
 //! and the 184-byte total, and is not followed.
 //!
 //! An LTP packet carries a token and a price only: it establishes neither
 //! tradability nor which instrument or segment the token denotes.
 //!
-//! # Oracle dispositions
+//! # Differences from the reference outputs
 //!
 //! The official `ticker_*.json` expectations are already scaled floats from
 //! a client library. Raw-integer expectations are therefore asserted

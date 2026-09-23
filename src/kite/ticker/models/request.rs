@@ -112,7 +112,7 @@ impl TickerRequest {
     }
 
     /// A `mode` request: set `mode` for tokens already subscribed
-    /// (`kite-api-docs/docs/connect/v3/websocket.md:36-45`).
+    /// (`kite:websocket.md:36-47`).
     ///
     /// ```
     /// use manja::kite::ticker::{Mode, TickerRequest};

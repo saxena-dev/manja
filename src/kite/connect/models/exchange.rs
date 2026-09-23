@@ -1,7 +1,7 @@
 //! `Exchange` enum.
 //!
 //! [`Exchange`] names the exchange venues and segments used in Kite requests
-//! and responses (`kite-api-docs/docs/connect/v3/orders.md:88`). Its wire
+//! and responses (`kite:orders.md:88`). Its wire
 //! strings are exact and case-sensitive.
 //!
 //! Parsing is strict: an unrecognized string is an error from

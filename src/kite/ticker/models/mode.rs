@@ -32,11 +32,11 @@ pub enum Mode {
 
 impl Mode {
     /// The fixed order in which mode requests are sent: LTP, quote, full
-    /// (SDK contract §3.6).
+    /// (`docs/contract.md` §2.6).
     pub const WIRE_ORDER: [Mode; 3] = [Mode::LTP, Mode::Quote, Mode::Full];
 
     /// The wire value: `ltp`, `quote` or `full`
-    /// (`kite-api-docs/docs/connect/v3/websocket.md:51-57`).
+    /// (`kite:websocket.md:51-57`).
     pub const fn as_wire(&self) -> &'static str {
         match self {
             Mode::LTP => "ltp",

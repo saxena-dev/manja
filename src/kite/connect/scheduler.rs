@@ -14,7 +14,7 @@
 //! | Class | Endpoints | Attempts | Justification |
 //! |---|---|---|---|
 //! | `Read` | every `GET` | up to `B-HTTP-03` (3) | idempotent reads |
-//! | `Calc` | `POST /margins/orders`, `/margins/basket`, `/charges/orders` | up to `B-HTTP-03` (3) | documented as calculations with no order or position effect (`kite-api-docs/docs/connect/v3/margins.md:1-13,345-350`) |
+//! | `Calc` | `POST /margins/orders`, `/margins/basket`, `/charges/orders` | up to `B-HTTP-03` (3) | documented as calculations with no order or position effect (`kite:margins.md:1-13,345-350`) |
 //! | `Mut` | place, modify, cancel, position conversion, and any other non-`GET` endpoint without a documented class | exactly 1 (`B-HTTP-04`) | may change orders or positions |
 //! | `Sess` | token exchange, session invalidation | exactly 1 (`B-HTTP-04`) | a request token is single-use; invalidation is not repeated implicitly |
 //!
@@ -91,7 +91,7 @@ impl RetryClass {
     }
 }
 
-/// Validated scheduling bounds (SDK contract §5.2).
+/// Validated scheduling bounds (`docs/contract.md` §3.2).
 ///
 /// | Bound | Default | Range | Constraint |
 /// |---|---|---|---|

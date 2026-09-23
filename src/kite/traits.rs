@@ -26,7 +26,7 @@ pub trait KiteAuth {
     /// Adds the `Authorization` header to the `HeaderMap`.
     ///
     /// This method constructs the header as specified in the official Kite Connect
-    /// [documentation](https://kite.trade/docs/connect/v3/user/#signing-requests) for signing HTTP requests.
+    /// documentation for signing HTTP requests (`kite:user.md:122-130`).
     ///
     /// # Arguments
     ///

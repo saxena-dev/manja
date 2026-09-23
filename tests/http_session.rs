@@ -1,11 +1,11 @@
-//! The required session operations (plan task S12): pre-session token
+//! The required session operations: pre-session token
 //! exchange that borrows the API secret, and invalidation that takes none.
 //!
 //! Baselines are the official `generate_session.json` and
 //! `session_logout.json`, served unchanged; the checksum vector was computed
 //! independently with `shasum -a 256` over
 //! `test_api_key` + `request_token_0123` + `test_api_secret`
-//! (`kite-api-docs/docs/connect/v3/user.md:9,97-99`). Sentinel and fault
+//! (`kite:user.md:9,97-99`). Sentinel and fault
 //! responses are labelled supplements.
 
 mod support;

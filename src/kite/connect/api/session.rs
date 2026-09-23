@@ -1,5 +1,5 @@
 //! The required session protocol operations: token exchange and session
-//! invalidation (`kite-api-docs/docs/connect/v3/user.md:3-31,33-120,295-323`).
+//! invalidation (`kite:user.md:3-31,33-120,295-310`).
 //!
 //! A [`Session`] is built from an API key and an HTTP client alone. The
 //! client needs no credentials: exchange is a pre-session operation.
@@ -23,7 +23,7 @@
 //! Neither operation persists credentials, installs tokens into any client,
 //! starts a login or coordinates credential generations; the SDK has no
 //! login flow: the request token comes from the caller; invalidation does
-//! not log the user out of Kite's web or mobile apps (`user.md:297`), and
+//! not log the user out of Kite's web or mobile apps (`kite:user.md:297`), and
 //! local clients keep their snapshots until the caller retires them. Nothing
 //! in the SDK calls these operations implicitly: not ordinary requests, not
 //! the ticker's reconnects, not shutdown and not `Drop`.

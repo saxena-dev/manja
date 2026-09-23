@@ -1,4 +1,4 @@
-//! Bounded delivery, cancellation and teardown (plan task S19), against the
+//! Bounded delivery, cancellation and teardown, against the
 //! loopback WebSocket harness. Payloads are opaque bytes; faults are
 //! labelled supplements.
 

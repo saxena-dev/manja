@@ -18,9 +18,9 @@
 //!
 //! - success requires a 2xx status **and** a JSON envelope with
 //!   `status = "success"` and a `data` payload that matches the endpoint's
-//!   type (`kite-api-docs/docs/connect/v3/response-structure.md:15`);
+//!   type (`kite:response-structure.md:15`);
 //! - a non-2xx status or `status = "error"` is never `Ok`, whether or not
-//!   `error_type` is present or known (`response-structure.md:28`);
+//!   `error_type` is present or known (`kite:response-structure.md:28`);
 //! - HTML, malformed or truncated JSON, a missing payload and a body larger
 //!   than its bound are errors that keep the HTTP status.
 //!
@@ -555,7 +555,7 @@ impl HTTPClient {
     }
 
     /// Send `pairs` form-encoded (`application/x-www-form-urlencoded`,
-    /// `kite-api-docs/docs/connect/v3/response-structure.md:2`) and decode the
+    /// `kite:response-structure.md:2`) and decode the
     /// response envelope. `validate` runs first: an invalid request, or a
     /// body over `B-HTTP-09`, fails before admission and sends nothing.
     pub(crate) async fn send_form<Model>(
@@ -597,7 +597,7 @@ impl HTTPClient {
     }
 
     /// Send `body` as JSON (the margin and charges endpoints,
-    /// `kite-api-docs/docs/connect/v3/margins.md:13`) and decode the response
+    /// `kite:margins.md:13`) and decode the response
     /// envelope. `validate` runs first: an invalid request, or a body over
     /// `B-HTTP-09`, fails before admission and sends nothing.
     pub(crate) async fn send_json<Model, T>(

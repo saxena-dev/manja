@@ -1,8 +1,8 @@
 //! Portfolio types: holdings, holdings auctions, positions and position
-//! conversion (`kite-api-docs/docs/connect/v3/portfolio.md`).
+//! conversion (`kite:portfolio.md`).
 //!
-//! Holdings, auctions and positions are broker snapshots at the time of the
-//! request, not reconciled account state. Exchange and product strings are
+//! Holdings, auctions and positions are the broker's response at the time
+//! of the request. Exchange and product strings are
 //! [`Inbound`] values: the official `positions.json` fixture contains the
 //! product `CO`, which is preserved rather than rejected.
 //!
@@ -92,7 +92,7 @@ pub struct Holding {
 }
 
 /// A holding currently offered in an auction
-/// (`kite-api-docs/docs/connect/v3/portfolio.md:123-217`).
+/// (`kite:portfolio.md:123-217`).
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Auction {
     /// Exchange tradingsymbol of the instrument.
@@ -144,7 +144,7 @@ pub struct Auction {
 }
 
 /// The positions response: two sets of positions
-/// (`kite-api-docs/docs/connect/v3/portfolio.md:219-235`).
+/// (`kite:portfolio.md:219-235`).
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Positions {
     /// The actual, current net position portfolio.
@@ -238,10 +238,9 @@ impl std::fmt::Display for PositionType {
 }
 
 /// A position conversion: `PUT /portfolio/positions`, form-encoded
-/// (`kite-api-docs/docs/connect/v3/portfolio.md:463-497`).
+/// (`kite:portfolio.md:463-497`).
 ///
-/// A successful response reports the broker's result (`true`). It is not
-/// reconciled position state.
+/// A successful response reports the broker's result (`true`).
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct PositionConversionRequest {
     /// Tradingsymbol of the instrument.

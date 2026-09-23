@@ -1,4 +1,4 @@
-# CI for the feature slices (plans/sdk-contract.v0.md §8.4; plan task S26).
+# CI for the feature slices (docs/contract.md §1, docs/verification.md §6).
 #
 # Every feature row is tested on the declared MSRV (1.95.0) and on the newer
 # supported toolchain (1.98.0). Dependencies are fetched from crates.io

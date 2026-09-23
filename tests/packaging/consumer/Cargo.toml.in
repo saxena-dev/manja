@@ -1,4 +1,4 @@
-# Out-of-tree consumer of the packaged crate (plan task S30). `check.sh`
+# Out-of-tree consumer of the packaged crate. `check.sh`
 # copies this directory to a scratch location, renames this file to
 # Cargo.toml and substitutes the path of the unpacked package.
 [package]

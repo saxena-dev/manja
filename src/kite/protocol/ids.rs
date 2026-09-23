@@ -6,12 +6,12 @@ use serde::de::{self, Visitor};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
 /// A Kite instrument token: an unsigned 32-bit numeric identifier
-/// (`kite-api-docs/docs/connect/v3/postbacks.md:71`,
-/// `docs/connect/v3/websocket.md:93`).
+/// (`kite:postbacks.md:71`,
+/// `kite:websocket.md:93`).
 ///
 /// A token identifies an instrument only on the day it is used: exchanges may
 /// reuse tokens for different derivative instruments after expiry
-/// (`docs/connect/v3/market-quotes.md:56`), so a token is not a stable
+/// (`kite:market-quotes.md:56`), so a token is not a stable
 /// historical identity, and this type claims no ownership of an instrument
 /// registry. A token alone establishes neither tradability nor the exchange
 /// segment.

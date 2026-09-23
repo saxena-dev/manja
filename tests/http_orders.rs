@@ -1,11 +1,11 @@
 //! Validated wire requests for placement, modification, cancellation and
-//! position conversion (plan task S09).
+//! position conversion.
 //!
 //! Acknowledgement baselines are the official `order_response.json`,
 //! `order_modify.json`, `order_cancel.json` and `convert_position.json`,
 //! served unchanged. Request wire expectations are written out from the
-//! documented examples (`kite-api-docs/docs/connect/v3/orders.md:58-162`,
-//! `portfolio.md:463-497`), independently of the fixtures.
+//! documented examples (`kite:orders.md:58-162`,
+//! `kite:portfolio.md:463-497`), independently of the fixtures.
 
 mod support;
 
@@ -47,7 +47,7 @@ fn only(h: &HttpHarness) -> RecordedRequest {
 }
 
 fn market_buy() -> PlaceOrderRequest {
-    // orders.md:58-70: ACC, NSE, BUY, MARKET, 1, MIS, DAY, market_protection -1.
+    // kite:orders.md:58-70: ACC, NSE, BUY, MARKET, 1, MIS, DAY, market_protection -1.
     let mut r = PlaceOrderRequest::new(
         OrderVariety::Regular,
         Exchange::NSE,
@@ -110,7 +110,7 @@ async fn placement_is_form_encoded_and_acknowledged() {
 #[tokio::test]
 async fn modification_sends_only_the_set_fields() {
     let h = serve("order_modify.json").await;
-    // orders.md:109-117: order_type MARKET, quantity 3, validity DAY.
+    // kite:orders.md:109-117: order_type MARKET, quantity 3, validity DAY.
     let request = ModifyOrderRequest {
         order_type: Some(OrderType::Market),
         quantity: Some(Quantity::new(3).unwrap()),
@@ -166,7 +166,7 @@ async fn cancellation_puts_no_credential_in_the_url() {
 async fn position_conversion_is_form_encoded() {
     let h = serve("convert_position.json").await;
     let c = client(&h.base_url());
-    // portfolio.md:468-477.
+    // kite:portfolio.md:468-477.
     let request = PositionConversionRequest {
         tradingsymbol: "INFY".into(),
         exchange: Exchange::NSE,
@@ -441,7 +441,7 @@ async fn a_sliced_placement_reports_every_slice_including_failures() {
         .contains("autoslice=true"));
 
     // Supplemental, derived from the same fixture: the array form the
-    // documentation shows (orders.md:548-560), whose first entry is the
+    // documentation shows (kite:orders.md:548-560), whose first entry is the
     // same order. It decodes to the same receipt.
     let array = r#"{"status":"success","data":[
         {"order_id":"1914227164488687616"},

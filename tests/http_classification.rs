@@ -1,12 +1,12 @@
-//! Total HTTP success/error classification (plan task S04), exercised
+//! Total HTTP success/error classification, exercised
 //! through the loopback harness in `tests/support/http.rs`.
 //!
 //! Success baselines are the official `kiteconnect-mocks/` fixtures served
 //! unchanged. Every error body below is a labelled supplemental fixture
 //! (INV-GAP-07): the official corpus has no non-2xx envelopes, so each one
 //! states the documented shape it follows
-//! (`kite-api-docs/docs/connect/v3/response-structure.md:17-28`,
-//! `exceptions.md:7-16`).
+//! (`kite:response-structure.md:17-28`,
+//! `kite:exceptions.md:7-16`).
 
 mod support;
 
@@ -367,7 +367,7 @@ async fn broker_messages_are_sanitized_before_retention() {
 #[tokio::test]
 async fn rate_limited_response_is_an_error_with_its_status() {
     // Supplemental: documented error envelope with HTTP 429
-    // (exceptions.md:39). One read attempt is allowed so the classified 429
+    // (kite:exceptions.md:39). One read attempt is allowed so the classified 429
     // itself is observed; retries are covered in tests/http_scheduling.rs.
     let body =
         r#"{"status":"error","message":"Too many requests","error_type":"NetworkException"}"#;

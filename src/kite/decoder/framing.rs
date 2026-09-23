@@ -1,6 +1,6 @@
-//! Binary message framing (`kite-api-docs/docs/connect/v3/websocket.md:62-80`).
+//! Binary message framing (`kite:websocket.md:63,73-85`).
 //!
-//! A binary message is either the one-byte heartbeat (`websocket.md:62`) or
+//! A binary message is either the one-byte heartbeat (`kite:websocket.md:63`) or
 //! a batch: a big-endian `u16` packet count, then for each packet a
 //! big-endian `u16` length and that many packet bytes.
 //!
@@ -19,10 +19,11 @@
 //! telemetry, credential or runtime state takes part, and the input is only
 //! borrowed, so it is unchanged and usable after any error.
 //!
-//! # Oracle dispositions
+//! # Differences from the reference outputs
 //!
-//! The vendored qdx expectations are a cross-implementation oracle, not
-//! protocol truth. Where they differ from the behavior above:
+//! The vendored qdx outputs (`docs/verification.md` §1.2) are a cross-check
+//! from an independent decoder, not protocol truth. Where they differ from
+//! the behavior above:
 //!
 //! - `trailing_bytes`: qdx reports the one packet and a `TrailingBytes`
 //!   diagnostic. Here the batch is rejected with
@@ -57,7 +58,7 @@ impl fmt::Display for DecoderLimitError {
 
 impl std::error::Error for DecoderLimitError {}
 
-/// Framing bounds (SDK contract §5.4).
+/// Framing bounds (`docs/contract.md` §3.4).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct FramingLimits {
     max_payload: usize,
@@ -146,7 +147,7 @@ impl fmt::Display for FramingError {
 impl std::error::Error for FramingError {}
 
 /// The packet family implied by a packet's length
-/// (`websocket.md:84-163`).
+/// (`kite:websocket.md:87-163`).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 #[non_exhaustive]
 pub enum PacketFamily {

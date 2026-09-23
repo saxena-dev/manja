@@ -1,7 +1,7 @@
-//! Text messages without coercion (plan task S23).
+//! Text messages without coercion.
 //!
 //! Baseline: the official `postback.json`, unchanged, as the `data` of a
-//! `type: order` message (`kite-api-docs/docs/connect/v3/websocket.md:167-183`).
+//! `type: order` message (`kite:websocket.md:167-184`).
 //! The error, message, unknown and malformed variants are labelled
 //! supplements. This crate needs only the `decoder` feature: no runtime,
 //! network or credential.

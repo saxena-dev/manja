@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
-# Packaged-crate validation (plan task S30). Offline; no registry command.
+# Packaged-crate validation. Offline; no registry command.
 #
 #   tests/packaging/check.sh [scratch-dir]
 #
 # 1. Lists the package and fails if a fixture, mock, test, example or bench
-#    would ship.
+#    would ship, or any file that Git ignores.
 # 2. Packages without verification and unpacks the .crate into scratch.
 # 3. Builds and runs an out-of-tree consumer against the unpacked package
 #    for the default, http, ticker and decoder rows, and checks each row's
@@ -16,15 +16,24 @@ mkdir -p "$scratch"
 cd "$root"
 
 list=$(cargo package --offline --allow-dirty --list)
-for forbidden in kiteconnect-mocks tests/ examples/ benches/ .tracker .beads; do
+for forbidden in kiteconnect-mocks tests/ examples/ benches/; do
   if grep -q "^$forbidden" <<<"$list"; then
     echo "FAIL: $forbidden would be packaged"; exit 1
   fi
 done
+# Cargo generates these; every other packaged file must be one Git does not ignore.
+ignored=$(grep -vxE 'Cargo\.toml|Cargo\.toml\.orig|Cargo\.lock|\.cargo_vcs_info\.json' <<<"$list" \
+  | git check-ignore --no-index --stdin) && rc=0 || rc=$?
+if (( rc > 1 )); then
+  echo "FAIL: git check-ignore exited $rc"; exit 1
+fi
+if [[ -n $ignored ]]; then
+  echo "FAIL: ignored files would be packaged:"; echo "$ignored"; exit 1
+fi
 echo "package list: $(wc -l <<<"$list" | tr -d ' ') files, no fixture, mock, test, example or bench"
 
 cargo package --offline --allow-dirty --no-verify >/dev/null 2>&1
-crate=$(ls target/package/manja-*.crate | tail -1)
+crate=$(ls "${CARGO_TARGET_DIR:-target}"/package/manja-*.crate | tail -1)
 shasum -a 256 "$crate"
 rm -rf "$scratch/unpacked" && mkdir -p "$scratch/unpacked"
 tar -xzf "$crate" -C "$scratch/unpacked"

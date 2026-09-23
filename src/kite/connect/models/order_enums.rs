@@ -1,8 +1,8 @@
 //! Order related enums.
 //!
 //! Each enum lists the values documented in
-//! `kite-api-docs/docs/connect/v3/orders.md:19-40` (and, for
-//! [`OrderStatus::Update`], `postbacks.md:67`). `Display` and `Serialize`
+//! `kite:orders.md:19-40` (and, for
+//! [`OrderStatus::Update`], `kite:postbacks.md:67`). `Display` and `Serialize`
 //! produce the exact wire string, which is also used for URL routing.
 //!
 //! Deserializing one of these enums directly is strict: an unknown string is
@@ -68,7 +68,7 @@ pub enum OrderStatus {
     /// Same as `PUT ORDER REQ RECEIVED`, but for AMOs (After Market Orders).
     AmoReqReceived,
     /// Postback-only status: an open order was modified or partially filled
-    /// (`postbacks.md:3`). It says nothing about the final order state.
+    /// (`kite:postbacks.md:3`). It says nothing about the final order state.
     Update,
 }
 

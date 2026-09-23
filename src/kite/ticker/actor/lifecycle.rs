@@ -45,7 +45,7 @@ use std::time::Duration;
 use crate::kite::envelope::DisconnectReason;
 use crate::kite::ticker::actor::owner::{TerminalReason, TickerLimitError};
 
-/// Reconnect and liveness bounds (SDK contract §5.3).
+/// Reconnect and liveness bounds (`docs/contract.md` §3.3).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ReconnectLimits {
     attempts: u32,

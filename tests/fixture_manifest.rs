@@ -1,5 +1,5 @@
 //! Provenance checks for the vendored binary ticker corpus
-//! (`tests/fixtures/ticker/`, plan task FX-01).
+//! (`tests/fixtures/ticker/`, `docs/verification.md` §1.2).
 //!
 //! The manifest must list every other file in the corpus tree, and nothing
 //! else, with a matching SHA-256 and size, so vendored bytes can neither drift
@@ -162,7 +162,7 @@ fn corpus_dir() -> PathBuf {
 
 /// A scratch copy of the corpus, unique to this process and `tag`.
 fn scratch_copy(tag: &str) -> PathBuf {
-    let dst = std::env::temp_dir().join(format!("manja-fx01-{}-{tag}", std::process::id()));
+    let dst = std::env::temp_dir().join(format!("manja-fixtures-{}-{tag}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dst);
     let src = corpus_dir();
     let mut files = files_under(&src);
