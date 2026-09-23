@@ -77,8 +77,7 @@ pub use market::{
 /// requirements and charges.
 ///
 mod margins;
-#[allow(unused_imports)]
-pub(crate) use margins::{
+pub use margins::{
     BasketMargin, Charges, OrderCharges, OrderChargesRequest, OrderMargin, OrderMarginRequest, GST,
     PNL,
 };

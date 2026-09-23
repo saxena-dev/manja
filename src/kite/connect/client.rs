@@ -446,20 +446,6 @@ impl HTTPClient {
             .await
     }
 
-    /// POST a JSON body to `path` and decode the response envelope.
-    pub(crate) async fn post<Model, Payload>(
-        &self,
-        path: &str,
-        data: Payload,
-    ) -> Result<KiteApiResponse<Model>>
-    where
-        Model: DeserializeOwned,
-        Payload: Serialize,
-    {
-        self.json(reqwest::Method::POST, path, None, |rb| rb.json(&data))
-            .await
-    }
-
     /// POST a form to `path` and decode the response envelope.
     pub(crate) async fn post_form<Model, F>(
         &self,
@@ -540,6 +526,39 @@ impl HTTPClient {
                 )
                 .body(body.clone())
             }
+        })
+        .await
+    }
+
+    /// Send `body` as JSON (the margin and charges endpoints,
+    /// `kite-api-docs/docs/connect/v3/margins.md:13`) and decode the response
+    /// envelope. `validate` runs first: an invalid request, or a body over
+    /// `B-HTTP-09`, fails before admission and sends nothing.
+    pub(crate) async fn send_json<Model, T>(
+        &self,
+        method: reqwest::Method,
+        path: &str,
+        validate: std::result::Result<(), crate::kite::connect::models::RequestError>,
+        body: &T,
+    ) -> Result<KiteApiResponse<Model>>
+    where
+        Model: DeserializeOwned,
+        T: Serialize + ?Sized,
+    {
+        let (m, endpoint) = labels(&method, path);
+        let rejected = |detail: &str| {
+            HttpError::new(HttpErrorKind::Validation, m, endpoint, Stage::NotStarted)
+                .with_detail(detail)
+        };
+        validate.map_err(|e| rejected(&e.to_string()))?;
+        let body = serde_json::to_vec(body)
+            .map_err(|_| rejected("the request body could not be serialized"))?;
+        if body.len() > self.transport.config.limits().request_body_bytes() {
+            return Err(rejected("the request body exceeds its bound").into());
+        }
+        self.json(method, path, None, |rb| {
+            rb.header(reqwest::header::CONTENT_TYPE, "application/json")
+                .body(body.clone())
         })
         .await
     }

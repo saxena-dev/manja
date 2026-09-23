@@ -83,3 +83,7 @@ required-features = ["http"]
 [[test]]
 name = "http_orders"
 required-features = ["http"]
+
+[[test]]
+name = "http_margins"
+required-features = ["http"]

@@ -1,207 +1,230 @@
-//! Types for calculating margins and charges on orders.
+//! Margin and charges calculation types
+//! (`kite-api-docs/docs/connect/v3/margins.md`).
 //!
-//! This module defines structures and types related to calculating margins, charges,
-//! and profit and loss for orders. It includes requests and responses for order
-//! margins and charges, along with detailed structures for GST and other applicable
-//! charges.
+//! These endpoints take JSON bodies, not form fields: "Requests to the above
+//! endpoints are JSON POST and it needs `application/json` header"
+//! (`margins.md:13`). Order margins take and return arrays
+//! (`margins.md:15-85`); basket margins return initial, final and per-order
+//! margins (`margins.md:135-172`); the virtual contract note returns
+//! order-wise charges (`margins.md:345-500`).
 //!
-use crate::kite::connect::models::exchange::Exchange;
-use crate::kite::connect::models::{OrderType, OrderVariety, ProductType, TransactionType};
-
+//! Results are broker calculations at the time of the request, not reserved
+//! or blocked margin.
+//!
 use serde::{Deserialize, Serialize};
 
-/// Represents a request for calculating margins for an order.
-///
-/// This structure contains all necessary information to request margin calculations
-/// for a specific order, including exchange, transaction type, order type, and more.
-///
-#[derive(Serialize, Deserialize, Debug)]
+use crate::kite::connect::models::exchange::Exchange;
+use crate::kite::connect::models::order::RequestError;
+use crate::kite::connect::models::{OrderType, OrderVariety, ProductType, TransactionType};
+use crate::kite::protocol::{Inbound, Quantity};
+
+fn invalid(field: &'static str, reason: &'static str) -> Result<(), RequestError> {
+    Err(RequestError { field, reason })
+}
+
+fn check_order_shape(exchange: &Exchange, tradingsymbol: &str) -> Result<(), RequestError> {
+    if !exchange.is_tradable() {
+        return invalid("exchange", "is not a tradable exchange");
+    }
+    if tradingsymbol.is_empty() || tradingsymbol.len() > 64 {
+        return invalid("tradingsymbol", "must be 1-64 bytes");
+    }
+    Ok(())
+}
+
+fn check_non_negative(field: &'static str, v: f64) -> Result<(), RequestError> {
+    if !v.is_finite() || v < 0.0 {
+        return invalid(field, "must be finite and not negative");
+    }
+    Ok(())
+}
+
+/// One order in an order-margin or basket-margin calculation
+/// (`margins.md:87-98`).
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct OrderMarginRequest {
-    /// Name of the exchange
+    /// Exchange. `NONE` and `INDICES` are rejected.
     pub exchange: Exchange,
-    /// Exchange tradingsymbol of the instrument
+    /// Exchange tradingsymbol.
     pub tradingsymbol: String,
-    /// Type of transaction (BUY/SELL)
+    /// BUY or SELL.
     pub transaction_type: TransactionType,
-    /// Order variety (regular, amo, co etc.)
+    /// Order variety.
     pub variety: OrderVariety,
-    /// Margin product to use for the order (margins are blocked based on this)
+    /// Margin product.
     pub product: ProductType,
-    /// Order type (MARKET, LIMIT etc.)
+    /// Order type.
     pub order_type: OrderType,
-    /// Quantity of the order
-    pub quantity: i64,
-    /// Price at which the order is going to be placed (for LIMIT orders)
+    /// Quantity.
+    pub quantity: Quantity,
+    /// Price, for LIMIT orders; `0` otherwise, as in the documented example.
     pub price: f64,
-    /// Trigger price (for SL, SL-M, CO orders)
+    /// Trigger price, for SL, SL-M and CO orders; `0` otherwise.
     pub trigger_price: f64,
 }
 
-/// Represents the profit and loss (PNL) structure.
-///
-/// This structure holds the realised and unrealised profit and loss values.
-///
-#[derive(Serialize, Deserialize, Debug)]
-#[allow(clippy::upper_case_acronyms)] // Public name kept for compatibility.
-pub struct PNL {
-    /// Realised profit and loss
-    pub realised: f64,
-    /// Unrealised profit and loss
-    pub unrealised: f64,
+impl OrderMarginRequest {
+    /// Check the documented fields.
+    pub fn validate(&self) -> Result<(), RequestError> {
+        check_order_shape(&self.exchange, &self.tradingsymbol)?;
+        check_non_negative("price", self.price)?;
+        check_non_negative("trigger_price", self.trigger_price)
+    }
 }
 
-/// Represents the GST structure.
-///
-/// This structure holds details about various GST components like IGST, CGST, and SGST.
-///
-#[derive(Serialize, Deserialize, Debug)]
-#[allow(clippy::upper_case_acronyms)] // Public name kept for compatibility.
-pub struct GST {
-    /// Integrated Goods and Services Tax
-    pub igst: f64,
-    /// Central Goods and Services Tax
-    pub cgst: f64,
-    /// State Goods and Services Tax
-    pub sgst: f64,
-    /// Total GST
-    pub total: f64,
-}
-
-/// Represents the various charges applied to an order.
-///
-/// This structure includes transaction taxes, turnover charges, brokerage, stamp duty, and GST.
-///
-#[derive(Serialize, Deserialize, Debug)]
-pub struct Charges {
-    /// Tax levied for each transaction on the exchanges
-    pub transaction_tax: f64,
-    /// Type of transaction tax
-    pub transaction_tax_type: String,
-    /// Charge levied by the exchange on the total turnover of the day
-    pub exchange_turnover_charge: f64,
-    /// Charge levied by SEBI on the total turnover of the day
-    pub sebi_turnover_charge: f64,
-    /// Brokerage charge for a particular trade
-    pub brokerage: f64,
-    /// Duty levied on the transaction value by Government of India
-    pub stamp_duty: f64,
-    /// GST structure
-    pub gst: GST,
-    /// Total charges
-    pub total: f64,
-}
-
-/// Represents the margin details for an order.
-///
-/// This structure provides detailed information about the margins required for
-/// an order, including SPAN margins, exposure margins, option premiums, and more.
-///
-#[derive(Serialize, Deserialize, Debug)]
-pub struct OrderMargin {
-    /// Type of order (equity/commodity)
-    pub r#type: String,
-    /// Trading symbol of the instrument
-    pub tradingsymbol: String,
-    /// Name of the exchange
-    #[serde(default)]
-    pub exchange: Exchange,
-    /// SPAN margins
-    pub span: f64,
-    /// Exposure margins
-    pub exposure: f64,
-    /// Option premium
-    pub option_premium: f64,
-    /// Additional margins
-    pub additional: f64,
-    /// BO margins
-    pub bo: f64,
-    /// Cash credit
-    pub cash: f64,
-    /// VAR
-    pub var: f64,
-    /// Realised and unrealised profit and loss
-    pub pnl: PNL,
-    /// Margin leverage allowed for the trade
-    pub leverage: i64,
-    /// The breakdown of the various charges that will be applied to an order
-    pub charges: Charges,
-    /// Total margin block
-    pub total: f64,
-}
-
-/// Represents the margin details for a basket of orders.
-///
-/// This structure provides an aggregated view of margins required for executing
-/// a basket of orders, along with individual order margins and final charges.
-///
-/// Note: The [charges] field can be ignored as it may not include `transaction_tax`
-/// charges because baskets can contain both `mcx` and `equity` instruments,
-/// with different tax types (STT or CTT). Users can refer to the individual
-/// order charges response in the [orders] field.
-///
-#[derive(Serialize, Deserialize, Debug)]
-pub struct BasketMargin {
-    /// Total margins required to execute the orders
-    pub initial: OrderMargin,
-    /// Total margins with the spread benefit
-    pub r#final: OrderMargin,
-    /// Individual margins per order
-    pub orders: Vec<OrderMargin>,
-    /// Final charges
-    pub charges: Charges,
-}
-
-/// Represents a request for calculating charges for an order.
-///
-/// This structure contains all necessary information to request charge calculations
-/// for a specific order, including exchange, transaction type, order type, and more.
-///
-#[derive(Serialize, Deserialize, Debug)]
+/// One order in a virtual contract note calculation (`margins.md:391-401`).
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct OrderChargesRequest {
-    /// Unique order ID (It can be any random string to calculate charges for an imaginary order)
+    /// Order ID; for a hypothetical order it may be any string.
     pub order_id: String,
-    /// Name of the exchange
+    /// Exchange. `NONE` and `INDICES` are rejected.
     pub exchange: Exchange,
-    /// Exchange tradingsymbol of the instrument
+    /// Exchange tradingsymbol.
     pub tradingsymbol: String,
-    /// Type of transaction (BUY/SELL)
+    /// BUY or SELL.
     pub transaction_type: TransactionType,
-    /// Order variety (regular, amo, co etc.)
+    /// Order variety.
     pub variety: OrderVariety,
-    /// Margin product to use for the order (margins are blocked based on this)
+    /// Margin product.
     pub product: ProductType,
-    /// Order type (MARKET, LIMIT etc.)
+    /// Order type.
     pub order_type: OrderType,
-    /// Quantity of the order
-    pub quantity: i64,
-    /// Average price at which the order was executed (Note: Should be non-zero)
+    /// Quantity.
+    pub quantity: Quantity,
+    /// Average execution price; must be positive ("Should be non-zero").
     pub average_price: f64,
 }
 
-/// Represents the detailed charges for an order.
-///
-/// This structure provides a breakdown of all the charges that will be applied
-/// to an order, including transaction tax, exchange turnover charge, SEBI turnover
-/// charge, brokerage, and GST.
-///
-#[derive(Serialize, Deserialize, Debug)]
-pub struct OrderCharges {
-    /// Type of transaction being processed (BUY/SELL).
-    pub transaction_type: String,
-    /// Exchange `tradingsymbol` of the instrument
+impl OrderChargesRequest {
+    /// Check the documented fields.
+    pub fn validate(&self) -> Result<(), RequestError> {
+        if self.order_id.is_empty() || self.order_id.len() > 64 {
+            return invalid("order_id", "must be 1-64 bytes");
+        }
+        check_order_shape(&self.exchange, &self.tradingsymbol)?;
+        if !self.average_price.is_finite() || self.average_price <= 0.0 {
+            return invalid("average_price", "must be finite and positive");
+        }
+        Ok(())
+    }
+}
+
+/// Realised and unrealised profit and loss.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[allow(clippy::upper_case_acronyms)] // Public name kept for compatibility.
+pub struct PNL {
+    /// Realised profit and loss.
+    pub realised: f64,
+    /// Unrealised profit and loss.
+    pub unrealised: f64,
+}
+
+/// Goods and Services Tax components.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[allow(clippy::upper_case_acronyms)] // Public name kept for compatibility.
+pub struct GST {
+    /// Integrated GST.
+    pub igst: f64,
+    /// Central GST.
+    pub cgst: f64,
+    /// State GST.
+    pub sgst: f64,
+    /// Total GST.
+    pub total: f64,
+}
+
+/// The charges breakdown of an order (`margins.md:119-133`).
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct Charges {
+    /// Tax levied for each transaction on the exchanges.
+    pub transaction_tax: f64,
+    /// Type of transaction tax; may be empty.
+    pub transaction_tax_type: String,
+    /// Charge levied by the exchange on the day's turnover.
+    pub exchange_turnover_charge: f64,
+    /// Charge levied by SEBI on the day's turnover.
+    pub sebi_turnover_charge: f64,
+    /// Brokerage.
+    pub brokerage: f64,
+    /// Stamp duty.
+    pub stamp_duty: f64,
+    /// GST.
+    pub gst: GST,
+    /// Total charges.
+    pub total: f64,
+}
+
+/// The margins of one order, or an aggregate in a basket
+/// (`margins.md:100-117`).
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct OrderMargin {
+    /// `equity` or `commodity`; empty in basket aggregates.
+    pub r#type: String,
+    /// Trading symbol; empty in basket aggregates.
     pub tradingsymbol: String,
-    /// Name of the exchange
-    pub exchange: Exchange,
-    /// Order variety (regular, amo, co etc.)
-    pub variety: OrderVariety,
-    /// Margin product to use for the order (margins are blocked based on this)
-    pub product: ProductType,
-    /// Order type (MARKET, LIMIT etc.)
-    pub order_type: OrderType,
-    /// Quantity of the order
+    /// Exchange; empty (`Exchange::NONE`) in basket aggregates.
+    pub exchange: Inbound<Exchange>,
+    /// SPAN margins.
+    pub span: f64,
+    /// Exposure margins.
+    pub exposure: f64,
+    /// Option premium.
+    pub option_premium: f64,
+    /// Additional margins.
+    pub additional: f64,
+    /// BO margins.
+    pub bo: f64,
+    /// Cash credit.
+    pub cash: f64,
+    /// VAR.
+    pub var: f64,
+    /// Realised and unrealised profit and loss.
+    pub pnl: PNL,
+    /// Margin leverage allowed for the trade.
+    pub leverage: f64,
+    /// Charges breakdown.
+    pub charges: Charges,
+    /// Total margin block.
+    pub total: f64,
+}
+
+/// Basket margins (`margins.md:135-172`).
+///
+/// The `charges` field can omit `transaction_tax` for baskets that mix
+/// segments with different tax types; the per-order `orders` carry the
+/// order-wise charges.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct BasketMargin {
+    /// Total margins required to execute the orders.
+    pub initial: OrderMargin,
+    /// Total margins with the spread benefit.
+    pub r#final: OrderMargin,
+    /// Individual margins per order.
+    pub orders: Vec<OrderMargin>,
+    /// Final charges.
+    pub charges: Charges,
+}
+
+/// The charges of one order in a virtual contract note
+/// (`margins.md:488-500`).
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct OrderCharges {
+    /// BUY or SELL.
+    pub transaction_type: Inbound<TransactionType>,
+    /// Exchange tradingsymbol.
+    pub tradingsymbol: String,
+    /// Exchange.
+    pub exchange: Inbound<Exchange>,
+    /// Order variety.
+    pub variety: Inbound<OrderVariety>,
+    /// Margin product.
+    pub product: Inbound<ProductType>,
+    /// Order type.
+    pub order_type: Inbound<OrderType>,
+    /// Quantity.
     pub quantity: i64,
-    /// Price at which the order is completed
+    /// Price at which the order is completed.
     pub price: f64,
-    /// The breakdown of the various charges that will be applied to an order
+    /// Charges breakdown.
     pub charges: Charges,
 }
