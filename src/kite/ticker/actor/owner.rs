@@ -91,10 +91,19 @@ use crate::kite::envelope::{
     RawObservation, ReceiveTime, SourceIdentity, SourceKey, SourceSequencer,
     MAX_PAYLOAD_BYTES_LIMIT,
 };
+use crate::kite::obs::handle::GaugeGuard;
+use crate::kite::obs::schema::{
+    ConnectionResult, Decision, PayloadKindLabel, QueueRole, ReconnectReason, RestoreResult,
+    ShutdownResult,
+};
 use crate::kite::obs::Observability;
 use crate::kite::protocol::InstrumentToken;
 use crate::kite::ticker::actor::delivery;
 use crate::kite::ticker::actor::lifecycle::{self, Backoff, Disposition, ReconnectLimits};
+pub use crate::kite::ticker::actor::status::TickerStatus;
+use crate::kite::ticker::actor::status::{
+    self, QueueGauges, QueueStatus, StatusCore, TickerFailure, TickerObs, Traffic,
+};
 use crate::kite::ticker::actor::subscriptions::{
     reconcile, DesiredSubscriptions, Revision, SubscriptionCommand, SubscriptionError,
     MAX_INSTRUMENTS_PER_CONNECTION,
@@ -490,24 +499,6 @@ impl From<TerminalReason> for TaskOutcome {
     }
 }
 
-/// A snapshot of the owner's state, read without touching the data queue.
-#[derive(Clone, Debug, PartialEq, Eq)]
-#[non_exhaustive]
-pub struct TickerStatus {
-    /// Connection state.
-    pub state: TickerState,
-    /// Epoch of the current or last connection attempt; 0 before the first.
-    pub connection_epoch: ConnectionEpoch,
-    /// Revision of the desired subscription map.
-    pub desired_revision: Revision,
-    /// The last revision written to a connection, if any.
-    pub sent_revision: Option<Revision>,
-    /// The sticky terminal reason, once the ticker has ended.
-    pub terminal: Option<TerminalReason>,
-    /// Incremented on every change, so a stale snapshot is detectable.
-    pub snapshot_revision: u64,
-}
-
 /// Why a ticker could not be started.
 #[derive(Clone, Debug, PartialEq, Eq)]
 #[non_exhaustive]
@@ -537,6 +528,7 @@ pub(crate) enum Command {
     Subscription {
         command: SubscriptionCommand,
         reply: oneshot::Sender<Result<Revision, SubscriptionError>>,
+        span: tracing::Span,
     },
 }
 
@@ -566,13 +558,17 @@ impl fmt::Display for CommandError {
 impl std::error::Error for CommandError {}
 
 struct Shared {
-    status: watch::Sender<TickerStatus>,
+    status: watch::Sender<StatusCore>,
+    traffic: Traffic,
+    queue: delivery::Stats,
+    // The command mailbox's gauge contribution, when recording.
+    command_gauges: Option<QueueGauges>,
     stop: Notify,
     stop_requested: AtomicBool,
 }
 
 impl Shared {
-    fn update(&self, f: impl FnOnce(&mut TickerStatus)) {
+    fn update(&self, f: impl FnOnce(&mut StatusCore)) {
         self.status.send_modify(|s| {
             f(s);
             s.snapshot_revision += 1;
@@ -586,6 +582,12 @@ impl Shared {
                 s.terminal = Some(reason);
             }
         });
+    }
+
+    fn publish_commands(&self, commands: &mpsc::Sender<Command>) {
+        if let Some(g) = &self.command_gauges {
+            g.set(commands.max_capacity() - commands.capacity(), 0, None);
+        }
     }
 
     fn request_stop(&self) {
@@ -686,22 +688,25 @@ impl TickerBuilder {
             self.credentials.websocket_query().expose()
         ));
         let identity = self.identity.unwrap_or_else(SourceIdentity::generate);
-        let (status, status_rx) = watch::channel(TickerStatus {
-            state: TickerState::Disconnected,
-            connection_epoch: ConnectionEpoch(0),
-            desired_revision: Revision(0),
-            sent_revision: None,
-            terminal: None,
-            snapshot_revision: 0,
-        });
+        let obs = TickerObs {
+            obs: self.observability,
+            feed_id: identity.feed_id().to_string(),
+        };
+        let (status, status_rx) = watch::channel(StatusCore::new());
+        let (commands_tx, commands) = mpsc::channel(self.limits.command_mailbox);
+        let (events_tx, events_rx) = delivery::queue(
+            self.limits.queue_messages,
+            self.limits.queue_bytes,
+            obs.queue_gauges(QueueRole::RawPrimary),
+        );
         let shared = Arc::new(Shared {
             status,
+            traffic: Traffic::new(),
+            queue: events_tx.stats(),
+            command_gauges: obs.queue_gauges(QueueRole::Command),
             stop: Notify::new(),
             stop_requested: AtomicBool::new(false),
         });
-        let (commands_tx, commands) = mpsc::channel(self.limits.command_mailbox);
-        let (events_tx, events_rx) =
-            delivery::queue(self.limits.queue_messages, self.limits.queue_bytes);
         let keep_open = events_tx.keep_open();
         let owner = Owner {
             url: Arc::new(url),
@@ -719,7 +724,9 @@ impl TickerBuilder {
             gap: None,
             recovered: false,
             backoff: Backoff::new(&self.limits.reconnect),
-            _observability: self.observability,
+            pending_gauges: obs.queue_gauges(QueueRole::PendingSend),
+            connected: None,
+            obs: obs.clone(),
             #[cfg(test)]
             faults: self.faults,
         };
@@ -732,6 +739,7 @@ impl TickerBuilder {
                 Ok(reason) => reason,
                 Err(_) => {
                     supervisor.terminate(TickerState::Failed, TerminalReason::Panicked);
+                    obs.shutdown(ShutdownResult::Panicked, Duration::ZERO);
                     TerminalReason::Panicked
                 }
             };
@@ -762,7 +770,7 @@ impl TickerBuilder {
 #[derive(Clone)]
 pub struct TickerHandle {
     shared: Arc<Shared>,
-    status: watch::Receiver<TickerStatus>,
+    status: watch::Receiver<StatusCore>,
     commands: mpsc::Sender<Command>,
 }
 
@@ -777,7 +785,31 @@ impl fmt::Debug for TickerHandle {
 impl TickerHandle {
     /// The current status snapshot. Never waits on the data queue.
     pub fn status(&self) -> TickerStatus {
-        self.status.borrow().clone()
+        let core = self.status.borrow().clone();
+        let (messages, retained_bytes, oldest) = self.shared.queue.read();
+        let queue = QueueStatus {
+            messages,
+            retained_bytes,
+            oldest_age: oldest.map(|t| t.elapsed()),
+            commands: self.commands.max_capacity() - self.commands.capacity(),
+            pending_send: self.shared.traffic.pending_send.load(Ordering::Relaxed),
+        };
+        self.shared.traffic.snapshot(&core, queue)
+    }
+
+    /// Wait until the snapshot revision exceeds `since`, then return the
+    /// latest snapshot.
+    ///
+    /// Notifications coalesce: the returned `snapshot_revision` minus
+    /// `since` is the number of changes the caller is receiving at once.
+    /// This is best-effort status, not an event record; see
+    /// [`crate::kite::ticker::actor::status`].
+    pub async fn changed(&self, since: u64) -> TickerStatus {
+        let mut status = self.status.clone();
+        let _ = status
+            .wait_for(|s| s.snapshot_revision > since || s.terminal.is_some())
+            .await;
+        self.status()
     }
 
     /// Desire `tokens` in `mode`. A token already desired takes `mode`.
@@ -839,12 +871,25 @@ impl TickerHandle {
     /// whether it was applied.
     pub async fn command(&self, command: SubscriptionCommand) -> Result<Revision, CommandError> {
         let (reply, decision) = oneshot::channel();
+        // Created in the caller's context and carried to the owner.
+        let span = tracing::debug_span!(
+            "manja.ticker.command",
+            command = status::command_kind(&command).as_str(),
+            revision = tracing::field::Empty,
+            decision = tracing::field::Empty,
+            rejection = tracing::field::Empty,
+        );
         self.commands
-            .try_send(Command::Subscription { command, reply })
+            .try_send(Command::Subscription {
+                command,
+                reply,
+                span,
+            })
             .map_err(|e| match e {
                 mpsc::error::TrySendError::Full(_) => CommandError::MailboxFull,
                 mpsc::error::TrySendError::Closed(_) => self.terminated(),
             })?;
+        self.shared.publish_commands(&self.commands);
         match decision.await {
             Ok(result) => result.map_err(CommandError::Invalid),
             Err(_) => Err(self.terminated()),
@@ -997,7 +1042,11 @@ struct Owner {
     // Whether the current outage has reached `Active` since it began.
     recovered: bool,
     backoff: Backoff,
-    _observability: Observability,
+    obs: TickerObs,
+    // The pending-send gauge contribution, when recording.
+    pending_gauges: Option<QueueGauges>,
+    // The established-socket gauge contribution of the current connection.
+    connected: Option<GaugeGuard>,
     #[cfg(test)]
     faults: Faults,
 }
@@ -1016,8 +1065,14 @@ impl Owner {
     async fn run(mut self) -> TerminalReason {
         let mut outage_started = Instant::now();
         let mut failures: u32 = 0;
+        let mut cause: Option<ReconnectReason> = None;
         loop {
-            let (end, socket) = self.connection(failures + 1).await;
+            if let Some(reason) = cause {
+                // A reconnect is counted when its attempt starts.
+                self.obs.reconnect(reason);
+            }
+            let (end, socket) = self.connection(failures + 1, cause).await;
+            self.connected = None;
             let failure = match end {
                 End::Shutdown | End::Terminal(_) => return self.finish(end, socket).await,
                 End::Lost(reason) => {
@@ -1048,6 +1103,8 @@ impl Owner {
             };
             drop(socket);
             self.sent = None;
+            self.record_failure(failure.clone());
+            cause = Some(status::reconnect_reason(&failure));
             failures += 1;
             let limits = self.limits.reconnect.clone();
             let delay = self.backoff.delay(failures);
@@ -1171,7 +1228,11 @@ impl Owner {
 
     // One connection attempt under a fresh epoch: connect, restore, then
     // serve until the connection ends.
-    async fn connection(&mut self, attempt: u32) -> (End, Option<Socket>) {
+    async fn connection(
+        &mut self,
+        attempt: u32,
+        cause: Option<ReconnectReason>,
+    ) -> (End, Option<Socket>) {
         // The lost epoch may have issued more events (its backoff) since
         // the loss.
         if let Some(gap) = self.gap.as_mut() {
@@ -1189,13 +1250,29 @@ impl Owner {
             return (end, None);
         }
         let shared = self.shared.clone();
+        let span = tracing::debug_span!(
+            "manja.ticker.connection",
+            feed_id = self.obs.feed_id.as_str(),
+            connection_epoch = self.sequencer.epoch().0,
+            reason = cause.map_or("start", ReconnectReason::as_str),
+            result = tracing::field::Empty,
+        );
+        let started = Instant::now();
+        let obs = self.obs.clone();
+        let finished = |result: ConnectionResult| {
+            span.record("result", result.as_str());
+            obs.connection_attempt(result, started.elapsed());
+        };
         let attempt = connect(self.url.clone(), self.limits.clone());
         tokio::pin!(attempt);
         // Commands are accepted while connecting; restoration sends them.
         let connected = loop {
             tokio::select! {
                 biased;
-                _ = shared.stopped() => return (End::Shutdown, None),
+                _ = shared.stopped() => {
+                    finished(ConnectionResult::Cancelled);
+                    return (End::Shutdown, None);
+                }
                 _ = self.events.closed() => return (self.receiver_dropped(0), None),
                 command = self.commands.recv() => match command {
                     None => return (End::Terminal(TerminalReason::HandlesDropped), None),
@@ -1205,8 +1282,13 @@ impl Owner {
             }
         };
         let mut socket = match connected {
-            Ok(socket) => socket,
+            Ok(socket) => {
+                finished(ConnectionResult::Ok);
+                self.connected = Some(self.obs.connected());
+                socket
+            }
             Err(reason) => {
+                finished(status::connection_result(&reason));
                 if let TerminalReason::AuthRejected { http_status } = reason {
                     // Terminal: the ticker never retries rejected
                     // credentials.
@@ -1229,7 +1311,24 @@ impl Owner {
         // Restore the desired map before reporting `Active`.
         self.state(TickerState::Restoring);
         self.sent = Some(BTreeMap::new());
-        if let Err(end) = self.sync(&mut socket).await {
+        let restore = tracing::debug_span!(
+            "manja.ticker.restore",
+            connection_epoch = self.sequencer.epoch().0,
+            desired_revision = self.desired.revision().0,
+            instrument_count = self.desired.map().len(),
+            sent_count = reconcile(&BTreeMap::new(), self.desired.map()).len(),
+            result = tracing::field::Empty,
+        );
+        let started = Instant::now();
+        let restored = self.sync(&mut socket).await;
+        let result = match &restored {
+            Ok(()) => RestoreResult::Sent,
+            Err(End::Lost(_)) => RestoreResult::SendFailed,
+            Err(_) => RestoreResult::Cancelled,
+        };
+        restore.record("result", result.as_str());
+        self.obs.restore(result, started.elapsed());
+        if let Err(end) = restored {
             return (end, Some(socket));
         }
         let revision = self.desired.revision().0;
@@ -1293,7 +1392,12 @@ impl Owner {
     // Decide a command: apply it whole or not at all, and reply. The reply
     // is acceptance, not broker acknowledgement.
     fn on_command(&mut self, command: Command) {
-        let Command::Subscription { command, reply } = command;
+        let Command::Subscription {
+            command,
+            reply,
+            span,
+        } = command;
+        let _entered = span.enter();
         let result = self.desired.apply(&command).map(|(revision, changed)| {
             if changed {
                 self.unsent.push(revision);
@@ -1301,6 +1405,22 @@ impl Owner {
             }
             revision
         });
+        let kind = status::command_kind(&command);
+        match &result {
+            Ok(revision) => {
+                span.record("revision", revision.0);
+                span.record("decision", Decision::Accepted.as_str());
+                self.obs.command(kind, Decision::Accepted);
+            }
+            Err(e) => {
+                span.record("decision", Decision::Rejected.as_str());
+                span.record("rejection", status::rejection(e));
+                self.obs.command(kind, Decision::Rejected);
+            }
+        }
+        if let Some(g) = &self.shared.command_gauges {
+            g.set(self.commands.len(), 0, None);
+        }
         // The caller may have stopped waiting; the decision stands.
         let _ = reply.send(result);
     }
@@ -1343,21 +1463,25 @@ impl Owner {
         // it, leaving its delivery unknown; a write that stalls past the
         // liveness timeout is a liveness loss.
         let shared = self.shared.clone();
+        self.pending(true);
         let written = tokio::select! {
             biased;
             r = write => r,
             _ = shared.stopped() => {
+                self.pending(false);
                 self.interrupted = Some(latest);
                 self.lifecycle(LifecycleKind::SendFailed { revision: latest.0 })
                     .await?;
                 return Err(End::Shutdown);
             }
             _ = tokio::time::sleep(self.limits.reconnect.liveness_timeout()) => {
+                self.pending(false);
                 self.lifecycle(LifecycleKind::SendFailed { revision: latest.0 })
                     .await?;
                 return self.disconnected(DisconnectReason::LivenessTimeout).await;
             }
         };
+        self.pending(false);
         #[cfg(test)]
         let written = if self.faults.fail_sends > 0 {
             self.faults.fail_sends -= 1;
@@ -1387,8 +1511,17 @@ impl Owner {
         message: Option<Result<Message, tungstenite::Error>>,
     ) -> Result<(), End> {
         let (kind, bytes) = match message {
-            Some(Ok(Message::Binary(b))) => (PayloadKind::Binary, b),
-            Some(Ok(Message::Text(t))) => (PayloadKind::Text, t.into_bytes()),
+            Some(Ok(Message::Binary(b))) => {
+                self.obs.received(PayloadKindLabel::Binary, b.len());
+                // A heartbeat is a one-byte binary message.
+                self.shared.traffic.message(b.len() == 1);
+                (PayloadKind::Binary, b)
+            }
+            Some(Ok(Message::Text(t))) => {
+                self.obs.received(PayloadKindLabel::Text, t.len());
+                self.shared.traffic.message(false);
+                (PayloadKind::Text, t.into_bytes())
+            }
             Some(Ok(Message::Close(_))) => {
                 return self.disconnected(DisconnectReason::RemoteClose).await
             }
@@ -1431,6 +1564,12 @@ impl Owner {
 
     // Close the socket, deliver the final events and record the outcome.
     async fn finish(&mut self, end: End, socket: Option<Socket>) -> TerminalReason {
+        let requested = matches!(end, End::Shutdown);
+        // Teardown time runs from the shutdown request, or from now.
+        let started = self
+            .stop_at
+            .map_or_else(Instant::now, |at| at - self.limits.shutdown_deadline);
+        self.connected = None;
         let reason = match end {
             End::Shutdown => self.stop(socket).await,
             End::Lost(_) | End::Rejected(_) => unreachable!("the run loop resolves these"),
@@ -1459,8 +1598,38 @@ impl Owner {
             TerminalReason::AuthRejected { .. } => TickerState::AuthRejected,
             _ => TickerState::Failed,
         };
+        let took = started.elapsed();
+        let result = status::shutdown_result(&reason);
+        tracing::debug_span!(
+            "manja.ticker.shutdown",
+            reason = if requested { "requested" } else { "terminal" },
+            elapsed_ms = took.as_millis().min(u64::MAX as u128) as u64,
+            pending_deliveries = self.events.len(),
+            result = result.as_str(),
+        )
+        .in_scope(|| {});
+        self.obs.shutdown(result, took);
         self.shared.terminate(state, reason.clone());
         reason
+    }
+
+    fn pending(&self, on: bool) {
+        self.shared
+            .traffic
+            .pending_send
+            .store(on, Ordering::Relaxed);
+        if let Some(g) = &self.pending_gauges {
+            g.set(on as usize, 0, None);
+        }
+    }
+
+    fn record_failure(&self, reason: TerminalReason) {
+        let failure = TickerFailure {
+            connection_epoch: self.sequencer.epoch(),
+            reason,
+            at: self.shared.traffic.origin.elapsed(),
+        };
+        self.shared.update(|s| s.failures.push(failure));
     }
 
     async fn stop(&mut self, socket: Option<Socket>) -> TerminalReason {
