@@ -1,3 +1,33 @@
-//! Skeleton for the common protocol slice: identifiers, units and wire types.
+//! The common protocol slice: identifiers, units, scales, broker datetimes,
+//! unknown-preserving enums and the partial order-update DTO.
 //!
-//! Compiled in every feature build. Empty until implemented.
+//! Compiled in every feature build and free of async runtimes, network
+//! transports and telemetry. HTTP, ticker and decoder code share these types
+//! instead of raw integers and ad hoc parsing.
+//!
+//! - [`ids`] holds [`InstrumentToken`].
+//! - [`units`] holds exact [`ScaledPrice`] values, positive [`Quantity`], and
+//!   checked float conversion under [`CONVERSION_POLICY_VERSION`].
+//! - [`scale`] holds the per-segment price divisor policy.
+//! - [`datetime`] holds the single broker datetime parser (naive IST,
+//!   UTC+05:30).
+//! - [`enums`] holds [`Inbound`], which keeps unknown broker strings instead
+//!   of coercing them.
+//! - [`order_update`] holds [`OrderUpdate`], the partial order-update
+//!   (postback) DTO shared by HTTP and WebSocket text handling.
+//!
+pub mod datetime;
+pub mod enums;
+pub mod ids;
+pub mod order_update;
+pub mod scale;
+pub mod units;
+
+pub use datetime::{
+    parse_broker_date, parse_broker_datetime, BrokerTimestamp, DateTimeError, IST_OFFSET_SECONDS,
+};
+pub use enums::{Inbound, UnknownValue, WireEnum};
+pub use ids::InstrumentToken;
+pub use order_update::OrderUpdate;
+pub use scale::{price_divisor, ScaleError, Segment};
+pub use units::{Quantity, ScaledPrice, UnitError, CONVERSION_POLICY_VERSION};
