@@ -183,7 +183,7 @@ fn one_count_per_observation_spans_off_by_default_and_no_source_label() {
     let rec = Arc::new(InMemoryRecorder::new());
     let obs = Observability::with_recorder(rec.clone());
     let names = Names::default();
-    let _g = tracing::subscriber::set_default(tracing_subscriber::registry().with(names.clone()));
+    let _g = support::spans::set_default(tracing_subscriber::registry().with(names.clone()));
     let adapter = Adapter::new(SourceMode::Live, &obs);
     let mut s = sequencer();
     // ok, partial (one LTP and one 16-byte packet), error, unknown text,

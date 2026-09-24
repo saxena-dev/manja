@@ -12,5 +12,7 @@ pub mod capture;
 pub mod fixtures;
 #[cfg(any(feature = "http", feature = "ticker"))]
 pub mod http;
+/// Span capture that concurrent tests without a subscriber cannot disable.
+pub mod spans;
 #[cfg(feature = "ticker")]
 pub mod ws;

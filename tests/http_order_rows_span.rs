@@ -62,8 +62,7 @@ impl<S: Subscriber + for<'a> LookupSpan<'a>> Layer<S> for Capture {
 #[tokio::test]
 async fn a_strict_rejection_ends_its_spans_as_decode_errors() {
     let capture = Capture::default();
-    let _guard =
-        tracing::subscriber::set_default(tracing_subscriber::registry().with(capture.clone()));
+    let _guard = support::spans::set_default(tracing_subscriber::registry().with(capture.clone()));
     let mut v: Value = serde_json::from_str(&fixtures::json_body("orders.json").unwrap()).unwrap();
     v["data"][2]["price"] = Value::from("SEEDprice");
     let h = HttpHarness::start(vec![Reply::json(serde_json::to_string(&v).unwrap())]).await;

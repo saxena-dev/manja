@@ -87,7 +87,7 @@ impl<S: Subscriber + for<'a> LookupSpan<'a>> Layer<S> for Capture {
 
 impl Capture {
     fn install(&self) -> tracing::subscriber::DefaultGuard {
-        tracing::subscriber::set_default(tracing_subscriber::registry().with(self.clone()))
+        support::spans::set_default(tracing_subscriber::registry().with(self.clone()))
     }
 
     fn spans(&self) -> Vec<SpanRec> {
