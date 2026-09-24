@@ -17,7 +17,26 @@ use crate::kite::connect::scheduler::SchedulerLimits;
 ///
 pub const KITECONNECT_API_BASE: &str = "https://api.kite.trade";
 
-/// The HTTP client configuration: API base URL and runtime limits.
+/// The HTTP client configuration: the API base URL and the runtime limits.
+///
+/// [`Config::default`] is Kite's production API with the default limits,
+/// which suit most applications. [`Config::new`] points the client
+/// elsewhere, such as a test server, and [`Config::with_limits`] changes the
+/// bounds. Every limit's setter checks its value against a documented range.
+///
+/// # Example
+///
+/// ```
+/// use std::time::Duration;
+/// use manja::kite::connect::config::{Config, HttpLimits};
+/// use manja::kite::connect::scheduler::SchedulerLimits;
+///
+/// # fn main() -> Result<(), Box<dyn std::error::Error>> {
+/// let scheduler = SchedulerLimits::default().with_operation_deadline(Duration::from_secs(10))?;
+/// let config = Config::default().with_limits(HttpLimits::default().with_scheduler(scheduler));
+/// assert_eq!(config.api_base(), "https://api.kite.trade");
+/// # Ok(()) }
+/// ```
 #[derive(Clone, Debug)]
 pub struct Config {
     /// Base URL for the KiteConnect API.

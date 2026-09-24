@@ -141,7 +141,49 @@ impl std::fmt::Display for AdapterError {
 
 impl std::error::Error for AdapterError {}
 
-/// Decodes observations, with optional instrumentation.
+/// Decodes observations, keeping each result tied to where it came from.
+///
+/// [`Adapter::decode`] takes a [`RawObservation`], live or captured, and
+/// returns its [`Decoded`] events and any diagnostics, each carrying the
+/// observation's source key and the decoder's versions. Live and captured
+/// copies of the same bytes decode identically.
+///
+/// # Example
+///
+/// Decoding a captured message holding one LTP packet:
+///
+/// ```
+/// use manja::kite::decoder::adapter::{Adapter, DecodedEvent};
+/// use manja::kite::envelope::{
+///     MonotonicElapsed, PayloadKind, RawObservation, ReceiveTime, SourceIdentity,
+///     SourceSequencer,
+/// };
+/// use manja::kite::obs::Observability;
+/// use manja::kite::obs::schema::SourceMode;
+///
+/// # fn main() -> Result<(), Box<dyn std::error::Error>> {
+/// let mut sequencer = SourceSequencer::new(SourceIdentity::generate());
+/// sequencer.begin_epoch();
+/// let observation = RawObservation::new(
+///     sequencer.next_key(),
+///     PayloadKind::Binary,
+///     ReceiveTime::from_unix_nanos(1_700_000_000_000_000_000),
+///     MonotonicElapsed::from_nanos(0),
+///     vec![0, 1, 0, 8, 0x00, 0x06, 0x3a, 0x01, 0x00, 0x02, 0x49, 0xf0],
+///     1 << 20,
+/// )?;
+/// let adapter = Adapter::new(SourceMode::Replay, &Observability::disabled());
+/// let decoded = adapter.decode(&observation)?;
+/// assert!(decoded.diagnostics.is_empty());
+/// for event in &decoded.events {
+///     if let DecodedEvent::Packet { source, packet, .. } = event {
+///         // Every event says which observation it came from.
+///         assert_eq!(source, observation.source());
+///         assert_eq!(packet.instrument_token().get(), 408065);
+///     }
+/// }
+/// # Ok(()) }
+/// ```
 #[derive(Clone, Debug)]
 pub struct Adapter {
     framing: FramingLimits,

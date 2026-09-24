@@ -9,6 +9,8 @@ description = "Asynchronous client library for Zerodha's Kite Connect trading AP
 repository = "https://github.com/saxena-dev/manja"
 readme = "README.md"
 documentation = "https://docs.rs/manja"
+keywords = ["zerodha", "kite", "trading", "broker", "websocket"]
+categories = ["api-bindings", "finance", "asynchronous"]
 exclude = [
     "Cargo.lock",
     "tests/*",
@@ -22,6 +24,10 @@ exclude = [
     "scripts/full-verification.sh",
     "scripts/quick-verification.sh"
 ]
+
+# docs.rs documents every feature.
+[package.metadata.docs.rs]
+all-features = true
 
 [dependencies]
 chrono = { version = "0.4.38", features = ["serde"] }

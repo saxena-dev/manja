@@ -1,13 +1,18 @@
-//! Kite module for interacting with Kite Connect API.
+//! Everything manja offers, grouped by what it is for.
 //!
-//! Submodules are grouped by the Cargo feature that compiles them:
-//!
-//! - always compiled: `connect` (credentials and HTTP response models; its HTTP
-//!   client and resources need `http`), `envelope`, `error`, `obs` and
-//!   `protocol`;
-//! - `http`: the HTTP client and resources in `connect`;
-//! - `ticker`: `ticker`, the single-owner WebSocket ticker in `actor`;
-//! - `decoder`: `decoder`, pure binary and text decoding.
+//! - [`connect`]: the HTTP API. [`HTTPClient`](connect::client::HTTPClient)
+//!   and its resources need the `http` feature; credentials and response
+//!   models are always available.
+//! - [`ticker`]: the WebSocket ticker for live market data and order
+//!   updates. Needs the `ticker` feature.
+//! - [`decoder`]: decoding of the ticker's binary and text messages, live or
+//!   captured. Needs the `decoder` feature.
+//! - [`error`]: the errors every call can return.
+//! - [`obs`]: opt-in metrics, tracing spans and diagnostics.
+//! - [`protocol`]: checked types for the values Kite sends and accepts, such
+//!   as instrument tokens, order IDs, quantities and scaled prices.
+//! - [`envelope`]: the provenance record wrapped around every ticker
+//!   message.
 //!
 pub mod connect;
 #[cfg(feature = "decoder")]

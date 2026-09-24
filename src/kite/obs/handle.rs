@@ -258,7 +258,42 @@ struct Inner {
     next_operation_id: AtomicU64,
 }
 
-/// A cloneable observability handle: one recording scope.
+/// Where manja records its metrics: pass one to a client or ticker to turn
+/// telemetry on.
+///
+/// [`Observability::disabled`], the default everywhere, records nothing and
+/// allocates nothing. [`Observability::with_recorder`] sends every metric to
+/// your [`MetricRecorder`]. Clones share one scope, so a client and a ticker
+/// given clones of the same handle report into the same place. Spans go to
+/// whatever `tracing` subscriber you install; manja installs none.
+///
+/// # Example
+///
+/// A recorder that forwards to your metrics library. Recording happens on
+/// hot paths, so it must be quick and must not block.
+///
+/// ```
+/// use std::sync::Arc;
+/// use manja::kite::obs::{Labels, MetricRecorder, Observability};
+///
+/// struct Forward;
+///
+/// impl MetricRecorder for Forward {
+///     fn counter_add(&self, labels: &Labels, value: u64) {
+///         // For example, `metrics::counter!(labels.instrument().name()).increment(value)`.
+///         let _ = (labels.instrument().name(), value);
+///     }
+///     fn gauge_set(&self, labels: &Labels, value: f64) {
+///         let _ = (labels.instrument().name(), value);
+///     }
+///     fn histogram_record(&self, labels: &Labels, seconds: f64) {
+///         let _ = (labels.instrument().name(), seconds);
+///     }
+/// }
+///
+/// let obs = Observability::with_recorder(Arc::new(Forward));
+/// assert!(obs.is_recording());
+/// ```
 #[derive(Clone)]
 pub struct Observability(Arc<Inner>);
 

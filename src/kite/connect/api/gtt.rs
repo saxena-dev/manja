@@ -24,7 +24,40 @@ use crate::kite::connect::{
 };
 use crate::kite::error::Result;
 
-/// GTT placement, modification, deletion and retrieval.
+/// GTT (Good Till Triggered) placement, modification, deletion and
+/// retrieval. Borrowed from a client with
+/// [`HTTPClient::gtt`](crate::kite::connect::client::HTTPClient::gtt).
+///
+/// # Example
+///
+/// Place a trigger that buys one INFY share with a LIMIT order at 702.5 once
+/// the price reaches 702:
+///
+/// ```no_run
+/// use manja::kite::connect::models::{
+///     Exchange, GttOrderRequest, GttRequest, ProductType, TransactionType,
+/// };
+/// use manja::kite::protocol::Quantity;
+/// use manja::kite::connect::client::HTTPClient;
+/// use manja::kite::connect::config::Config;
+/// use manja::kite::connect::credentials::Credentials;
+///
+/// # async fn run() -> Result<(), Box<dyn std::error::Error>> {
+/// let client = HTTPClient::new(Config::default())?
+///     .with_credentials(Credentials::new("api_key", "access_token")?);
+/// let order = GttOrderRequest::limit(
+///     TransactionType::BUY,
+///     Quantity::new(1)?,
+///     ProductType::CashAndCarry,
+///     702.5,
+/// );
+/// // Buy if INFY falls to 702. The trigger value comes first, then the
+/// // instrument's current last price.
+/// let request = GttRequest::single(Exchange::NSE, "INFY", 702.0, 798.0, order);
+/// let receipt = client.gtt().place_trigger(&request).await?.data.expect("data");
+/// println!("trigger {}", receipt.trigger_id);
+/// # Ok(()) }
+/// ```
 pub struct Gtt<'c> {
     /// Reference to the HTTP client used for making API requests.
     pub client: &'c HTTPClient,

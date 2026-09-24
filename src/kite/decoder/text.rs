@@ -151,7 +151,17 @@ fn depth(text: &str) -> usize {
     max
 }
 
-/// Parse one text message.
+/// Parse one text message: an order update, an error, an informational
+/// message, or a type this version does not know, kept as it arrived.
+///
+/// ```
+/// use manja::kite::decoder::text::{TextEvent, TextLimits, parse};
+///
+/// # fn main() -> Result<(), Box<dyn std::error::Error>> {
+/// let event = parse(r#"{"type":"message","data":"hello"}"#, TextLimits::default())?;
+/// assert!(matches!(event, TextEvent::Message(text) if text.as_str() == "hello"));
+/// # Ok(()) }
+/// ```
 pub fn parse(text: &str, limits: TextLimits) -> Result<TextEvent, TextError> {
     use DecodeDiagnosticKind::{InvalidText, Oversized};
     if text.len() > limits.max_bytes {

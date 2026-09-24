@@ -1,7 +1,14 @@
-//! Portable raw-observation and source-lifecycle envelopes.
+//! The provenance record wrapped around every ticker message.
 //!
-//! Compiled in every feature build, with no async runtime. `types` holds the
-//! versioned envelope and its source identity; its items are re-exported here.
+//! Each message the ticker receives arrives as a [`RawObservation`]: the
+//! exact bytes, when they were received, and a [`SourceKey`] saying which
+//! feed, connection and position in the stream they came from. Changes in
+//! the connection arrive as [`LifecycleEvent`]s in the same stream. Together
+//! they let you tell a fresh connection from a gap, and replay captured data
+//! with the same provenance it had live.
+//!
+//! These types are serializable and need no async runtime, so you can store
+//! observations and decode them later.
 //!
 pub mod types;
 

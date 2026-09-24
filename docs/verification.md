@@ -254,11 +254,15 @@ Rust 1.98.0, release profile and all features. Another host needs its own measur
 ## 6. Continuous integration
 
 `.github/workflows/ci.yml` runs `cargo test`, doc tests included, for each of the eight
-feature combinations on Rust 1.88.0, the minimum supported version, and on the stable
+feature configurations on Rust 1.88.0, the minimum supported version, and on the stable
 channel, after checking that the `kiteconnect-mocks` checkout matches its pin. For each
 row it also checks the resolved dependency graph against `contract.md` §1. A separate job
 runs `cargo fmt`, Clippy with warnings denied, and `cargo doc` with warnings denied, on
 stable.
+
+The doc tests include every Rust example in `README.md`: `src/lib.rs` includes the README
+under `cfg(doctest)`, so its examples compile on every row with all three features and
+cannot drift from the API.
 
 ---
 

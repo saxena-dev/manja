@@ -15,8 +15,10 @@ its `BR-*` ID. The behavior you can rely on is in [`contract.md`](contract.md).
   when you disable default features. With no features the crate has no Tokio or
   network dependency.
 - **Minimum Rust version.** 1.88.0, with edition 2024.
-- **No deprecations.** 0.2.0 is itself the breaking release, so code that only 0.1
-  callers needed is removed rather than deprecated (§4, §5).
+- **Versioning.** Before 1.0, breaking changes ship only in minor-version bumps, each
+  listed in this guide. Where practical, an item is deprecated for a release before it
+  is removed. 0.2.0 is itself the breaking release, so code that only 0.1 callers
+  needed is removed outright (§4, §5).
 - **Safety corrections are not held back for compatibility.** Where the old behavior
   was unsafe (success reported for errors, unbounded retries, silently truncated input,
   tokens in URLs), it changed; each change is listed in §4.

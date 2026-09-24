@@ -299,7 +299,32 @@ pub enum Message<'a> {
     Packets(Frames<'a>),
 }
 
-/// Frame one binary message.
+/// Frame one binary message: the heartbeat, or a batch of packets.
+///
+/// A batch is a packet count followed by length-prefixed packets
+/// (`kite:websocket.md:73-85`). The count, every length and the absence of
+/// trailing bytes are checked before any packet is exposed. Decode each
+/// packet with [`decode`](crate::kite::decoder::packets::decode).
+///
+/// ```
+/// use manja::kite::decoder::framing::{FramingLimits, Message, frame};
+/// use manja::kite::decoder::packets::{Packet, decode, scaled};
+/// use manja::kite::protocol::scale::Segment;
+///
+/// # fn main() -> Result<(), Box<dyn std::error::Error>> {
+/// // One packet of 8 bytes: an LTP packet for token 408065 at 150000 paise.
+/// let message = [0, 1, 0, 8, 0x00, 0x06, 0x3a, 0x01, 0x00, 0x02, 0x49, 0xf0];
+/// let Message::Packets(frames) = frame(&message, FramingLimits::default())? else {
+///     panic!("not a heartbeat");
+/// };
+/// for f in frames.iter() {
+///     if let Packet::Ltp(p) = decode(&f)? {
+///         assert_eq!(p.instrument_token.get(), 408065);
+///         assert_eq!(scaled(p.last_price, Segment::Nse)?.to_f64(), 1500.0);
+///     }
+/// }
+/// # Ok(()) }
+/// ```
 pub fn frame(payload: &[u8], limits: FramingLimits) -> Result<Message<'_>, FramingError> {
     let err = |kind, offset, packet_index| FramingError {
         kind,

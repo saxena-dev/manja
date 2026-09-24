@@ -1,12 +1,13 @@
-//! Single-owner ticker actor.
+//! The ticker task and the types you use to control and observe it.
 //!
-//! Compiled with the `ticker` feature, as part of the ticker module.
-//!
-//! - `owner`: the socket-owning task, its handle and task guard.
-//! - `subscriptions`: desired subscriptions and command revisions.
-//! - `lifecycle`: connection, reconnect and credential-rejection states.
-//! - `delivery`: bounded delivery, cancellation and teardown.
-//! - `status`: the queryable status snapshot.
+//! - [`owner`]: [`TickerBuilder`](owner::TickerBuilder), the handle, the
+//!   event stream and the task guard. Start here.
+//! - [`subscriptions`]: the subscriptions you ask for, and the revisions
+//!   that track each change.
+//! - [`lifecycle`]: connecting, reconnecting and their limits.
+//! - [`delivery`]: how events are queued and delivered to you.
+//! - [`status`]: the snapshot [`TickerHandle::status`](owner::TickerHandle::status)
+//!   returns.
 //!
 pub mod delivery;
 pub mod lifecycle;
