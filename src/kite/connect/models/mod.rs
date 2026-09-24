@@ -39,7 +39,6 @@ pub use session::UserSession;
 /// Models for the `/user/` API group, handling user-specific data and settings.
 ///
 mod user;
-#[allow(unused_imports)]
 pub use user::{Available, Segment, SegmentKind, UserMargins, UserProfile, Utilised};
 
 /// Models for the `/orders/` API group, facilitating order placement, modification,
@@ -51,7 +50,6 @@ pub use order::{
     ModifyOrderRequest, Order, OrderReceipt, PlaceOrderRequest, RequestError, SliceError,
     SliceResult, Trade,
 };
-#[allow(unused_imports)]
 pub use order_enums::{
     OrderStatus, OrderType, OrderValidity, OrderVariety, ProductType, TransactionType,
 };
@@ -96,7 +94,6 @@ pub use portfolio::{
 /// and instrument information.
 ///
 mod market;
-#[allow(unused_imports)]
 pub use market::{
     Depth, DepthLevel, FullQuote, Instrument, InstrumentType, KiteQuote, LTPQuote, OHLC, OHLCQuote,
     QuoteMode, Quotes,

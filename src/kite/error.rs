@@ -1,6 +1,6 @@
 //! Error types.
 //!
-//! [`ManjaError`] is the crate's legacy top-level error. Every failure of an
+//! [`ManjaError`] is the crate's top-level error. Every failure of an
 //! HTTP operation is its [`ManjaError::Http`] variant, carrying an
 //! [`HttpError`]: a stable, inspectable category ([`HttpErrorKind`]) plus
 //! metadata — method, endpoint template, HTTP status if one was received,
@@ -46,24 +46,6 @@ pub enum ManjaError {
     /// Invalid credential material supplied to a constructor.
     #[error("invalid credentials: {0}")]
     Credential(#[from] CredentialError),
-
-    /// Represents errors that occur during JSON deserialization.
-    #[error("JSON deserialization error: {0}")]
-    JSONDeserialize(#[from] serde_json::Error),
-
-    /// Represents general I/O errors.
-    #[error("IO error: {0}")]
-    IoError(#[from] std::io::Error),
-
-    /// Represents internal errors within the `manja` crate.
-    #[error("Internal `manja` error: {0}")]
-    Internal(String),
-}
-
-impl From<&str> for ManjaError {
-    fn from(value: &str) -> Self {
-        ManjaError::Internal(value.to_string())
-    }
 }
 
 impl From<HttpError> for ManjaError {

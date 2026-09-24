@@ -7,7 +7,7 @@
 //!
 //! 1. `raw → f64` ([`ScaledPrice::to_f64`]) is one IEEE-754 division, which
 //!    rounds to the nearest representable `f64` (ties to even). It is for
-//!    display and legacy interfaces; exact arithmetic uses `raw` and
+//!    display and interfaces that take floats; exact arithmetic uses `raw` and
 //!    `divisor`.
 //! 2. `f64 → raw` ([`ScaledPrice::from_f64`]) rejects NaN and infinities,
 //!    multiplies by the divisor, and accepts the result only if it lies
@@ -105,7 +105,7 @@ impl ScaledPrice {
         })
     }
 
-    /// Convert a legacy float price exactly, under policy rule 2.
+    /// Convert a float price exactly, under policy rule 2.
     pub fn from_f64(value: f64, divisor: u32) -> Result<Self, UnitError> {
         if divisor == 0 {
             return Err(UnitError::ZeroDivisor);

@@ -5,9 +5,8 @@
 //! - always compiled: `connect` (credentials and HTTP response models; its HTTP
 //!   client and resources need `http`), `envelope`, `error`, `obs` and
 //!   `protocol`;
-//! - `http`: the HTTP client and resources in `connect`, and `traits`;
-//! - `ticker`: `ticker`, with the legacy WebSocket client and the single-owner
-//!   `actor`;
+//! - `http`: the HTTP client and resources in `connect`;
+//! - `ticker`: `ticker`, the single-owner WebSocket ticker in `actor`;
 //! - `decoder`: `decoder`, pure binary and text decoding.
 //!
 pub mod connect;
@@ -19,5 +18,3 @@ pub mod obs;
 pub mod protocol;
 #[cfg(feature = "ticker")]
 pub mod ticker;
-#[cfg(feature = "http")]
-pub mod traits;

@@ -5,10 +5,6 @@
 //! Every negative input below is synthetic unless it is named as an official
 //! `kiteconnect-mocks/` fixture; each one states what it was derived from.
 
-// Two tests drive the deprecated legacy ticker, which stays supported
-// during the migration.
-#![allow(deprecated)]
-
 #[path = "mod.rs"]
 mod support;
 
@@ -19,7 +15,9 @@ use tokio_tungstenite::tungstenite::{Error as WsError, Message};
 
 use manja::kite::connect::client::HTTPClient;
 use manja::kite::connect::config::Config;
-use manja::kite::ticker::{Mode, StreamState, WebSocketClient};
+use manja::kite::connect::credentials::Credentials;
+use manja::kite::envelope::PayloadKind;
+use manja::kite::ticker::actor::owner::{TaskOutcome, TickerBuilder, TickerEvent};
 
 use support::fixtures::{self, FixtureError};
 use support::http::{HttpHarness, Reply, refused_base_url};
@@ -359,18 +357,22 @@ async fn manja_ticker_connects_through_the_harness_and_receives_raw_frames() {
         steps: vec![Step::Send(Message::Binary(frame.clone()))],
     }])
     .await;
-    let state = StreamState::from_parts(
-        harness.url(),
-        "test_api_key".into(),
-        "test_access_token".into(),
-    )
-    .subscribe_token(Mode::LTP, 408065);
-    let mut ticker = tokio::time::timeout(WAIT, WebSocketClient::connect(state))
-        .await
-        .unwrap()
+    let credentials = Credentials::new("test_api_key", "test_access_token").unwrap();
+    let (handle, mut events, guard) = TickerBuilder::new(credentials)
+        .url(harness.url())
+        .spawn()
         .unwrap();
-    let message = next(&mut ticker).await.unwrap().unwrap();
-    assert_eq!(message, Message::Binary(frame));
+    let raw = loop {
+        match tokio::time::timeout(WAIT, events.next()).await.unwrap() {
+            Some(Ok(TickerEvent::Raw(raw))) => break raw,
+            Some(Ok(_)) => {}
+            other => panic!("no raw frame: {other:?}"),
+        }
+    };
+    assert_eq!(raw.kind(), PayloadKind::Binary);
+    assert_eq!(raw.payload().as_bytes(), frame);
+    handle.shutdown().await.unwrap();
+    assert_eq!(guard.join().await, TaskOutcome::Clean);
     let target = &harness.handshakes()[0].target;
     assert!(target.contains("api_key=test_api_key"), "{target}");
     assert!(

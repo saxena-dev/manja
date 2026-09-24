@@ -1,10 +1,9 @@
 //! Construction reads no environment variable.
 //!
-//! The legacy `load_from_env` paths are gone: a credentials snapshot holds
-//! only what the caller passed, and `Config::default()` is the production
-//! endpoint whatever the process environment holds. Setting a variable is
-//! only sound while no other thread reads the environment, so this is the
-//! only test in its binary.
+//! A credentials snapshot holds only what the caller passed, and
+//! `Config::default()` is the production endpoint whatever the process
+//! environment holds. Setting a variable is only sound while no other thread
+//! reads the environment, so this is the only test in its binary.
 
 use manja::kite::connect::credentials::Credentials;
 
@@ -22,7 +21,6 @@ fn construction_ignores_the_environment() {
     #[cfg(feature = "http")]
     {
         use manja::kite::connect::config::{Config, KITECONNECT_API_BASE};
-        use manja::kite::traits::KiteConfig;
         assert_eq!(Config::default().api_base(), KITECONNECT_API_BASE);
     }
 }

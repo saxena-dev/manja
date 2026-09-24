@@ -86,7 +86,6 @@ use crate::kite::{
     obs::handle::{Labels, Observability},
     obs::schema::{Endpoint, HttpOperationResult, Instrument, Method, QuotaClass},
     protocol::Inbound,
-    traits::KiteConfig,
 };
 
 struct Transport {
