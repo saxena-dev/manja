@@ -32,7 +32,32 @@ use crate::kite::error::Result;
 use crate::kite::protocol::OrderId;
 
 /// Order placement, modification and cancellation, the order book and the
-/// trade book.
+/// trade book. Borrowed from a client with
+/// [`HTTPClient::orders`](crate::kite::connect::client::HTTPClient::orders).
+///
+/// Placement, modification and cancellation make exactly one attempt. If one
+/// fails after the request may have reached Kite
+/// ([`HttpError::may_have_reached_broker`](crate::kite::error::HttpError::may_have_reached_broker)),
+/// look the order up before sending it again: give orders a `tag` so you can
+/// find them. A receipt means Kite accepted the request, not that the order
+/// filled.
+///
+/// # Example
+///
+/// ```no_run
+/// use manja::kite::connect::client::HTTPClient;
+/// use manja::kite::connect::config::Config;
+/// use manja::kite::connect::credentials::Credentials;
+///
+/// # async fn run() -> Result<(), Box<dyn std::error::Error>> {
+/// let client = HTTPClient::new(Config::default())?
+///     .with_credentials(Credentials::new("api_key", "access_token")?);
+/// for order in client.orders().list_orders().await?.data.unwrap_or_default() {
+///     let history = client.orders().get_order_history(&order.order_id).await?;
+///     println!("{}: {} states", order.order_id, history.data.unwrap_or_default().len());
+/// }
+/// # Ok(()) }
+/// ```
 pub struct Orders<'c> {
     /// Reference to the HTTP client used for making API requests.
     pub client: &'c HTTPClient,

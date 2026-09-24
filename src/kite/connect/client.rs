@@ -154,9 +154,46 @@ pub struct HttpDiagnostics {
 
 /// An asynchronous Kite Connect HTTP client.
 ///
-/// Create one and reuse it: it holds a connection pool, and clones share it.
-/// A client's credentials are an immutable snapshot; to use other
-/// credentials, derive a new client with [`Self::with_credentials`].
+/// Create one and reuse it. It holds a connection pool, and every clone
+/// shares that pool, the client's rate limits and its diagnostics, so hand
+/// clones to the tasks that need one.
+///
+/// # Creating a client
+///
+/// - [`HTTPClient::new`] with a [`Config`]. [`Config::default`] is Kite's
+///   production API; `Config::new(url)` points elsewhere, such as a test
+///   server.
+/// - [`HTTPClient::with_observability`] to record metrics and spans.
+/// - [`HTTPClient::builder`] to also share an [`Admission`] scope with other
+///   clients, for example several clients using one API key.
+///
+/// The session calls ([`HTTPClient::session`]) need no credentials. Every
+/// other call does: set them with [`Self::with_credentials`], which returns a
+/// new client and leaves this one unchanged. A call made without credentials
+/// is sent unauthenticated, and Kite rejects it as
+/// [`AuthRejected`](crate::kite::error::HttpErrorKind::AuthRejected).
+///
+/// Each part of the API is reached through a method that borrows the
+/// client: [`user`](Self::user), [`orders`](Self::orders),
+/// [`portfolio`](Self::portfolio), [`market`](Self::market),
+/// [`gtt`](Self::gtt), [`mutual_funds`](Self::mutual_funds),
+/// [`margins`](Self::margins) and [`charges`](Self::charges).
+///
+/// # Example
+///
+/// ```no_run
+/// use manja::kite::connect::client::HTTPClient;
+/// use manja::kite::connect::config::Config;
+/// use manja::kite::connect::credentials::Credentials;
+///
+/// # async fn run() -> Result<(), Box<dyn std::error::Error>> {
+/// let client = HTTPClient::new(Config::default())?
+///     .with_credentials(Credentials::new("api_key", "access_token")?);
+///
+/// let holdings = client.portfolio().get_holdings().await?.data.unwrap_or_default();
+/// println!("{} holdings", holdings.len());
+/// # Ok(()) }
+/// ```
 #[derive(Clone)]
 pub struct HTTPClient {
     transport: Arc<Transport>,

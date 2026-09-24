@@ -20,10 +20,29 @@ use crate::kite::connect::{
 };
 use crate::kite::error::Result;
 
-/// A user's portfolio consists of long term equity holdings and short term
-/// positions. The portfolio APIs return instruments in a portfolio with
-/// up-to-date profit and loss computations.
+/// Holdings, positions, position conversion, holdings auctions and holdings
+/// authorisation. Borrowed from a client with
+/// [`HTTPClient::portfolio`](crate::kite::connect::client::HTTPClient::portfolio).
 ///
+/// Holdings are long-term equity in the DEMAT account; positions are the
+/// day's and carried-forward trades, with profit and loss as Kite computes
+/// it.
+///
+/// # Example
+///
+/// ```no_run
+/// use manja::kite::connect::client::HTTPClient;
+/// use manja::kite::connect::config::Config;
+/// use manja::kite::connect::credentials::Credentials;
+///
+/// # async fn run() -> Result<(), Box<dyn std::error::Error>> {
+/// let client = HTTPClient::new(Config::default())?
+///     .with_credentials(Credentials::new("api_key", "access_token")?);
+/// let holdings = client.portfolio().get_holdings().await?.data.unwrap_or_default();
+/// let positions = client.portfolio().get_positions().await?.data.expect("data");
+/// println!("{} holdings, {} net positions", holdings.len(), positions.net.len());
+/// # Ok(()) }
+/// ```
 pub struct Portfolio<'c> {
     /// Reference to the HTTP client used for making API requests.
     pub client: &'c HTTPClient,

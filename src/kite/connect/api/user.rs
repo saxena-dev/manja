@@ -13,13 +13,26 @@ use crate::kite::connect::{
 };
 use crate::kite::error::Result;
 
-/// User related API endpoints for fetching user margins and profile information.
+/// The user's profile, and their funds and margins (`kite:user.md:131-294`).
+/// Borrowed from a client with
+/// [`HTTPClient::user`](crate::kite::connect::client::HTTPClient::user).
 ///
-/// This struct provides methods to interact with the user-related API endpoints
-/// of Kite Connect. It allows fetching user profile information and user margins.
+/// # Example
 ///
-/// Refer to the official API documentation (`kite:user.md:131-294`) for more details.
+/// ```no_run
+/// use manja::kite::connect::models::SegmentKind;
+/// use manja::kite::connect::client::HTTPClient;
+/// use manja::kite::connect::config::Config;
+/// use manja::kite::connect::credentials::Credentials;
 ///
+/// # async fn run() -> Result<(), Box<dyn std::error::Error>> {
+/// let client = HTTPClient::new(Config::default())?
+///     .with_credentials(Credentials::new("api_key", "access_token")?);
+/// let profile = client.user().profile().await?.data.expect("data");
+/// let equity = client.user().margins_by_segment(SegmentKind::Equity).await?;
+/// println!("{}: {:?}", profile.user_name, equity.data);
+/// # Ok(()) }
+/// ```
 pub struct User<'c> {
     /// Reference to the HTTP client used for making API requests.
     pub client: &'c HTTPClient,

@@ -1,15 +1,15 @@
-//! The Kite Connect WebSocket ticker.
+//! The Kite Connect WebSocket ticker, for live market data and order
+//! updates. Needs the `ticker` feature.
 //!
-//! This module is compiled with the `ticker` feature.
+//! Start with [`TickerBuilder`](actor::owner::TickerBuilder). It spawns one
+//! background task that owns the connection, and gives you a handle for
+//! commands and status and a stream of everything received, in order.
 //!
-//! # Raw and typed streams
-//!
-//! The ticker, built in `actor` (`docs/contract.md` §2.5), is one
-//! socket-owning task with typed commands, a status handle and a supervised task
-//! guard. Its primary receiver yields raw observations and lifecycle events
-//! before any interpretation, and it needs no decoder. Typed market events come
-//! from composing it with the `decoder` feature, which decodes those raw
-//! observations; typed events never replace the raw stream.
+//! The stream carries raw messages, exactly as Kite sent them, so nothing is
+//! lost to a decoding error. With the `decoder` feature,
+//! [`typed::TypedEvents`] delivers each message together with its decoding.
+//! [`Mode`] chooses how much data Kite sends per instrument, and
+//! [`TickerRequest`] builds the wire messages the ticker sends.
 //!
 
 // The single-owner ticker: owner, subscriptions, lifecycle, delivery and

@@ -32,8 +32,9 @@ available and need no async runtime. `ticker` and `decoder` together add
 Each slice depends only on the always-available modules, never on another slice:
 `http` does not pull in the WebSocket stack, `ticker` pulls in neither the HTTP stack
 nor the decoder, and a decoder-only or no-feature build has no Tokio, HTTP client or
-WebSocket dependency. Every one of the eight feature combinations is built and tested
-on the minimum supported Rust version, 1.88.0, and on the stable channel.
+WebSocket dependency. Eight feature configurations are built and tested on the minimum
+supported Rust version, 1.88.0, and on the stable channel: no features, each feature
+alone, `ticker` with `decoder`, `http` with `ticker`, all three, and the default.
 
 ---
 
@@ -110,7 +111,7 @@ like every observability label domain (§4.1), is `#[non_exhaustive]`; the stabl
 | `Broker` | the broker returned an error envelope (`kite:exceptions.md:18-28`) |
 | `AuthRejected` | the broker rejected the credentials: `TokenException` or HTTP 403 (`kite:exceptions.md:20,35`) |
 | `Decode` | a response was received but was oversized, malformed or lacked the success envelope |
-| `Cancelled` | the operation was cancelled |
+| `Cancelled` | an operation whose future was dropped; recorded in `HTTPClient::diagnostics`, never returned by a call |
 
 `HttpError` also reports the method, the endpoint template (never a URL with
 credentials), the HTTP status and broker `error_type` when known, the attempt number,
@@ -662,7 +663,7 @@ These choices are not dictated by the Kite documentation alone.
 | Order IDs | Checked types; a response ID that fails its grammar is a `Decode` error | An ID is a request path segment. A lenient fallback would let a malformed broker value reach a path unchecked, and every ID in the official samples already fits its grammar |
 | Rejected list rows | The default equity order and trade list methods stay strict; a paired `*_with_rejections` method returns every row, rejected ones in place (§2.16) | Strict is the default because `?` keeps a failure loud, and an entirely rejected book can never pass for an empty one. The tolerant form lets a caller still see, and act on, the rows that decoded. Keeping partial data out of `HttpError` keeps broker rows out of commonly logged errors |
 | Error details | A parse or decode failure is described by serde's category and position, with no field path | serde's message quotes the offending value. A field path would need a new dependency, and in a map-shaped payload such as a quote response its keys are broker values (instrument symbols). The tolerant order and trade lists hand the full serde error to the caller in `RowError`, outside any error (§2.16) |
-| Mutual funds | Read-only: orders, SIPs, holdings and the instrument list | The documentation states that order placement cannot be done through the API (`kite:mutual-funds.md:3`) and lists only these reads (`kite:mutual-funds.md:5-11`). The official mocks still carry order and SIP placement, modification and cancellation responses, but no request for them is documented, so implementing them would mean inventing the request |
+| Mutual funds | Read-only: orders, SIPs, holdings and the instrument list | The documentation states that order placement cannot be done through the API, because it needs payment from the user's bank account (`kite:mutual-funds.md:3`), and lists only these reads (`kite:mutual-funds.md:5-11`). The official mocks still carry order and SIP placement, modification and cancellation responses, but no request for them is documented, so implementing them would mean inventing the request |
 | GTT orders | Only LIMIT orders, each for the condition's instrument; a modification sends the complete trigger | The documentation lists `LIMIT` as the only order type and shows each order repeating the condition's exchange and tradingsymbol (`kite:gtt.md:56-64`); it recommends fetching the trigger and sending it back modified (`kite:gtt.md:390-393`) |
 | Default features | `http`, `ticker` and `decoder` | Keeps every 0.1 import path available |
 | Edition and minimum Rust version | Edition 2024; `rust-version` 1.88.0 | 1.88 is the first release with let chains, which the code uses. Every feature row, doc tests included, passes on 1.88.0, and 1.87.0 rejects the let chains (E0658). With `rust-version` at 1.88 the resolver picks dependency versions that build on it. Dependencies alone do not set the floor: down to 1.85 the resolver still finds compatible releases (the `icu_*` 2.3 crates, which need 1.88, fall back to earlier 2.x releases), and with the let chains reverted the all-features suite passes on 1.87.0 (checked on 2026-09-24) |
@@ -681,6 +682,6 @@ These choices are not dictated by the Kite documentation alone.
 | `OBS_SCHEMA_VERSION` | 1 | the observability schema (§4) |
 | `QUOTA_PROFILE_VERSION` | `kite-connect-v3/exceptions.md@2026-09-23+r2` | the default quota profile (§3.6): the page it encodes, the date that page was accessed, and a revision that increases when the encoding of the same page changes. A version without a `+r` suffix is revision 1, and the revision restarts at 1 when the page is accessed again on a new date. Revision 2 added the `Historical` class |
 
-Each is versioned independently. The crate is pre-1.0: every intentional break ships in
-a minor-version bump with release notes, and deprecated items keep working for at least
-one release before removal.
+Each is versioned independently. The crate is pre-1.0: every intentional break ships only
+in a minor-version bump and is listed in `migration.md`. Where practical, an item is
+deprecated for a release before it is removed.

@@ -38,7 +38,41 @@ use crate::kite::connect::{
 };
 use crate::kite::error::Result;
 
-/// The session resource for one API key.
+/// Turning a login into a session, and ending one. Borrowed from a client
+/// with [`HTTPClient::session`](crate::kite::connect::client::HTTPClient::session),
+/// which takes the API key.
+///
+/// After the user logs in on Kite's login page, Kite redirects to your app
+/// with a request token. [`Session::exchange`] trades it, with your API
+/// secret, for a [`UserSession`], whose [`credentials`](UserSession::credentials)
+/// serve every other call. The access token stays valid until it is
+/// invalidated or until 6 AM the next day (`kite:user.md:115`). Neither call
+/// needs the client to hold credentials, and neither is retried.
+///
+/// # Example
+///
+/// ```no_run
+/// use manja::kite::connect::client::HTTPClient;
+/// use manja::kite::connect::config::Config;
+/// use manja::kite::connect::credentials::{ApiKey, ApiSecret, RequestToken};
+///
+/// # async fn run() -> Result<(), Box<dyn std::error::Error>> {
+/// let client = HTTPClient::new(Config::default())?;
+/// let session = client
+///     .session(ApiKey::new("api_key")?)
+///     .exchange(&RequestToken::new("request_token")?, &ApiSecret::new("api_secret")?)
+///     .await?
+///     .data
+///     .expect("data");
+/// let credentials = session.credentials()?;
+///
+/// // At the end of the day, retire the access token.
+/// client
+///     .session(ApiKey::new("api_key")?)
+///     .invalidate(credentials.access_token())
+///     .await?;
+/// # Ok(()) }
+/// ```
 pub struct Session<'c> {
     client: &'c HTTPClient,
     api_key: ApiKey,

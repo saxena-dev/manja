@@ -90,7 +90,8 @@ pub enum HttpErrorKind {
     /// A response was received but could not be decoded, was oversized, or
     /// lacked the required success envelope or payload.
     Decode,
-    /// The operation was cancelled.
+    /// The operation's future was dropped before it finished. Recorded in
+    /// `HTTPClient::diagnostics`; a call never returns it.
     Cancelled,
 }
 
@@ -158,7 +159,42 @@ pub struct RetryInfo {
     pub max_attempts: u32,
 }
 
-/// A failed HTTP operation. Pointer-sized: the details are boxed.
+/// A failed HTTP operation.
+///
+/// Two questions answer most of what to do next:
+///
+/// - **What happened?** [`kind`](Self::kind) is the category: an invalid
+///   request, a rate limit, a deadline, a network failure, an error from
+///   Kite, rejected credentials or an unreadable response.
+///   [`broker`](Self::broker) holds Kite's own error type and message, when
+///   Kite sent one.
+/// - **Did Kite see it?** [`stage`](Self::stage) says how far the request
+///   got, and [`may_have_reached_broker`](Self::may_have_reached_broker) is
+///   `false` only when manja knows the request never left the process. After
+///   a lost response to an order, check the order book before sending the
+///   order again.
+///
+/// It also reports the method, the endpoint template, the HTTP status, the
+/// attempt number and retry metadata, whether a timeout ended it
+/// ([`is_timeout`](Self::is_timeout)), a bounded detail and, for transport
+/// failures, the underlying error through `source()`. It never holds a URL,
+/// a body, a header or a credential. It is pointer-sized, because the
+/// details are boxed.
+///
+/// ```
+/// use manja::kite::error::{HttpError, HttpErrorKind};
+///
+/// fn advice(e: &HttpError) -> String {
+///     if e.kind() == HttpErrorKind::AuthRejected {
+///         return "the access token is no longer valid: log in again".into();
+///     }
+///     if e.may_have_reached_broker() {
+///         format!("{e}: Kite may have acted on it, so check before repeating a change")
+///     } else {
+///         format!("{e}: nothing reached Kite")
+///     }
+/// }
+/// ```
 #[derive(Debug)]
 pub struct HttpError(Box<HttpErrorInner>);
 
@@ -282,7 +318,9 @@ impl HttpError {
         self.0.timed_out
     }
 
-    /// Whether the operation was cancelled.
+    /// Whether the kind is [`HttpErrorKind::Cancelled`]. A call never returns
+    /// such an error: a dropped operation is recorded in
+    /// `HTTPClient::diagnostics` instead.
     pub fn is_cancelled(&self) -> bool {
         self.0.kind == HttpErrorKind::Cancelled
     }

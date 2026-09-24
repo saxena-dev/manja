@@ -125,11 +125,12 @@ pub struct Utilised {
     pub delivery: f64,
 }
 
-/// Enum representing the different types of segments (commodity and equity).
-///
+/// A margin segment, as used by `User::margins_by_segment`.
 #[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub enum SegmentKind {
+    /// The commodity segment.
     Commodity,
+    /// The equity segment.
     Equity,
 }
 

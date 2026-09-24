@@ -14,20 +14,24 @@
 //!
 use serde::{Deserialize, Serialize};
 
-/// Represents the default response structure used by Kite Connect API.
+/// Kite's response envelope, as returned by every JSON endpoint
+/// (`kite:response-structure.md`).
 ///
-/// The generic type `T` is typically a `HashMap` but can be any type that the
-/// specific API response requires.
-///
+/// A call returns `Ok` only for a successful envelope, so on a value you
+/// receive `status` is `"success"`, `data` is always `Some`, and `error_type`
+/// is `None`. An error envelope is returned as a
+/// [`ManjaError`](crate::kite::error::ManjaError) instead, with Kite's error
+/// type and message available through its `HttpError`.
 #[derive(Serialize, Deserialize, Debug)]
 pub struct KiteApiResponse<T> {
-    /// The status of the API response (e.g., "success" or "error").
+    /// `"success"` on every response a call returns.
     pub status: String,
-    /// The actual data returned by the API, if any.
+    /// The endpoint's payload. Always `Some` on a response a call returns.
     pub data: Option<T>,
-    /// An optional message providing additional information about the response.
+    /// Kite's optional informational message.
     pub message: Option<String>,
-    /// An optional error type string, present if the response indicates an error.
+    /// Always `None` on a response a call returns: errors are returned as
+    /// errors.
     pub error_type: Option<String>,
 }
 

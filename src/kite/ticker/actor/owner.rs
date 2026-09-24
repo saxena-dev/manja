@@ -512,7 +512,7 @@ impl fmt::Display for TickerSpawnError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(match self {
             Self::NoRuntime => "a ticker must be spawned within a Tokio runtime",
-            Self::InvalidUrl => "the ticker URL must be ws:// or wss:// with no query",
+            Self::InvalidUrl => "the ticker URL must be ws:// or wss:// with no query or fragment",
         })
     }
 }
@@ -607,7 +607,48 @@ impl Shared {
 
 // ---- builder ------------------------------------------------------------
 
-/// Builder for a ticker instance.
+/// Configures and starts a ticker.
+///
+/// A ticker is one background task that owns the WebSocket connection to
+/// Kite. [`TickerBuilder::spawn`] starts it and hands you three parts:
+///
+/// - a [`TickerHandle`] for subscription commands, [`status`](TickerHandle::status)
+///   and [`shutdown`](TickerHandle::shutdown). Clone it into any task that
+///   needs it.
+/// - the one [`TickerEvents`] stream of everything the ticker receives and
+///   every change in its connection, in the order they happened.
+/// - a [`TaskGuard`] that tells you how the task ended.
+///
+/// Every setting has a working default: Kite's production endpoint
+/// ([`KITE_TICKER_URL`]), [`TickerLimits::default`], a freshly generated
+/// source identity, and observability turned off.
+///
+/// # Example
+///
+/// ```no_run
+/// use futures_util::StreamExt;
+/// use manja::kite::connect::credentials::Credentials;
+/// use manja::kite::protocol::InstrumentToken;
+/// use manja::kite::ticker::Mode;
+/// use manja::kite::ticker::actor::owner::{TickerBuilder, TickerEvent};
+///
+/// # async fn run() -> Result<(), Box<dyn std::error::Error>> {
+/// let credentials = Credentials::new("api_key", "access_token")?;
+/// let (handle, mut events, guard) = TickerBuilder::new(credentials).spawn()?;
+///
+/// // Subscriptions are remembered and restored on every reconnect.
+/// handle.subscribe([InstrumentToken::new(408065)], Mode::Full).await?;
+///
+/// while let Some(event) = events.next().await {
+///     match event? {
+///         TickerEvent::Raw(message) => println!("{} bytes", message.payload().len()),
+///         TickerEvent::Lifecycle(change) => println!("{:?}", change.kind()),
+///         _ => {} // TickerEvent is non-exhaustive.
+///     }
+/// }
+/// println!("ticker ended: {:?}", guard.join().await);
+/// # Ok(()) }
+/// ```
 #[must_use]
 pub struct TickerBuilder {
     credentials: Credentials,
@@ -643,7 +684,8 @@ impl TickerBuilder {
         }
     }
 
-    /// Connect to `url` instead, a `ws://` or `wss://` URL with no query.
+    /// Connect to `url` instead, a `ws://` or `wss://` URL with no query or
+    /// fragment.
     pub fn url(mut self, url: impl Into<String>) -> Self {
         self.url = url.into();
         self
@@ -667,7 +709,13 @@ impl TickerBuilder {
         self
     }
 
-    /// Start the owner task on the current Tokio runtime.
+    /// Start the ticker task on the current Tokio runtime.
+    ///
+    /// Fails with [`TickerSpawnError::NoRuntime`] outside a Tokio runtime,
+    /// and with [`TickerSpawnError::InvalidUrl`] for a URL that is not
+    /// `ws://` or `wss://`, or that has a query or fragment. Connecting
+    /// happens in the task, so its progress and failures arrive on the event
+    /// stream as lifecycle events, not from this call.
     pub fn spawn(self) -> Result<(TickerHandle, TickerEvents, TaskGuard), TickerSpawnError> {
         let runtime =
             tokio::runtime::Handle::try_current().map_err(|_| TickerSpawnError::NoRuntime)?;
@@ -762,10 +810,35 @@ impl TickerBuilder {
 
 // ---- handles ------------------------------------------------------------
 
-/// Shutdown and status for one ticker instance. `Clone + Send + Sync`.
+/// Controls a running ticker: subscriptions, status and shutdown.
 ///
-/// Dropping the last handle terminates the owner with
-/// [`TerminalReason::HandlesDropped`].
+/// Clone it into every task that needs it; it is `Clone + Send + Sync`.
+/// Keep at least one alive for as long as the ticker should run: dropping
+/// the last handle stops the ticker with [`TerminalReason::HandlesDropped`].
+///
+/// A command completes when the ticker accepts it, with a [`Revision`] of
+/// the subscriptions you asked for. The ticker sends them on the current
+/// connection and again after every reconnect.
+///
+/// # Example
+///
+/// ```no_run
+/// use manja::kite::protocol::InstrumentToken;
+/// use manja::kite::ticker::Mode;
+/// use manja::kite::ticker::actor::owner::TickerHandle;
+///
+/// # async fn run(handle: TickerHandle) -> Result<(), Box<dyn std::error::Error>> {
+/// let infy = InstrumentToken::new(408065);
+/// handle.subscribe([infy], Mode::Quote).await?;
+/// handle.set_mode([infy], Mode::Full).await?;
+///
+/// let status = handle.status();
+/// println!("{:?}, last message {:?} ago", status.state, status.last_message_age);
+///
+/// // Stop cleanly: remaining events are delivered, then the stream ends.
+/// handle.shutdown().await?;
+/// # Ok(()) }
+/// ```
 #[derive(Clone)]
 pub struct TickerHandle {
     shared: Arc<Shared>,
@@ -984,14 +1057,20 @@ impl Stream for TickerEvents {
     }
 }
 
-/// The supervised owner task. Dropping it does not stop the task.
+/// Tells you how the ticker task ended.
+///
+/// [`TaskGuard::join`] waits for the task and returns its [`TaskOutcome`]:
+/// [`TaskOutcome::Clean`] when a shutdown you asked for completed within its
+/// deadline, or the reason it ended otherwise, including a panic. Dropping
+/// the guard does not stop the ticker; call [`TickerHandle::shutdown`] for
+/// that.
 #[derive(Debug)]
 pub struct TaskGuard {
     task: JoinHandle<TaskOutcome>,
 }
 
 impl TaskGuard {
-    /// Wait for the owner task to end.
+    /// Wait for the ticker task to end, and say how it ended.
     pub async fn join(self) -> TaskOutcome {
         match self.task.await {
             Ok(outcome) => outcome,

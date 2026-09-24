@@ -20,7 +20,25 @@ use crate::kite::error::{HttpError, HttpErrorKind, Result, TransportStage};
 use crate::kite::obs::schema::{Endpoint, Method};
 use crate::kite::protocol::MfOrderId;
 
-/// Mutual fund orders, SIPs, holdings and instruments.
+/// Mutual fund orders, SIPs, holdings and the fund list, read-only. Borrowed
+/// from a client with
+/// [`HTTPClient::mutual_funds`](crate::kite::connect::client::HTTPClient::mutual_funds).
+///
+/// # Example
+///
+/// ```no_run
+/// use manja::kite::connect::client::HTTPClient;
+/// use manja::kite::connect::config::Config;
+/// use manja::kite::connect::credentials::Credentials;
+///
+/// # async fn run() -> Result<(), Box<dyn std::error::Error>> {
+/// let client = HTTPClient::new(Config::default())?
+///     .with_credentials(Credentials::new("api_key", "access_token")?);
+/// let holdings = client.mutual_funds().list_holdings().await?.data.unwrap_or_default();
+/// let sips = client.mutual_funds().list_sips().await?.data.unwrap_or_default();
+/// println!("{} funds held, {} SIPs", holdings.len(), sips.len());
+/// # Ok(()) }
+/// ```
 pub struct MutualFunds<'c> {
     /// Reference to the HTTP client used for making API requests.
     pub client: &'c HTTPClient,

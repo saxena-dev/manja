@@ -378,6 +378,12 @@ fn push<T: std::fmt::Display>(
 /// A new order: `POST /orders/{variety}`, form-encoded
 /// (`kite:orders.md:58-103`).
 ///
+/// Build one with [`PlaceOrderRequest::new`], set any optional fields such as
+/// `price` or `tag`, and send it with
+/// [`Orders::place_order`](crate::kite::connect::api::Orders::place_order),
+/// whose documentation shows the whole flow, including what to do when a
+/// response is lost.
+///
 /// It has no order ID, status, fill or timestamp: those are response-only
 /// facts, and a request type that cannot hold them cannot fabricate them:
 ///

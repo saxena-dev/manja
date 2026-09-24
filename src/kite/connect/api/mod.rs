@@ -1,10 +1,22 @@
-//! API endpoint definitions and functions for interacting with Kite Connect API.
+//! One resource per part of the Kite Connect API.
 //!
-//! This module organizes the various API groups for Kite Connect API. It includes
-//! submodules for managing sessions, user data, orders, GTT orders, portfolio,
-//! market data, mutual funds, and margins. Each submodule corresponds to a specific set of
-//! endpoints in Kite Connect API, making it easier to interact with different
-//! aspects of the trading platform.
+//! You don't create these yourself: each is borrowed from an
+//! [`HTTPClient`](crate::kite::connect::client::HTTPClient), for example
+//! `client.orders()` or `client.portfolio()`.
+//!
+//! | Resource | Covers |
+//! |---|---|
+//! | [`Session`] | exchanging a request token for a session, and invalidating it |
+//! | [`User`] | the profile, and funds and margins |
+//! | [`Orders`] | placing, modifying and cancelling orders; the order book and trades |
+//! | [`Gtt`] | Good Till Triggered orders |
+//! | [`Portfolio`] | holdings, positions, auctions and holdings authorisation |
+//! | [`Market`] | instruments, quotes and historical candles |
+//! | [`MutualFunds`] | mutual fund orders, SIPs, holdings and the fund list, read-only |
+//! | [`Margins`] and [`Charges`] | margin and charge calculations for orders you might place |
+//!
+//! Calls that can change your account make exactly one attempt; reads retry
+//! transient failures on their own.
 //!
 // Manages the `/session/` API group, including authentication and session management.
 mod session;

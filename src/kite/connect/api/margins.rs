@@ -36,7 +36,41 @@ fn non_empty<T>(items: &[T]) -> std::result::Result<(), RequestError> {
     }
 }
 
-/// Order and basket margin calculations.
+/// Margin calculations for orders you might place, one by one or as a
+/// basket. Borrowed from a client with
+/// [`HTTPClient::margins`](crate::kite::connect::client::HTTPClient::margins).
+/// Calculations change nothing, so they retry like reads.
+///
+/// # Example
+///
+/// ```no_run
+/// use manja::kite::connect::models::{
+///     Exchange, OrderMarginRequest, OrderType, OrderVariety, ProductType, TransactionType,
+/// };
+/// use manja::kite::protocol::Quantity;
+/// use manja::kite::connect::client::HTTPClient;
+/// use manja::kite::connect::config::Config;
+/// use manja::kite::connect::credentials::Credentials;
+///
+/// # async fn run() -> Result<(), Box<dyn std::error::Error>> {
+/// let client = HTTPClient::new(Config::default())?
+///     .with_credentials(Credentials::new("api_key", "access_token")?);
+/// let order = OrderMarginRequest {
+///     exchange: Exchange::NSE,
+///     tradingsymbol: "INFY".into(),
+///     transaction_type: TransactionType::BUY,
+///     variety: OrderVariety::Regular,
+///     product: ProductType::CashAndCarry,
+///     order_type: OrderType::Market,
+///     quantity: Quantity::new(1)?,
+///     price: 0.0,
+///     trigger_price: 0.0,
+/// };
+/// for margin in client.margins().orders(&[order]).await?.data.unwrap_or_default() {
+///     println!("{}: total {}", margin.tradingsymbol, margin.total);
+/// }
+/// # Ok(()) }
+/// ```
 pub struct Margins<'c> {
     /// Reference to the HTTP client used for making API requests.
     pub client: &'c HTTPClient,
@@ -80,7 +114,42 @@ impl<'c> Margins<'c> {
     }
 }
 
-/// Order-wise charges: the virtual contract note.
+/// Order-wise charges, the virtual contract note: brokerage, taxes and fees
+/// for orders that executed. Borrowed from a client with
+/// [`HTTPClient::charges`](crate::kite::connect::client::HTTPClient::charges).
+/// Calculations change nothing, so they retry like reads.
+///
+/// # Example
+///
+/// ```no_run
+/// use manja::kite::connect::models::{
+///     Exchange, OrderChargesRequest, OrderType, OrderVariety, ProductType, TransactionType,
+/// };
+/// use manja::kite::protocol::Quantity;
+/// use manja::kite::connect::client::HTTPClient;
+/// use manja::kite::connect::config::Config;
+/// use manja::kite::connect::credentials::Credentials;
+///
+/// # async fn run() -> Result<(), Box<dyn std::error::Error>> {
+/// let client = HTTPClient::new(Config::default())?
+///     .with_credentials(Credentials::new("api_key", "access_token")?);
+/// let order = OrderChargesRequest {
+///     // Any label for this order in the calculation.
+///     order_id: "rebalance42".into(),
+///     exchange: Exchange::NSE,
+///     tradingsymbol: "INFY".into(),
+///     transaction_type: TransactionType::BUY,
+///     variety: OrderVariety::Regular,
+///     product: ProductType::CashAndCarry,
+///     order_type: OrderType::Market,
+///     quantity: Quantity::new(1)?,
+///     average_price: 1500.0,
+/// };
+/// for charged in client.charges().orders(&[order]).await?.data.unwrap_or_default() {
+///     println!("{}: {} in charges", charged.tradingsymbol, charged.charges.total);
+/// }
+/// # Ok(()) }
+/// ```
 pub struct Charges<'c> {
     /// Reference to the HTTP client used for making API requests.
     pub client: &'c HTTPClient,
