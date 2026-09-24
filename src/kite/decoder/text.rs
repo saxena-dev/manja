@@ -24,6 +24,7 @@ use std::fmt;
 
 use serde_json::Value;
 
+use crate::kite::error::json_error_detail;
 use crate::kite::obs::diagnostics::{BoundedText, DecodeDiagnosticKind, DEFAULT_TEXT_BYTES};
 use crate::kite::protocol::OrderUpdate;
 
@@ -166,7 +167,7 @@ pub fn parse(text: &str, limits: TextLimits) -> Result<TextEvent, TextError> {
         ));
     }
     let value: Value = serde_json::from_str(text)
-        .map_err(|e| TextError::new(InvalidText, &format!("not JSON: {e}")))?;
+        .map_err(|e| TextError::new(InvalidText, &json_error_detail("not JSON", &e)))?;
     let Value::Object(mut object) = value else {
         return Err(TextError::new(
             InvalidText,
@@ -195,7 +196,7 @@ pub fn parse(text: &str, limits: TextLimits) -> Result<TextEvent, TextError> {
             let update: OrderUpdate = serde_json::from_value(data).map_err(|e| {
                 TextError::new(
                     InvalidText,
-                    &format!("order data is not an order update: {e}"),
+                    &json_error_detail("order data is not an order update", &e),
                 )
             })?;
             Ok(TextEvent::Order(Box::new(update)))

@@ -87,6 +87,38 @@ fn error_message_and_unknown_types_are_distinguished() {
 }
 
 #[test]
+fn a_failed_parse_names_what_failed_never_a_value_from_the_message() {
+    // Supplements: the official postback with one field mistyped under a
+    // seeded value, and a malformed message carrying a seed.
+    let postback = fixtures::json_body("postback.json").unwrap();
+    let mistyped = [
+        postback.replace("\"SBIN\"", "918273645"),
+        postback.replace("\"quantity\": 1,", "\"quantity\": \"SEEDqty\","),
+    ];
+    let seeds = ["918273645", "SEEDqty", "SEEDbare"];
+    let check = |text: &str, expected: &str| {
+        let e = parse(text, TextLimits::default()).unwrap_err();
+        assert_eq!(e.kind(), DecodeDiagnosticKind::InvalidText);
+        assert_eq!(e.detail().as_str(), expected);
+        for rendered in [e.to_string(), format!("{e:?}")] {
+            for seed in seeds {
+                assert!(!rendered.contains(seed), "{seed} in {rendered}");
+            }
+        }
+    };
+    for data in &mistyped {
+        check(
+            &wrap("order", data),
+            "order data is not an order update: data error",
+        );
+    }
+    check(
+        "{\"type\":\"order\",\"data\":SEEDbare}",
+        "not JSON: syntax error at line 1 column 24",
+    );
+}
+
+#[test]
 fn malformed_and_oversized_text_fails_without_panic() {
     use DecodeDiagnosticKind::*;
     let l = TextLimits::default();

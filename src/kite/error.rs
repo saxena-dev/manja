@@ -13,7 +13,8 @@
 //! a header, a credential or a checksum. Free text from the broker is
 //! bounded and passed through
 //! [`BoundedText::sanitize`](crate::kite::obs::diagnostics::BoundedText::sanitize)
-//! before it is kept.
+//! before it is kept. A detail describing a response that failed to parse
+//! or decode names what failed and where, never a value from the body.
 //!
 //! Stage evidence is deliberately conservative. [`TransportStage::NotStarted`]
 //! is reported only when the SDK has affirmative local evidence that the
@@ -367,6 +368,31 @@ impl std::error::Error for HttpError {
             .source
             .as_deref()
             .map(|e| e as &(dyn std::error::Error + 'static))
+    }
+}
+
+/// A detail for a JSON parse or decode failure: `context`, then the error's
+/// category and, when known, its position. serde's message is left out
+/// because it can quote the input (`invalid type: string "..."`, `unknown
+/// variant ...`).
+#[cfg(any(feature = "http", feature = "decoder"))]
+pub(crate) fn json_error_detail(context: &str, e: &serde_json::Error) -> String {
+    use serde_json::error::Category;
+    let category = match e.classify() {
+        Category::Io => "read error",
+        Category::Syntax => "syntax error",
+        Category::Data => "data error",
+        Category::Eof => "unexpected end of input",
+    };
+    // A value decoded from a `Value` has no position (line 0).
+    if e.line() == 0 {
+        format!("{context}: {category}")
+    } else {
+        format!(
+            "{context}: {category} at line {} column {}",
+            e.line(),
+            e.column()
+        )
     }
 }
 

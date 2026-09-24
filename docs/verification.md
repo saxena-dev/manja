@@ -113,6 +113,7 @@ IDs are stable. Tests cite the rows they cover, singly or as a range such as
 | `obs_schema` | none | the observability catalogue against `tests/obs_schema/catalogue.v1.txt` |
 | `references` | none | every citation and ID in the repository resolves (§7) |
 | `http_classification` | `http` | total success and error classification (`contract.md` §2.4) |
+| `http_error_details` | `http` | no response value in an error detail: a seeded string, number and symbol in malformed envelopes, mistyped payloads and malformed instrument and mutual fund CSV rows never reach `detail()`, `Display` or `Debug`, and each detail still names what failed and where (`contract.md` §2.4) |
 | `http_admission` | `http` | admission: a refused request fails before transport, as `NotStarted` |
 | `http_scheduling` | `http` | deadlines, retries, one-attempt operations and cancellation evidence |
 | `http_reads` | `http` | read response types against the official samples |
@@ -134,8 +135,8 @@ IDs are stable. Tests cite the rows they cover, singly or as a range such as
 | `ticker_status` | `ticker` | ticker spans, metrics and status |
 | `decoder_framing` | `decoder` | framing against the vendored corpus |
 | `decoder_packets` | `decoder` | every packet family, field by field |
-| `decoder_text` | `decoder` | text messages without coercion |
-| `decoder_adapter` | `decoder` | provenance and identical live and captured results |
+| `decoder_text` | `decoder` | text messages without coercion, and a failed parse whose detail names what failed but no value from the message (`contract.md` §2.9) |
+| `decoder_adapter` | `decoder` | provenance and identical live and captured results, and a retained text diagnostic that holds no value from the message (`contract.md` §2.9) |
 | `decoder_qualification` | `decoder` | §4 |
 | `observability_conformance` | all | §5 |
 | `public_surface` | all | every public type is reachable through its documented path |

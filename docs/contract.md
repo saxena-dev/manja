@@ -127,6 +127,17 @@ A timeout, a lost response or a malformed success after `Started` never implies 
 the request had no effect. Unknown broker `error_type` values are preserved as strings.
 The ticker's error type and the decoder's error types are separate from `ManjaError`.
 
+An error's **detail** is bounded, sanitized free text for people, not a stable format. It
+never holds a value taken from a response body. A body that fails to parse or decode is
+described by what failed, serde's error category (`syntax error`, `data error` or
+`unexpected end of input`) and, when known, its line and column, such as `malformed JSON
+success body: syntax error at line 1 column 28` or `the payload does not match the
+endpoint's type: data error`. A malformed CSV row is named by its row number, and a strict
+list rejection by its count and first index (§2.16). serde's own message is left out,
+because it quotes the offending value. The broker's `message` in an error envelope is kept,
+bounded, as the broker error's message. It is the broker's own text, not a decoded value,
+and may name amounts or IDs, so `Display` of a broker error can carry them.
+
 ### 2.5 Ticker ownership and events
 
 `TickerBuilder::spawn` starts one owner task per ticker instance. It fails with
@@ -217,7 +228,9 @@ clock, network or global state, and is bounded by §3.4.
   `ScaledPrice` with a caller-supplied `Segment` (§5). Negative quantities and order counts
   are refused. Timestamps stay raw Unix seconds.
 - **Text** (`kite:websocket.md:165-184`): `order`, `error` and `message` messages
-  become typed variants; any other `type` is preserved as `Unknown`.
+  become typed variants; any other `type` is preserved as `Unknown`. A `TextError`'s
+  detail follows the rule for HTTP error details (§2.4): what failed and where, never a
+  value from the message.
 
 `kite::decoder::adapter` attaches the source key and the pinned `DECODER_VERSION` and
 `CONVERSION_POLICY_VERSION` to each decoded event. Live and captured payloads go
@@ -640,6 +653,7 @@ These choices are not dictated by the Kite documentation alone.
 | Holdings authorisation | Supported as the HTTP call that starts the flow, with the documented portal URL; the portal itself is left to the application | The endpoint and its result are documented (`kite:portfolio.md:503-541`). The remaining steps happen in the user's browser on the depository's portal, which an SDK cannot and should not drive |
 | Order IDs | Checked types; a response ID that fails its grammar is a `Decode` error | An ID is a request path segment. A lenient fallback would let a malformed broker value reach a path unchecked, and every ID in the official samples already fits its grammar |
 | Rejected list rows | The default equity order and trade list methods stay strict; a paired `*_with_rejections` method returns every row, rejected ones in place (§2.16) | Strict is the default because `?` keeps a failure loud, and an entirely rejected book can never pass for an empty one. The tolerant form lets a caller still see, and act on, the rows that decoded. Keeping partial data out of `HttpError` keeps broker rows out of commonly logged errors |
+| Error details | A parse or decode failure is described by serde's category and position, with no field path | serde's message quotes the offending value. A field path would need a new dependency, and in a map-shaped payload such as a quote response its keys are broker values (instrument symbols). The tolerant order and trade lists hand the full serde error to the caller in `RowError`, outside any error (§2.16) |
 | Mutual funds | Read-only: orders, SIPs, holdings and the instrument list | The documentation states that order placement cannot be done through the API (`kite:mutual-funds.md:3`) and lists only these reads (`kite:mutual-funds.md:5-11`). The official mocks still carry order and SIP placement, modification and cancellation responses, but no request for them is documented, so implementing them would mean inventing the request |
 | GTT orders | Only LIMIT orders, each for the condition's instrument; a modification sends the complete trigger | The documentation lists `LIMIT` as the only order type and shows each order repeating the condition's exchange and tradingsymbol (`kite:gtt.md:56-64`); it recommends fetching the trigger and sending it back modified (`kite:gtt.md:390-393`) |
 | Default features | `http`, `ticker` and `decoder` | Keeps every 0.1 import path available |

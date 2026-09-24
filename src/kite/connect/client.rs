@@ -79,8 +79,8 @@ use crate::kite::{
         },
     },
     error::{
-        BrokerError, HttpError, HttpErrorKind, KiteApiException, ManjaError, Result,
-        TransportStage as Stage,
+        json_error_detail, BrokerError, HttpError, HttpErrorKind, KiteApiException, ManjaError,
+        Result, TransportStage as Stage,
     },
     obs::diagnostics::{BoundedText, FailureHistory, DEFAULT_HISTORY},
     obs::handle::{Labels, Observability},
@@ -1197,7 +1197,7 @@ fn error_response(status: u16, body: &Value, method: Method, endpoint: Endpoint)
 /// The detail of a success payload that does not decode into the endpoint's
 /// type, shared by every JSON path so their errors stay identical.
 fn payload_mismatch(e: &serde_json::Error) -> String {
-    format!("the payload does not match the endpoint's type: {e}")
+    json_error_detail("the payload does not match the endpoint's type", e)
 }
 
 /// Total classification of a JSON response.
@@ -1219,7 +1219,7 @@ pub(crate) fn classify_json<T: DeserializeOwned>(
     let decode = |detail: String| {
         http_error(HttpErrorKind::Decode, status, method, endpoint).with_detail(&detail)
     };
-    let value = parsed.map_err(|e| decode(format!("malformed JSON success body: {e}")))?;
+    let value = parsed.map_err(|e| decode(json_error_detail("malformed JSON success body", &e)))?;
     let Some(obj) = value.as_object() else {
         return Err(decode("the success body is not a JSON object".into()));
     };

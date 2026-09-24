@@ -53,6 +53,7 @@ its `BR-*` ID. The behavior you can rely on is in [`contract.md`](contract.md).
 | `HTTPClient::orders`, `market`, `margins`, `charges` | Take `&self` instead of `&mut self`. Existing `&mut` call sites still compile |
 | `HTTPClient::new`, `with_config` | Return `Result`: a construction failure is reported, not replaced |
 | `ManjaError` | `#[non_exhaustive]` |
+| `HttpError::detail`, `TextError::detail` | A response that fails to parse or decode is described by serde's error category and position, without serde's message, which quoted the offending value (`contract.md` §2.4). Code matching on the old text should use the error kind instead |
 | `TickerRequest::subscribe_with_mode` | Deprecated. It always built a `mode` request, never a subscription; `TickerRequest::set_mode` gives the same output under the right name |
 | `WebSocketClient`, `TickerStream`, `StreamState`, `KiteStreamCredentials`, `SubscriptionStream` | Deprecated with corrected documentation (§5). Behavior and the item type `Result<tungstenite::Message, tungstenite::Error>` are unchanged |
 

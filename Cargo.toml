@@ -90,6 +90,10 @@ name = "http_reads"
 required-features = ["http"]
 
 [[test]]
+name = "http_error_details"
+required-features = ["http"]
+
+[[test]]
 name = "http_order_rows"
 required-features = ["http"]
 

@@ -104,6 +104,26 @@ fn failures_attach_diagnostics_and_leave_the_raw_evidence_intact() {
 }
 
 #[test]
+fn a_retained_text_diagnostic_holds_no_value_from_the_message() {
+    // Supplement: the official postback with its tradingsymbol mistyped
+    // under a seeded number.
+    let postback = support::fixtures::json_body("postback.json")
+        .unwrap()
+        .replace("\"SBIN\"", "918273645");
+    let text = format!("{{\"type\":\"order\",\"data\":{postback}}}");
+    let o = observe(&mut sequencer(), PayloadKind::Text, text.into_bytes());
+    let d = quiet().decode(&o).unwrap();
+    assert_eq!(d.diagnostics.len(), 1);
+    assert_eq!(d.diagnostics[0].kind, DecodeDiagnosticKind::InvalidText);
+    assert_eq!(
+        d.diagnostics[0].detail.as_str(),
+        "order data is not an order update: data error"
+    );
+    let debug = format!("{d:?}");
+    assert!(!debug.contains("918273645"), "{debug}");
+}
+
+#[test]
 fn live_and_captured_copies_decode_identically_on_every_capture_record() {
     let capture = read_real_capture();
     let mut s = sequencer();
