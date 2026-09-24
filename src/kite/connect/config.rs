@@ -206,10 +206,10 @@ mod tests {
     use super::*;
 
     #[test]
-    fn default_reads_no_environment() {
-        std::env::set_var("KITECONNECT_API_BASE", "http://sentinel.invalid");
-        let config = Config::default();
-        assert_eq!(config.api_base(), KITECONNECT_API_BASE);
+    fn default_base_and_url_join() {
+        // That `Config::default()` reads no environment is tested in
+        // tests/no_environment.rs, which can set variables safely.
+        assert_eq!(Config::default().api_base(), KITECONNECT_API_BASE);
         assert_eq!(Config::new("http://x").url("/a"), "http://x/a");
     }
 

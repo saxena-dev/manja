@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
-# Full verification: the quick gates, every feature row on the minimum and
-# the newer supported toolchain, the doc tests, the packaged crate, and the
-# recorded Kite documentation pages.
+# Full verification: the quick gates, every feature row on the minimum
+# supported toolchain and on stable, the doc tests, the packaged crate, and
+# the recorded Kite documentation pages. `stable` is the locally installed
+# stable toolchain; `rustup update stable` keeps it current.
 #
 #   scripts/full-verification.sh
 #
@@ -14,8 +15,8 @@ set -u
 root=$(cd "$(dirname "$0")/.." && pwd)
 cd "$root"
 
-msrv=1.95.0
-latest=1.98.0
+msrv=1.88.0
+latest=stable
 out_dir="$root/target/verification"
 mkdir -p "$out_dir"
 log="$out_dir/full-verification-$(date -u +%Y%m%dT%H%M%SZ).txt"
@@ -39,7 +40,7 @@ run() {
 echo "full verification of $(git rev-parse --short HEAD) at $(date -u +%Y-%m-%dT%H:%M:%SZ)"
 echo "log: $log"
 
-# Quick gates, pinned to the newer toolchain.
+# Quick gates, on the stable toolchain.
 run cargo +"$latest" fmt --all -- --check
 run cargo +"$latest" clippy --offline --all-targets --all-features -- -D warnings
 run env RUSTDOCFLAGS="-D warnings" cargo +"$latest" doc --offline --no-deps

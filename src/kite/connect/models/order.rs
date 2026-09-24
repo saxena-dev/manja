@@ -542,10 +542,10 @@ impl PlaceOrderRequest {
             (false, None) => {}
             (false, Some(_)) => return invalid("auction_number", "is only for auction orders"),
         }
-        if let Some(tag) = &self.tag {
-            if tag.is_empty() || tag.len() > 20 || !tag.bytes().all(|b| b.is_ascii_alphanumeric()) {
-                return invalid("tag", "must be 1-20 ASCII letters or digits");
-            }
+        if let Some(tag) = &self.tag
+            && (tag.is_empty() || tag.len() > 20 || !tag.bytes().all(|b| b.is_ascii_alphanumeric()))
+        {
+            return invalid("tag", "must be 1-20 ASCII letters or digits");
         }
         Ok(())
     }
@@ -641,10 +641,10 @@ impl ModifyOrderRequest {
                 "a positive TTL is required with TTL validity",
             );
         }
-        if let (Some(d), Some(q)) = (self.disclosed_quantity, self.quantity) {
-            if d > q.get() {
-                return invalid("disclosed_quantity", "exceeds quantity");
-            }
+        if let (Some(d), Some(q)) = (self.disclosed_quantity, self.quantity)
+            && d > q.get()
+        {
+            return invalid("disclosed_quantity", "exceeds quantity");
         }
         Ok(())
     }

@@ -57,16 +57,19 @@ static ALLOCS: AtomicU64 = AtomicU64::new(0);
 static LIVE: AtomicUsize = AtomicUsize::new(0);
 static PEAK: AtomicUsize = AtomicUsize::new(0);
 
+// Counts, then forwards to `System` with the caller's arguments unchanged.
 unsafe impl GlobalAlloc for Counting {
     unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
         ALLOCS.fetch_add(1, Ordering::Relaxed);
         let live = LIVE.fetch_add(layout.size(), Ordering::Relaxed) + layout.size();
         PEAK.fetch_max(live, Ordering::Relaxed);
-        System.alloc(layout)
+        // SAFETY: the caller upholds `GlobalAlloc::alloc`'s contract for `layout`.
+        unsafe { System.alloc(layout) }
     }
     unsafe fn dealloc(&self, ptr: *mut u8, layout: Layout) {
         LIVE.fetch_sub(layout.size(), Ordering::Relaxed);
-        System.dealloc(ptr, layout)
+        // SAFETY: the caller passes a block this allocator returned for `layout`.
+        unsafe { System.dealloc(ptr, layout) }
     }
 }
 

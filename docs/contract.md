@@ -33,7 +33,7 @@ Each slice depends only on the always-available modules, never on another slice:
 `http` does not pull in the WebSocket stack, `ticker` pulls in neither the HTTP stack
 nor the decoder, and a decoder-only or no-feature build has no Tokio, HTTP client or
 WebSocket dependency. Every one of the eight feature combinations is built and tested
-on the minimum supported Rust version, 1.95.0, and on 1.98.0.
+on the minimum supported Rust version, 1.88.0, and on the stable channel.
 
 ---
 
@@ -665,7 +665,7 @@ These choices are not dictated by the Kite documentation alone.
 | Mutual funds | Read-only: orders, SIPs, holdings and the instrument list | The documentation states that order placement cannot be done through the API (`kite:mutual-funds.md:3`) and lists only these reads (`kite:mutual-funds.md:5-11`). The official mocks still carry order and SIP placement, modification and cancellation responses, but no request for them is documented, so implementing them would mean inventing the request |
 | GTT orders | Only LIMIT orders, each for the condition's instrument; a modification sends the complete trigger | The documentation lists `LIMIT` as the only order type and shows each order repeating the condition's exchange and tradingsymbol (`kite:gtt.md:56-64`); it recommends fetching the trigger and sending it back modified (`kite:gtt.md:390-393`) |
 | Default features | `http`, `ticker` and `decoder` | Keeps every 0.1 import path available |
-| Minimum Rust version | 1.95.0 | The oldest toolchain tested |
+| Edition and minimum Rust version | Edition 2024; `rust-version` 1.88.0 | 1.88 is the first release with let chains, which the code uses. Every feature row, doc tests included, passes on 1.88.0, and 1.87.0 rejects the let chains (E0658). With `rust-version` at 1.88 the resolver picks dependency versions that build on it. Dependencies alone do not set the floor: down to 1.85 the resolver still finds compatible releases (the `icu_*` 2.3 crates, which need 1.88, fall back to earlier 2.x releases), and with the let chains reverted the all-features suite passes on 1.87.0 (checked on 2026-09-24) |
 | Legacy ticker | `WebSocketClient` and its types are deprecated, not repaired; see `migration.md` §5 | Its stream reads the socket directly, so repairing it would change its behavior |
 | Observability budgets | As in `verification.md` §5 | Measured on a recorded host; exceeding one fails the benchmark |
 

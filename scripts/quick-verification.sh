@@ -19,8 +19,8 @@ set -u
 root=$(cd "$(dirname "$0")/.." && pwd)
 cd "$root"
 
-msrv=1.95.0
-latest=1.98.0
+msrv=1.88.0
+latest=stable
 online=0
 coverage=0
 for arg in "$@"; do

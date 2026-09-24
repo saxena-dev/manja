@@ -1234,10 +1234,10 @@ impl Owner {
     ) -> (End, Option<Socket>) {
         // The lost epoch may have issued more events (its backoff) since
         // the loss.
-        if let Some(gap) = self.gap.as_mut() {
-            if gap.previous_epoch == self.sequencer.epoch() {
-                gap.last_sequence_in_previous_epoch = self.last_sequence;
-            }
+        if let Some(gap) = self.gap.as_mut()
+            && gap.previous_epoch == self.sequencer.epoch()
+        {
+            gap.last_sequence_in_previous_epoch = self.last_sequence;
         }
         self.sequencer.begin_epoch();
         self.last_sequence = None;
