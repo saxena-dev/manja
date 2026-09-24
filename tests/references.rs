@@ -281,10 +281,10 @@ fn defined_ids() -> BTreeSet<String> {
         .filter(|r| r.starts_with("docs/") && r.ends_with(".md"))
     {
         for line in read(rel).lines() {
-            if let Some(cell) = line.strip_prefix("| `") {
-                if let Some((id, _)) = cell.split_once('`') {
-                    out.extend(ids(id));
-                }
+            if let Some(cell) = line.strip_prefix("| `")
+                && let Some((id, _)) = cell.split_once('`')
+            {
+                out.extend(ids(id));
             }
         }
     }

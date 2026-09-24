@@ -10,16 +10,16 @@ use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex};
 
 use manja::kite::decoder::adapter::{Adapter, DecodedEvent, VERSIONS};
-use manja::kite::decoder::framing::{frame, DecodeDiagnosticKind, FramingLimits, Message};
-use manja::kite::decoder::packets::{decode, Packet};
+use manja::kite::decoder::framing::{DecodeDiagnosticKind, FramingLimits, Message, frame};
+use manja::kite::decoder::packets::{Packet, decode};
 use manja::kite::envelope::{
     MonotonicElapsed, PayloadKind, RawObservation, ReceiveTime, RunId, SourceIdentity,
     SourceSequencer,
 };
 use manja::kite::obs::schema::SourceMode;
 use manja::kite::obs::{InMemoryRecorder, Instrument, Observability};
-use tracing::span::{Attributes, Id};
 use tracing::Subscriber;
+use tracing::span::{Attributes, Id};
 use tracing_subscriber::layer::{Context, Layer, SubscriberExt};
 
 use support::capture::{read_capture, read_real_capture, read_ticker_fixture};

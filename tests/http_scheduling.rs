@@ -91,7 +91,7 @@ fn conversion() -> PositionConversionRequest {
 /// exactly one request reached the server.
 async fn each_one_attempt_operation(replies: fn() -> Vec<Reply>) {
     macro_rules! once {
-        ($name:literal, |$c:ident| $call:expr) => {{
+        ($name:literal, |$c:ident| $call:expr_2021) => {{
             let harness = HttpHarness::start(replies()).await;
             #[allow(unused_mut)]
             let mut $c = client(&harness.base_url());

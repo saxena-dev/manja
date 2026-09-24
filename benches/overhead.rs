@@ -21,8 +21,8 @@
 mod support;
 
 use std::alloc::{GlobalAlloc, Layout, System};
-use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::time::{Duration, Instant};
 
 use futures_util::StreamExt;
@@ -34,7 +34,7 @@ use manja::kite::connect::config::{Config, HttpLimits};
 use manja::kite::connect::credentials::Credentials;
 use manja::kite::connect::scheduler::SchedulerLimits;
 use manja::kite::decoder::adapter::Adapter;
-use manja::kite::decoder::framing::{frame, FramingLimits, Message as Framed};
+use manja::kite::decoder::framing::{FramingLimits, Message as Framed, frame};
 use manja::kite::decoder::packets::decode;
 use manja::kite::envelope::{
     MonotonicElapsed, PayloadKind, RawObservation, ReceiveTime, SourceIdentity, SourceSequencer,
@@ -42,11 +42,11 @@ use manja::kite::envelope::{
 use manja::kite::obs::schema::SourceMode;
 use manja::kite::obs::{InMemoryRecorder, Observability};
 use manja::kite::protocol::InstrumentToken;
-use manja::kite::ticker::actor::owner::{TickerBuilder, TickerEvent, TickerLimits};
 use manja::kite::ticker::Mode;
+use manja::kite::ticker::actor::owner::{TickerBuilder, TickerEvent, TickerLimits};
 use tokio_tungstenite::tungstenite::Message;
-use tracing::span::{Attributes, Id};
 use tracing::Subscriber;
+use tracing::span::{Attributes, Id};
 use tracing_subscriber::filter::LevelFilter;
 use tracing_subscriber::layer::{Context, Layer, SubscriberExt};
 
@@ -57,16 +57,19 @@ static ALLOCS: AtomicU64 = AtomicU64::new(0);
 static LIVE: AtomicUsize = AtomicUsize::new(0);
 static PEAK: AtomicUsize = AtomicUsize::new(0);
 
+// Counts, then forwards to `System` with the caller's arguments unchanged.
 unsafe impl GlobalAlloc for Counting {
     unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
         ALLOCS.fetch_add(1, Ordering::Relaxed);
         let live = LIVE.fetch_add(layout.size(), Ordering::Relaxed) + layout.size();
         PEAK.fetch_max(live, Ordering::Relaxed);
-        System.alloc(layout)
+        // SAFETY: the caller upholds `GlobalAlloc::alloc`'s contract for `layout`.
+        unsafe { System.alloc(layout) }
     }
     unsafe fn dealloc(&self, ptr: *mut u8, layout: Layout) {
         LIVE.fetch_sub(layout.size(), Ordering::Relaxed);
-        System.dealloc(ptr, layout)
+        // SAFETY: the caller passes a block this allocator returned for `layout`.
+        unsafe { System.dealloc(ptr, layout) }
     }
 }
 
@@ -522,7 +525,9 @@ fn main() {
         }
     });
 
-    println!("| case | config | median ns/op | p99 ns/op | allocs/op | peak KiB | latency p50 / p99 / p99.9 ns | delta vs disabled |");
+    println!(
+        "| case | config | median ns/op | p99 ns/op | allocs/op | peak KiB | latency p50 / p99 / p99.9 ns | delta vs disabled |"
+    );
     println!("|---|---|---|---|---|---|---|---|");
     let mut failures = Vec::new();
     for r in &rows {

@@ -4,7 +4,7 @@ manja
 [![CI](https://github.com/saxena-dev/manja/actions/workflows/ci.yml/badge.svg)](https://github.com/saxena-dev/manja/actions/workflows/ci.yml)
 [![Coverage](https://codecov.io/gh/saxena-dev/manja/graph/badge.svg)](https://codecov.io/gh/saxena-dev/manja)
 [![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
-[![Rust 1.95+](https://img.shields.io/badge/rust-1.95%2B-orange.svg)](https://www.rust-lang.org/)
+[![Rust 1.88+](https://img.shields.io/badge/rust-1.88%2B-orange.svg)](https://www.rust-lang.org/)
 [![Docs.rs](https://docs.rs/manja/badge.svg)](https://docs.rs/manja)
 [![Crates.io](https://img.shields.io/crates/v/manja.svg)](https://crates.io/crates/manja)
 [![Downloads](https://img.shields.io/crates/d/manja.svg)](https://crates.io/crates/manja)
@@ -27,7 +27,7 @@ observability types, protocol types): no Tokio, no network stack. `http` does no
 the WebSocket stack, and `ticker` pulls in neither the HTTP stack nor the decoder.
 `ticker` and `decoder` together enable `kite::ticker::typed`.
 
-The minimum supported Rust version is **1.95.0**.
+The crate uses Rust edition 2024, and the minimum supported Rust version is **1.88.0**.
 
 ## Quick start
 

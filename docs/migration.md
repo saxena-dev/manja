@@ -15,7 +15,7 @@ its `BR-*` ID. The behavior you can rely on is in [`contract.md`](contract.md).
 - **Features.** The default is `http`, `ticker` and `decoder`. A path disappears only
   when you disable default features. With no features the crate has no Tokio or
   network dependency.
-- **Minimum Rust version.** 1.95.0.
+- **Minimum Rust version.** 1.88.0, with edition 2024.
 - **Deprecation.** Deprecated items keep compiling and behaving as before. They are
   removed only in a later breaking release.
 - **Safety corrections are not held back for compatibility.** Where the old behavior

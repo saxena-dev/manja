@@ -16,9 +16,9 @@ use chrono::{DateTime, FixedOffset};
 use serde::de::{self, IgnoredAny, SeqAccess, Visitor};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
-use crate::kite::connect::models::order::{invalid, RequestError};
-use crate::kite::protocol::enums::wire_enum;
+use crate::kite::connect::models::order::{RequestError, invalid};
 use crate::kite::protocol::InstrumentToken;
+use crate::kite::protocol::enums::wire_enum;
 
 /// The interval of a candle (`kite:historical.md:14`).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]

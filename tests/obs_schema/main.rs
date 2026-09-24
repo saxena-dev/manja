@@ -4,7 +4,7 @@
 //! label domain. A change to `catalogue.v1.txt` is a schema change and needs
 //! the compatibility treatment the schema module documents.
 
-use manja::kite::obs::schema::{catalogue_text, OBS_SCHEMA_VERSION};
+use manja::kite::obs::schema::{OBS_SCHEMA_VERSION, catalogue_text};
 
 #[test]
 fn catalogue_matches_the_committed_snapshot() {

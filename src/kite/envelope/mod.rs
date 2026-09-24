@@ -6,8 +6,8 @@
 pub mod types;
 
 pub use types::{
-    ConnectionEpoch, DisconnectReason, EnvelopeError, EnvelopeVersion, GapFacts, LifecycleEvent,
-    LifecycleKind, MonotonicElapsed, Payload, PayloadKind, RawObservation, ReceiveTime, RunId,
-    SourceIdentity, SourceKey, SourceSequencer, DEFAULT_MAX_PAYLOAD_BYTES, ENVELOPE_VERSION,
-    MAX_ID_BYTES, MAX_PAYLOAD_BYTES_LIMIT,
+    ConnectionEpoch, DEFAULT_MAX_PAYLOAD_BYTES, DisconnectReason, ENVELOPE_VERSION, EnvelopeError,
+    EnvelopeVersion, GapFacts, LifecycleEvent, LifecycleKind, MAX_ID_BYTES,
+    MAX_PAYLOAD_BYTES_LIMIT, MonotonicElapsed, Payload, PayloadKind, RawObservation, ReceiveTime,
+    RunId, SourceIdentity, SourceKey, SourceSequencer,
 };

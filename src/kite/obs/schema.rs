@@ -724,12 +724,16 @@ mod tests {
 
     #[test]
     fn label_values_are_short_and_closed() {
-        assert!(Endpoint::ALL
-            .iter()
-            .all(|e| e.as_str().len() <= MAX_LABEL_VALUE_BYTES));
+        assert!(
+            Endpoint::ALL
+                .iter()
+                .all(|e| e.as_str().len() <= MAX_LABEL_VALUE_BYTES)
+        );
         assert_eq!(Endpoint::ALL.len(), 31);
-        assert!(Instrument::ALL
-            .iter()
-            .all(|i| i.label_keys().len() <= MAX_LABELS));
+        assert!(
+            Instrument::ALL
+                .iter()
+                .all(|i| i.label_keys().len() <= MAX_LABELS)
+        );
     }
 }

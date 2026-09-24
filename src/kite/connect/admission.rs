@@ -851,10 +851,11 @@ mod tests {
         );
         // 23:59:59 IST is still the same day.
         clock.0.store(MORNING + 14 * 3600 - 1, Ordering::Relaxed);
-        assert!(a
-            .acquire(RateClass::OrderPlacement, None, WAIT)
-            .await
-            .is_err());
+        assert!(
+            a.acquire(RateClass::OrderPlacement, None, WAIT)
+                .await
+                .is_err()
+        );
         // 00:00:00 IST starts a new day.
         clock.0.store(MORNING + 14 * 3600, Ordering::Relaxed);
         a.acquire(RateClass::OrderPlacement, None, WAIT)

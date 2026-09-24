@@ -9,7 +9,7 @@
 mod support;
 
 use manja::kite::decoder::framing::DecodeDiagnosticKind;
-use manja::kite::decoder::text::{parse, TextEvent, TextLimits};
+use manja::kite::decoder::text::{TextEvent, TextLimits, parse};
 use manja::kite::protocol::Inbound;
 
 use support::fixtures;

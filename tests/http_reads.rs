@@ -150,12 +150,16 @@ async fn order_book_parses_documented_timestamps() {
     assert_eq!(rejected.exchange_timestamp, None);
     assert_eq!(rejected.validity, Inbound::Known(OrderValidity::TimeToLive));
     assert_eq!(rejected.validity_ttl, Some(2));
-    assert!(orders
-        .iter()
-        .any(|o| o.variety == Inbound::Known(OrderVariety::Auction)));
-    assert!(orders
-        .iter()
-        .any(|o| o.product == Inbound::Known(ProductType::MarginTradingFacility)));
+    assert!(
+        orders
+            .iter()
+            .any(|o| o.variety == Inbound::Known(OrderVariety::Auction))
+    );
+    assert!(
+        orders
+            .iter()
+            .any(|o| o.product == Inbound::Known(ProductType::MarginTradingFacility))
+    );
 }
 
 #[tokio::test]
@@ -261,11 +265,12 @@ async fn positions_are_the_net_and_day_object() {
     assert_eq!(first.multiplier, 1000);
     assert_eq!(first.value, -161050.0);
     // The fixture's "CO" product is undocumented in kite:orders.md and preserved.
-    assert!(p
-        .net
-        .iter()
-        .chain(&p.day)
-        .any(|x| x.product.as_wire() == "CO" && x.product.is_unknown()));
+    assert!(
+        p.net
+            .iter()
+            .chain(&p.day)
+            .any(|x| x.product.as_wire() == "CO" && x.product.is_unknown())
+    );
 }
 
 #[tokio::test]

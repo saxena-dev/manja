@@ -8,13 +8,13 @@
 //! wraps each one in a source envelope to show provenance.
 
 use manja::kite::decoder::adapter::Adapter;
-use manja::kite::decoder::framing::{frame, FramingLimits, Message};
-use manja::kite::decoder::packets::{decode, Packet};
+use manja::kite::decoder::framing::{FramingLimits, Message, frame};
+use manja::kite::decoder::packets::{Packet, decode};
 use manja::kite::envelope::{
     MonotonicElapsed, PayloadKind, RawObservation, ReceiveTime, SourceIdentity, SourceSequencer,
 };
-use manja::kite::obs::schema::SourceMode;
 use manja::kite::obs::Observability;
+use manja::kite::obs::schema::SourceMode;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let path = concat!(

@@ -15,9 +15,9 @@ use manja::kite::connect::client::HTTPClient;
 use manja::kite::connect::config::Config;
 use manja::kite::connect::credentials::Credentials;
 use serde_json::Value;
+use tracing::Subscriber;
 use tracing::field::{Field, Visit};
 use tracing::span::{Attributes, Id, Record};
-use tracing::Subscriber;
 use tracing_subscriber::layer::{Context, Layer, SubscriberExt};
 use tracing_subscriber::registry::LookupSpan;
 
@@ -97,7 +97,9 @@ async fn a_strict_rejection_ends_its_spans_as_decode_errors() {
         Some("200")
     );
     // The seeded value is in no span field.
-    assert!(spans
-        .iter()
-        .all(|s| s.2.values().all(|v| !v.contains("SEEDprice"))));
+    assert!(
+        spans
+            .iter()
+            .all(|s| s.2.values().all(|v| !v.contains("SEEDprice")))
+    );
 }

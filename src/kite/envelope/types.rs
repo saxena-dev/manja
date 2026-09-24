@@ -45,8 +45,8 @@
 //!
 use std::fmt;
 use std::hash::{BuildHasher, Hasher};
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
 use serde::{Deserialize, Deserializer, Serialize, Serializer};

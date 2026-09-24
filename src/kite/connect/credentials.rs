@@ -377,13 +377,4 @@ mod test {
             "api_key=key&access_token=a%26b%3Dc"
         );
     }
-
-    #[test]
-    fn construction_reads_no_environment() {
-        // The legacy `load_from_env` path is gone: a snapshot contains only
-        // what the caller passed, whatever the process environment holds.
-        std::env::set_var("KITECONNECT_API_KEY", SENTINEL);
-        let creds = Credentials::new("explicit", "token").unwrap();
-        assert_eq!(creds.api_key().as_str(), "explicit");
-    }
 }

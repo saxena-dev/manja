@@ -20,9 +20,9 @@ use manja::kite::connect::models::{LTPQuote, OrderVariety};
 use manja::kite::connect::scheduler::SchedulerLimits;
 use manja::kite::obs::{BridgeRecorder, InMemoryRecorder, Instrument, Observability};
 use manja::kite::protocol::OrderId;
+use tracing::Subscriber;
 use tracing::field::{Field, Visit};
 use tracing::span::{Attributes, Id, Record};
-use tracing::Subscriber;
 use tracing_subscriber::layer::{Context, Layer, SubscriberExt};
 use tracing_subscriber::registry::LookupSpan;
 
@@ -414,11 +414,12 @@ async fn gauges_settle_on_success_error_cancellation_and_teardown() {
     waiting.abort();
     let _ = waiting.await;
     assert!(gauges_settled(&obs));
-    assert!(c
-        .diagnostics()
-        .admission_waiters_by_class
-        .iter()
-        .all(|(_, n)| *n == 0));
+    assert!(
+        c.diagnostics()
+            .admission_waiters_by_class
+            .iter()
+            .all(|(_, n)| *n == 0)
+    );
 
     drop((c, clone));
     assert!(gauges_settled(&obs));

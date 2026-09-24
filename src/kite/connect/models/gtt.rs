@@ -16,7 +16,7 @@ use chrono::{DateTime, FixedOffset};
 use serde::{Deserialize, Serialize};
 
 use crate::kite::connect::models::exchange::Exchange;
-use crate::kite::connect::models::order::{invalid, RequestError};
+use crate::kite::connect::models::order::{RequestError, invalid};
 use crate::kite::connect::models::order_enums::{
     OrderType, OrderValidity, ProductType, TransactionType,
 };

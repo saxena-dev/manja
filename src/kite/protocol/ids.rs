@@ -132,7 +132,7 @@ impl std::error::Error for OrderIdError {}
 // bytes are allowed, and every way in (`new`, `TryFrom`, `FromStr`,
 // `Deserialize`) runs it.
 macro_rules! checked_id {
-    ($(#[$doc:meta])* $name:ident, $field:literal, $rule:literal, $check:expr) => {
+    ($(#[$doc:meta])* $name:ident, $field:literal, $rule:literal, $check:expr_2021) => {
         $(#[$doc])*
         #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
         pub struct $name(String);

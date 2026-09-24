@@ -126,10 +126,12 @@ mod tests {
             rows: vec![Row::Decoded(7), Row::Decoded(8)],
         };
         assert_eq!(complete.into_complete().unwrap(), [7, 8]);
-        assert!(Rows::<u32> { rows: vec![] }
-            .into_complete()
-            .unwrap()
-            .is_empty());
+        assert!(
+            Rows::<u32> { rows: vec![] }
+                .into_complete()
+                .unwrap()
+                .is_empty()
+        );
     }
 
     #[test]

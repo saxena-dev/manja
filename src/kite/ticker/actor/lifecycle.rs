@@ -295,18 +295,21 @@ mod tests {
         let d = ReconnectLimits::default();
         assert!(d.clone().with_attempts(0).is_err());
         assert!(d.clone().with_attempts(101).is_err());
-        assert!(d
-            .clone()
-            .with_outage_deadline(Duration::from_secs(9))
-            .is_err());
-        assert!(d
-            .clone()
-            .with_backoff(Duration::from_millis(49), Duration::from_secs(1))
-            .is_err());
-        assert!(d
-            .clone()
-            .with_backoff(Duration::from_secs(2), Duration::from_secs(1))
-            .is_err());
+        assert!(
+            d.clone()
+                .with_outage_deadline(Duration::from_secs(9))
+                .is_err()
+        );
+        assert!(
+            d.clone()
+                .with_backoff(Duration::from_millis(49), Duration::from_secs(1))
+                .is_err()
+        );
+        assert!(
+            d.clone()
+                .with_backoff(Duration::from_secs(2), Duration::from_secs(1))
+                .is_err()
+        );
         assert!(d.with_liveness_timeout(Duration::from_secs(1)).is_err());
     }
 }

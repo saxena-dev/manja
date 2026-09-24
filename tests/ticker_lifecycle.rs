@@ -15,13 +15,13 @@ use futures_util::StreamExt;
 use manja::kite::connect::credentials::Credentials;
 use manja::kite::envelope::{ConnectionEpoch, DisconnectReason, LifecycleKind};
 use manja::kite::protocol::InstrumentToken;
+use manja::kite::ticker::Mode;
 use manja::kite::ticker::actor::lifecycle::ReconnectLimits;
 use manja::kite::ticker::actor::owner::{
     TaskOutcome, TerminalReason, TickerBuilder, TickerError, TickerEvent, TickerEvents,
     TickerLimits, TickerState,
 };
 use manja::kite::ticker::actor::subscriptions::Revision;
-use manja::kite::ticker::Mode;
 use tokio_tungstenite::tungstenite::Message;
 
 use support::ws::{Handshake, Step, WsConnection, WsHarness};

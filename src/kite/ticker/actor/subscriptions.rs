@@ -196,10 +196,10 @@ impl DesiredSubscriptions {
             SubscriptionCommand::Replace { desired } => {
                 next.clear();
                 for (t, mode) in desired {
-                    if let Some(previous) = next.insert(*t, mode.clone()) {
-                        if previous != *mode {
-                            return Err(SubscriptionError::ConflictingModes { token: *t });
-                        }
+                    if let Some(previous) = next.insert(*t, mode.clone())
+                        && previous != *mode
+                    {
+                        return Err(SubscriptionError::ConflictingModes { token: *t });
                     }
                 }
             }

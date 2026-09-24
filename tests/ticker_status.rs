@@ -13,12 +13,12 @@ use manja::kite::connect::credentials::Credentials;
 use manja::kite::envelope::{RunId, SourceIdentity};
 use manja::kite::obs::{BridgeRecorder, InMemoryRecorder, Instrument, Observability};
 use manja::kite::protocol::InstrumentToken;
+use manja::kite::ticker::Mode;
 use manja::kite::ticker::actor::lifecycle::ReconnectLimits;
 use manja::kite::ticker::actor::owner::{
     TerminalReason, TickerBuilder, TickerError, TickerEvent, TickerEvents, TickerLimits,
     TickerState,
 };
-use manja::kite::ticker::Mode;
 use tokio_tungstenite::tungstenite::Message;
 use tracing::field::{Field, Visit};
 use tracing::span::{Attributes, Id, Record};
@@ -274,12 +274,16 @@ async fn handshakes_sockets_reconnects_restores_and_commands_have_their_own_fact
     assert_eq!(connections[0].fields.get("reason").unwrap(), "start");
     assert_eq!(connections[1].fields.get("reason").unwrap(), "eof");
     assert_eq!(connections[1].fields.get("connection_epoch").unwrap(), "2");
-    assert!(connections
-        .iter()
-        .all(|c| c.fields.get("feed_id").unwrap() == FEED));
-    assert!(connections
-        .iter()
-        .all(|c| c.fields.get("result").unwrap() == "ok"));
+    assert!(
+        connections
+            .iter()
+            .all(|c| c.fields.get("feed_id").unwrap() == FEED)
+    );
+    assert!(
+        connections
+            .iter()
+            .all(|c| c.fields.get("result").unwrap() == "ok")
+    );
     let restores = cap.named("manja.ticker.restore");
     assert_eq!(restores.len(), 2);
     assert_eq!(restores[1].fields.get("instrument_count").unwrap(), "1");

@@ -44,7 +44,7 @@
 use std::collections::VecDeque;
 use std::sync::{Arc, Mutex};
 
-use tokio::sync::{mpsc, OwnedSemaphorePermit, Semaphore};
+use tokio::sync::{OwnedSemaphorePermit, Semaphore, mpsc};
 use tokio::time::Instant;
 
 #[cfg(doc)]
@@ -176,7 +176,7 @@ impl Sender {
     pub(crate) fn reserve(
         &self,
         charge: usize,
-    ) -> impl std::future::Future<Output = Result<Room, Closed>> + Send + 'static {
+    ) -> impl std::future::Future<Output = Result<Room, Closed>> + Send + 'static + use<> {
         let (tx, bytes, shared) = (self.tx.clone(), self.bytes.clone(), self.shared.clone());
         let charge = charge.min(self.byte_limit) as u32;
         async move {

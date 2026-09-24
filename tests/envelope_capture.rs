@@ -8,8 +8,8 @@
 mod capture;
 
 use manja::kite::envelope::{
-    MonotonicElapsed, PayloadKind, RawObservation, ReceiveTime, SourceIdentity, SourceSequencer,
-    DEFAULT_MAX_PAYLOAD_BYTES,
+    DEFAULT_MAX_PAYLOAD_BYTES, MonotonicElapsed, PayloadKind, RawObservation, ReceiveTime,
+    SourceIdentity, SourceSequencer,
 };
 
 #[test]

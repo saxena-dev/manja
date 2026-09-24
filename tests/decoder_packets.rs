@@ -12,10 +12,10 @@
 mod support;
 
 use chrono::{DateTime, FixedOffset};
-use manja::kite::decoder::framing::{frame, FramingLimits, Message};
-use manja::kite::decoder::packets::{decode, decode_bytes, scaled, DepthEntry, Packet};
+use manja::kite::decoder::framing::{FramingLimits, Message, frame};
+use manja::kite::decoder::packets::{DepthEntry, Packet, decode, decode_bytes, scaled};
 use manja::kite::protocol::scale::Segment;
-use serde_json::{json, Map, Value};
+use serde_json::{Map, Value, json};
 
 use support::capture::{read_capture, read_real_capture, read_ticker_fixture};
 use support::fixtures;

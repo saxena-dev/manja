@@ -412,10 +412,12 @@ async fn shutdown_that_cannot_deliver_expires_within_its_deadline() {
     // Everything queued is still delivered, then the error, once.
     let items: Vec<String> = drain(&mut events).await.iter().map(describe).collect();
     assert_eq!(items.iter().filter(|d| d.starts_with("raw:")).count(), 13);
-    assert!(items
-        .last()
-        .unwrap()
-        .starts_with("err:ShutdownDeadlineExpired"));
+    assert!(
+        items
+            .last()
+            .unwrap()
+            .starts_with("err:ShutdownDeadlineExpired")
+    );
 }
 
 #[tokio::test]

@@ -24,7 +24,7 @@ use crate::kite::ticker::models::Mode;
 
 use futures_util::Stream;
 use secrecy::{ExposeSecret, Secret};
-use tungstenite::{client::IntoClientRequest, Message};
+use tungstenite::{Message, client::IntoClientRequest};
 
 use super::models::TickerRequest;
 

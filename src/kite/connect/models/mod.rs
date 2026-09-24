@@ -98,8 +98,8 @@ pub use portfolio::{
 mod market;
 #[allow(unused_imports)]
 pub use market::{
-    Depth, DepthLevel, FullQuote, Instrument, InstrumentType, KiteQuote, LTPQuote, OHLCQuote,
-    QuoteMode, Quotes, OHLC,
+    Depth, DepthLevel, FullQuote, Instrument, InstrumentType, KiteQuote, LTPQuote, OHLC, OHLCQuote,
+    QuoteMode, Quotes,
 };
 
 /// Models for the `/margins/` and `/charges/` API group, dealing with margin
@@ -107,7 +107,7 @@ pub use market::{
 ///
 mod margins;
 pub use margins::{
-    BasketMargin, Charges, OrderCharges, OrderChargesRequest, OrderMargin, OrderMarginRequest, GST,
+    BasketMargin, Charges, GST, OrderCharges, OrderChargesRequest, OrderMargin, OrderMarginRequest,
     PNL,
 };
 
