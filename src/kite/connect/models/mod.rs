@@ -70,6 +70,12 @@ pub use mutual_funds::{
 mod historical;
 pub use historical::{Candle, CandleInterval, HistoricalData, HistoricalRequest};
 
+/// Row-by-row results of list responses, for the tolerant
+/// `*_with_rejections` methods.
+///
+mod rows;
+pub use rows::{Row, RowError, Rows};
+
 /// Models for the `/gtt/` API group: Good Till Triggered orders.
 ///
 mod gtt;

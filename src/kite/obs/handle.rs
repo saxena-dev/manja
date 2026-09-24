@@ -122,6 +122,10 @@ impl Labels {
         )
     }
 
+    pub(crate) fn rejected_rows(e: Endpoint) -> Self {
+        Self::new(Instrument::HttpRejectedRowsTotal, &[e.as_str()])
+    }
+
     pub(crate) fn quota(instrument: Instrument, q: QuotaClass) -> Self {
         Self::new(instrument, &[q.as_str()])
     }

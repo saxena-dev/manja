@@ -477,6 +477,7 @@ instruments! {
     HttpAdmissionWaiters => "manja_http_admission_waiters", Gauge, "waiters", [QuotaClass];
     HttpAdmissionWait => "manja_http_admission_wait_seconds", Histogram, "seconds", [QuotaClass, AdmissionResult];
     HttpRetriesTotal => "manja_http_retries_total", Counter, "retries", [Method, Endpoint, ErrorClass];
+    HttpRejectedRowsTotal => "manja_http_rejected_rows_total", Counter, "rows", [Endpoint];
     AuthRejectionsTotal => "manja_auth_rejections_total", Counter, "rejections", [Transport];
     TickerConnectionAttemptsTotal => "manja_ticker_connection_attempts_total", Counter, "attempts", [Result];
     TickerConnectDuration => "manja_ticker_connect_duration_seconds", Histogram, "seconds", [Result];
@@ -697,6 +698,7 @@ mod tests {
             (I::HttpAdmissionWaiters, 4),
             (I::HttpAdmissionWait, 16),
             (I::HttpRetriesTotal, 496),
+            (I::HttpRejectedRowsTotal, 31),
             (I::AuthRejectionsTotal, 2),
             (I::TickerConnectionAttemptsTotal, 6),
             (I::TickerConnectDuration, 6),

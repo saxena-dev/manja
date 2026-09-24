@@ -352,9 +352,32 @@ conversion.
 
 Every equity order ID in the official samples is a string of digits, and every mutual fund
 order ID a UUID. A response whose ID fails its grammar is a `Decode` error rather than an
-unvalidated ID, so no broker value can reach a request path unchecked. The error covers the
-whole response: one malformed ID fails an entire order book or trade list. For a ticker
-order update, it fails only that text message. The order ID in an
+unvalidated ID, so no broker value can reach a request path unchecked. In the default list
+methods the error covers the whole response: one malformed row, whatever the field, fails
+an entire order book or trade list. For a ticker order update, it fails only that text
+message.
+
+Each equity order and trade list therefore has a second, tolerant method:
+`list_orders_with_rejections`, `get_order_history_with_rejections`,
+`list_trades_with_rejections` and `get_order_trades_with_rejections`. Each returns
+`Rows<T>`: every element in the broker's array order, as `Row::Decoded(T)` or
+`Row::Rejected(RowError)`, where the `RowError` carries the element's `index`, the
+decoding `error` and the `raw` element. `Rows::items`, `rejected`, `is_complete` and
+`into_complete` read it. Such a response may be partial, and every row can be rejected,
+which leaves `items` empty although the broker sent rows; `is_complete` or `into_complete`
+tells that apart from an empty list. `RowError`'s `Debug` prints only the index, because
+the error text and the raw element can quote broker values.
+
+Both methods decode through one path, with the policy applied inside the attempt's
+classification. The envelope is classified as for every JSON response, and `data` must be
+an array; its elements are then decoded one by one, so an array of non-objects is a list
+of rejected rows rather than a type mismatch. A strict rejection is a `Decode` error whose
+detail gives only the rejected count and the first index, such as `3 of 10 rows rejected;
+first at index 7`. It is recorded as a
+failed operation and attempt, in the span and in `HttpDiagnostics`. Under both policies
+the rejected rows of a response are counted once in `manja_http_rejected_rows_total`, and a
+complete response records nothing there. Single-object responses, and the mutual fund,
+holdings and GTT lists, stay strict. The order ID in an
 `OrderChargesRequest` is not an `OrderId`: the documentation allows any string there
 (`kite:margins.md:395`), and it travels in the JSON body, never in a path.
 
@@ -481,6 +504,7 @@ Additions within version 1:
 | `endpoint` value `/instruments/historical/{instrument_token}/{interval}` (§2.13) | the domain grows to 25 values, with the §4.4 bounds |
 | `endpoint` values `/mf/orders`, `/mf/orders/{order_id}`, `/mf/sips`, `/mf/holdings` and `/mf/instruments` (§2.14) | the domain grows to 30 values, with the §4.4 bounds |
 | `endpoint` value `/portfolio/holdings/authorise` (§2.15) | the domain grows to 31 values, with the §4.4 bounds |
+| `manja_http_rejected_rows_total` (§2.16) | a new counter of list rows that did not decode, labelled by `endpoint` only |
 | `DecodeDiagnosticKind::InvalidField` (§4.5) | one more diagnostic kind |
 
 ### 4.2 Spans
@@ -541,6 +565,7 @@ are never labels.
 | `manja_http_admission_waiters` | gauge, waiters | `quota_class` | 4 |
 | `manja_http_admission_wait_seconds` | histogram, s | `quota_class`, `admission_result` | 16 |
 | `manja_http_retries_total` | counter, retries | `method`, `endpoint`, `error_class` | 496 |
+| `manja_http_rejected_rows_total` | counter, rows | `endpoint` | 31 |
 | `manja_auth_rejections_total` | counter, rejections | `transport` | 2 |
 | `manja_ticker_connection_attempts_total` | counter, attempts | `result` | 6 |
 | `manja_ticker_connect_duration_seconds` | histogram, s | `result` | 6 |
@@ -614,6 +639,7 @@ These choices are not dictated by the Kite documentation alone.
 | Endpoint support | Holdings auctions and the order charges calculation stay supported | Both are documented read or calculation endpoints with official fixtures |
 | Holdings authorisation | Supported as the HTTP call that starts the flow, with the documented portal URL; the portal itself is left to the application | The endpoint and its result are documented (`kite:portfolio.md:503-541`). The remaining steps happen in the user's browser on the depository's portal, which an SDK cannot and should not drive |
 | Order IDs | Checked types; a response ID that fails its grammar is a `Decode` error | An ID is a request path segment. A lenient fallback would let a malformed broker value reach a path unchecked, and every ID in the official samples already fits its grammar |
+| Rejected list rows | The default equity order and trade list methods stay strict; a paired `*_with_rejections` method returns every row, rejected ones in place (§2.16) | Strict is the default because `?` keeps a failure loud, and an entirely rejected book can never pass for an empty one. The tolerant form lets a caller still see, and act on, the rows that decoded. Keeping partial data out of `HttpError` keeps broker rows out of commonly logged errors |
 | Mutual funds | Read-only: orders, SIPs, holdings and the instrument list | The documentation states that order placement cannot be done through the API (`kite:mutual-funds.md:3`) and lists only these reads (`kite:mutual-funds.md:5-11`). The official mocks still carry order and SIP placement, modification and cancellation responses, but no request for them is documented, so implementing them would mean inventing the request |
 | GTT orders | Only LIMIT orders, each for the condition's instrument; a modification sends the complete trigger | The documentation lists `LIMIT` as the only order type and shows each order repeating the condition's exchange and tradingsymbol (`kite:gtt.md:56-64`); it recommends fetching the trigger and sending it back modified (`kite:gtt.md:390-393`) |
 | Default features | `http`, `ticker` and `decoder` | Keeps every 0.1 import path available |

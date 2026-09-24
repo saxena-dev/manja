@@ -73,7 +73,7 @@ use crate::kite::{
         api::{Charges, Gtt, Margins, Market, MutualFunds, Orders, Portfolio, Session, User},
         config::Config,
         credentials::{AccessToken, ApiKey, Credentials},
-        models::{KiteApiResponse, UserSession},
+        models::{KiteApiResponse, Row, RowError, Rows, UserSession},
         scheduler::{
             AttemptCtx, DispatchPermit, OpObs, OpSpec, PermitTarget, RetryClass, Scheduler,
         },
@@ -722,6 +722,83 @@ impl HTTPClient {
         }
     }
 
+    /// GET a JSON array under `policy`, decoding each element on its own.
+    ///
+    /// The envelope is classified as for every JSON response, and `data` must
+    /// be an array. Then every element is decoded independently, and the
+    /// rejected-row counter is recorded once for this response. Under
+    /// `Strict` a rejected row makes the attempt, and so the operation, a
+    /// `Decode` error, whose detail holds only the rejected count and the
+    /// first index. Under `Tolerant` every row is returned. The policy is
+    /// applied inside the attempt's classification, so the operation and
+    /// attempt results, the span and the diagnostics all see a strict
+    /// rejection as a failure.
+    pub(crate) async fn get_rows<T>(
+        &self,
+        path: &str,
+        policy: RowPolicy,
+    ) -> Result<KiteApiResponse<Rows<T>>>
+    where
+        T: DeserializeOwned,
+    {
+        let (m, endpoint) = labels(&reqwest::Method::GET, path);
+        let obs = &self.transport.obs;
+        self.operation(
+            reqwest::Method::GET,
+            path,
+            BodyKind::Json,
+            None,
+            true,
+            |rb| rb,
+            |status, body| {
+                let envelope = classify_json::<Value>(status, body, m, endpoint)?;
+                let decode = |detail: String| {
+                    http_error(HttpErrorKind::Decode, status, m, endpoint).with_detail(&detail)
+                };
+                let elements: Vec<Value> =
+                    serde_json::from_value(envelope.data.unwrap_or(Value::Null))
+                        .map_err(|e| decode(payload_mismatch(&e)))?;
+                let total = elements.len();
+                let rows: Vec<Row<T>> = elements
+                    .into_iter()
+                    .enumerate()
+                    .map(|(index, raw)| match T::deserialize(&raw) {
+                        Ok(t) => Row::Decoded(t),
+                        Err(e) => Row::Rejected(RowError {
+                            index,
+                            error: e.to_string(),
+                            raw,
+                        }),
+                    })
+                    .collect();
+                let rows = Rows { rows };
+                let rejected = rows.rejected().count();
+                // Recorded here, after decoding and for both policies, so the
+                // count describes what the broker sent. Rows are decoded from a
+                // 2xx body only, and a Decode error on a 2xx is not retried
+                // (`scheduler::retry_cause`), so each response is counted once.
+                // If retry_cause ever retries Decode errors, this would count the
+                // rejected rows of one operation once per retried attempt.
+                if rejected > 0 {
+                    obs.counter(Labels::rejected_rows(endpoint), rejected as u64);
+                }
+                if policy == RowPolicy::Strict && rejected > 0 {
+                    let first = rows.rejected().next().map(|e| e.index).unwrap_or(0);
+                    return Err(decode(format!(
+                        "{rejected} of {total} rows rejected; first at index {first}"
+                    )));
+                }
+                Ok(KiteApiResponse {
+                    status: envelope.status,
+                    data: Some(rows),
+                    message: envelope.message,
+                    error_type: None,
+                })
+            },
+        )
+        .await
+    }
+
     pub(crate) async fn json<Model, B>(
         &self,
         method: reqwest::Method,
@@ -1035,6 +1112,15 @@ fn labels(method: &reqwest::Method, path: &str) -> (Method, Endpoint) {
     (m, endpoint_template(m, path))
 }
 
+/// How a list response treats an element that does not decode.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum RowPolicy {
+    /// Any rejected element fails the response with a `Decode` error.
+    Strict,
+    /// Every element is returned, decoded or rejected in place.
+    Tolerant,
+}
+
 /// Map a concrete request path to its endpoint template, so no dynamic
 /// segment (variety, order ID, exchange) ever reaches metadata or labels.
 pub(crate) fn endpoint_template(method: Method, path: &str) -> Endpoint {
@@ -1108,6 +1194,12 @@ fn error_response(status: u16, body: &Value, method: Method, endpoint: Endpoint)
     http_error(kind, status, method, endpoint).with_broker(broker)
 }
 
+/// The detail of a success payload that does not decode into the endpoint's
+/// type, shared by every JSON path so their errors stay identical.
+fn payload_mismatch(e: &serde_json::Error) -> String {
+    format!("the payload does not match the endpoint's type: {e}")
+}
+
 /// Total classification of a JSON response.
 // Internal error path; the error is boxed into `ManjaError::Http`.
 pub(crate) fn classify_json<T: DeserializeOwned>(
@@ -1146,11 +1238,7 @@ pub(crate) fn classify_json<T: DeserializeOwned>(
         None | Some(Value::Null) => return Err(decode("the success envelope has no data".into())),
         Some(d) => d.clone(),
     };
-    let data: T = serde_json::from_value(data).map_err(|e| {
-        decode(format!(
-            "the payload does not match the endpoint's type: {e}"
-        ))
-    })?;
+    let data: T = serde_json::from_value(data).map_err(|e| decode(payload_mismatch(&e)))?;
     Ok(KiteApiResponse {
         status: "success".to_string(),
         data: Some(data),

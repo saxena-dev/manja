@@ -19,7 +19,8 @@ exclude = [
     ".temp/*",
     "kiteconnect-mocks",
     "*.py",
-    "scripts/full-verification.sh"
+    "scripts/full-verification.sh",
+    "scripts/quick-verification.sh"
 ]
 
 [dependencies]
@@ -86,6 +87,14 @@ required-features = ["http"]
 
 [[test]]
 name = "http_reads"
+required-features = ["http"]
+
+[[test]]
+name = "http_order_rows"
+required-features = ["http"]
+
+[[test]]
+name = "http_order_rows_span"
 required-features = ["http"]
 
 [[test]]

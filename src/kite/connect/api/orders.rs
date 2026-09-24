@@ -21,10 +21,10 @@
 //! explicit point between admission and dispatch.
 //!
 use crate::kite::connect::{
-    client::HTTPClient,
+    client::{HTTPClient, RowPolicy},
     models::{
         KiteApiResponse, ModifyOrderRequest, Order, OrderReceipt, OrderVariety, PlaceOrderRequest,
-        Trade,
+        Row, Rows, Trade,
     },
     scheduler::DispatchPermit,
 };
@@ -167,30 +167,120 @@ impl<'c> Orders<'c> {
     }
 
     // ===== [ Reads ] =====
+    //
+    // Each list has a strict method, which fails the whole response when any
+    // row does not decode, and a `*_with_rejections` method, which returns
+    // every row in broker order with rejected rows in place.
 
     /// Every order of the day, open and executed: `GET /orders`.
+    ///
+    /// Strict: if any order does not decode, the whole response is a
+    /// `Decode` error whose detail gives the rejected count and the first
+    /// index. [`Self::list_orders_with_rejections`] returns the other rows.
     pub async fn list_orders(&self) -> Result<KiteApiResponse<Vec<Order>>> {
-        self.client.get("/orders").await
+        strict(self.client.get_rows("/orders", RowPolicy::Strict).await?)
+    }
+
+    /// Every order of the day, row by row: `GET /orders`.
+    ///
+    /// The response may be partial: rows that do not decode are
+    /// [`Row::Rejected`](crate::kite::connect::models::Row::Rejected) in
+    /// place, in broker order. Every row can be rejected, which leaves
+    /// [`Rows::items`] empty although the broker sent orders; check
+    /// [`Rows::is_complete`] or use [`Rows::into_complete`] to tell that
+    /// apart from an empty order book.
+    pub async fn list_orders_with_rejections(&self) -> Result<KiteApiResponse<Rows<Order>>> {
+        self.client.get_rows("/orders", RowPolicy::Tolerant).await
     }
 
     /// The history of one order: `GET /orders/{order_id}`.
+    ///
+    /// Strict, like [`Self::list_orders`].
     pub async fn get_order_history(
         &self,
         order_id: &OrderId,
     ) -> Result<KiteApiResponse<Vec<Order>>> {
-        self.client.get(&format!("/orders/{order_id}")).await
+        strict(
+            self.client
+                .get_rows(&format!("/orders/{order_id}"), RowPolicy::Strict)
+                .await?,
+        )
+    }
+
+    /// The history of one order, row by row: `GET /orders/{order_id}`.
+    ///
+    /// May be partial, like [`Self::list_orders_with_rejections`]: knowing
+    /// the order ID does not stop any other field of a row from failing.
+    pub async fn get_order_history_with_rejections(
+        &self,
+        order_id: &OrderId,
+    ) -> Result<KiteApiResponse<Rows<Order>>> {
+        self.client
+            .get_rows(&format!("/orders/{order_id}"), RowPolicy::Tolerant)
+            .await
     }
 
     /// Every executed trade of the day: `GET /trades`.
+    ///
+    /// Strict, like [`Self::list_orders`].
     pub async fn list_trades(&self) -> Result<KiteApiResponse<Vec<Trade>>> {
-        self.client.get("/trades").await
+        strict(self.client.get_rows("/trades", RowPolicy::Strict).await?)
+    }
+
+    /// Every executed trade of the day, row by row: `GET /trades`.
+    ///
+    /// May be partial, like [`Self::list_orders_with_rejections`].
+    pub async fn list_trades_with_rejections(&self) -> Result<KiteApiResponse<Rows<Trade>>> {
+        self.client.get_rows("/trades", RowPolicy::Tolerant).await
     }
 
     /// The trades of one order: `GET /orders/{order_id}/trades`.
+    ///
+    /// Strict, like [`Self::list_orders`].
     pub async fn get_order_trades(
         &self,
         order_id: &OrderId,
     ) -> Result<KiteApiResponse<Vec<Trade>>> {
-        self.client.get(&format!("/orders/{order_id}/trades")).await
+        strict(
+            self.client
+                .get_rows(&format!("/orders/{order_id}/trades"), RowPolicy::Strict)
+                .await?,
+        )
     }
+
+    /// The trades of one order, row by row: `GET /orders/{order_id}/trades`.
+    ///
+    /// May be partial, like [`Self::list_orders_with_rejections`].
+    pub async fn get_order_trades_with_rejections(
+        &self,
+        order_id: &OrderId,
+    ) -> Result<KiteApiResponse<Rows<Trade>>> {
+        self.client
+            .get_rows(&format!("/orders/{order_id}/trades"), RowPolicy::Tolerant)
+            .await
+    }
+}
+
+/// The rows of a strict response as a plain list. Strict decoding has already
+/// failed the operation if any row was rejected, so every row here decoded;
+/// the debug assertion guards that invariant against a future change.
+fn strict<T>(response: KiteApiResponse<Rows<T>>) -> Result<KiteApiResponse<Vec<T>>> {
+    Ok(KiteApiResponse {
+        status: response.status,
+        data: response.data.map(|rows| {
+            debug_assert!(
+                rows.is_complete(),
+                "strict decoding returned a rejected row"
+            );
+            rows.rows
+                .into_iter()
+                .filter_map(|row| match row {
+                    Row::Decoded(t) => Some(t),
+                    Row::Rejected(_) => None,
+                })
+                .collect()
+        }),
+        message: response.message,
+        error_type: response.error_type,
+    })
 }

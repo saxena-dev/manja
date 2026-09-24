@@ -24,8 +24,8 @@ use manja::kite::connect::models::{
     HoldingsAuthorisationRequest, Instrument, KiteApiResponse, LTPQuote, MfHolding, MfInstrument,
     MfOrder, MfOrderStatus, MfOrderVariety, MfPlan, MfPurchaseType, MfSip, ModifyOrderRequest,
     OHLCQuote, Order, OrderReceipt, PlaceOrderRequest, Position, PositionConversionRequest,
-    Positions, QuoteMode, Quotes, RequestError, SchemeType, SipFrequency, SipStatus, Trade,
-    UserSession,
+    Positions, QuoteMode, Quotes, RequestError, Row, RowError, Rows, SchemeType, SipFrequency,
+    SipStatus, Trade, UserSession,
 };
 use manja::kite::connect::scheduler::{DispatchPermit, PermitTarget, SchedulerLimits};
 use manja::kite::decoder::adapter::{Adapter, AdapterError, Decoded, DecodedEvent, Versions};
@@ -88,6 +88,19 @@ async fn signatures(c: &HTTPClient, h: &TickerHandle) {
         .cancel_order(manja::kite::connect::models::OrderVariety::Regular, &id)
         .await;
     let _: Result<OrderId, OrderIdError> = OrderId::new("1");
+    let _: Result<KiteApiResponse<Rows<Order>>, ManjaError> =
+        c.orders().list_orders_with_rejections().await;
+    let _: Result<KiteApiResponse<Rows<Order>>, ManjaError> =
+        c.orders().get_order_history_with_rejections(&id).await;
+    let _: Result<KiteApiResponse<Rows<Trade>>, ManjaError> =
+        c.orders().list_trades_with_rejections().await;
+    let _: Result<KiteApiResponse<Rows<Trade>>, ManjaError> =
+        c.orders().get_order_trades_with_rejections(&id).await;
+    let _: fn(&RowError) -> usize = |e| e.index;
+    let _: fn(Row<Trade>) -> Option<Trade> = |r| match r {
+        Row::Decoded(t) => Some(t),
+        _ => None,
+    };
     let _ = PermitTarget::ModifyOrder {
         order_id: id.clone(),
     };
