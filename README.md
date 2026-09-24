@@ -2,6 +2,7 @@ manja
 =====
 
 [![CI](https://github.com/saxena-dev/manja/actions/workflows/ci.yml/badge.svg)](https://github.com/saxena-dev/manja/actions/workflows/ci.yml)
+[![Coverage](https://codecov.io/gh/saxena-dev/manja/graph/badge.svg)](https://codecov.io/gh/saxena-dev/manja)
 [![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 [![Rust 1.95+](https://img.shields.io/badge/rust-1.95%2B-orange.svg)](https://www.rust-lang.org/)
 [![Docs.rs](https://docs.rs/manja/badge.svg)](https://docs.rs/manja)

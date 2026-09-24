@@ -4,6 +4,7 @@
 #
 #   scripts/quick-verification.sh            everything that runs offline
 #   scripts/quick-verification.sh --online   also re-check the Kite pages
+#   scripts/quick-verification.sh --coverage also measure test coverage
 #
 # The feature rows and the minimum toolchain differ only in what compiles, so
 # they are compile-checked (clippy, all targets) instead of tested. The tests,
@@ -21,9 +22,11 @@ cd "$root"
 msrv=1.95.0
 latest=1.98.0
 online=0
+coverage=0
 for arg in "$@"; do
   case "$arg" in
     --online) online=1 ;;
+    --coverage) coverage=1 ;;
     *) echo "unknown argument: $arg" >&2; exit 2 ;;
   esac
 done
@@ -78,6 +81,19 @@ run cargo +"$msrv" check --offline --all-targets --all-features
 # other steps (hundreds of thousands of files), which costs seconds per test
 # binary; this directory only ever holds one configuration.
 run env CARGO_TARGET_DIR="$root/target/quick-test" cargo +"$latest" test --offline --all-features
+
+# Line and region coverage of the all-features test run, with cargo-llvm-cov
+# (cargo install cargo-llvm-cov; rustup component add llvm-tools-preview).
+# The instrumented build keeps to its own target directory, target/llvm-cov-target.
+# The HTML report is written to target/verification/coverage/html/index.html.
+if [ "$coverage" = 1 ]; then
+  run cargo +"$latest" llvm-cov clean --workspace
+  run cargo +"$latest" llvm-cov --offline --all-features --no-report
+  run cargo +"$latest" llvm-cov report --summary-only
+  run cargo +"$latest" llvm-cov report --html --output-dir "$out_dir/coverage"
+else
+  echo "== skipped: coverage (pass --coverage to run it)"
+fi
 
 # The packaged crate builds and runs for a downstream consumer.
 run tests/packaging/check.sh "$scratch/pkg"
