@@ -127,6 +127,8 @@ domain!(
         Holdings => "/portfolio/holdings",
         /// `/portfolio/holdings/auctions`
         HoldingsAuctions => "/portfolio/holdings/auctions",
+        /// `/portfolio/holdings/authorise`
+        HoldingsAuthorise => "/portfolio/holdings/authorise",
         /// `/portfolio/positions`
         Positions => "/portfolio/positions",
         /// `/instruments`
@@ -687,14 +689,14 @@ mod tests {
     fn series_bounds_match_the_contract_table() {
         use Instrument as I;
         let expected = [
-            (I::HttpOperationsTotal, 5280),
-            (I::HttpOperationDuration, 5280),
-            (I::HttpAttemptsTotal, 960),
-            (I::HttpAttemptDuration, 960),
+            (I::HttpOperationsTotal, 5456),
+            (I::HttpOperationDuration, 5456),
+            (I::HttpAttemptsTotal, 992),
+            (I::HttpAttemptDuration, 992),
             (I::HttpInFlight, 4),
             (I::HttpAdmissionWaiters, 4),
             (I::HttpAdmissionWait, 16),
-            (I::HttpRetriesTotal, 480),
+            (I::HttpRetriesTotal, 496),
             (I::AuthRejectionsTotal, 2),
             (I::TickerConnectionAttemptsTotal, 6),
             (I::TickerConnectDuration, 6),
@@ -723,7 +725,7 @@ mod tests {
         assert!(Endpoint::ALL
             .iter()
             .all(|e| e.as_str().len() <= MAX_LABEL_VALUE_BYTES));
-        assert_eq!(Endpoint::ALL.len(), 30);
+        assert_eq!(Endpoint::ALL.len(), 31);
         assert!(Instrument::ALL
             .iter()
             .all(|i| i.label_keys().len() <= MAX_LABELS));

@@ -47,7 +47,7 @@ on the minimum supported Rust version, 1.95.0, and on 1.98.0.
 | Orders | `POST /orders/{variety}`, `PUT /orders/{variety}/{order_id}`, `DELETE /orders/{variety}/{order_id}` | mutation |
 | Orders | `GET /orders`, `GET /orders/{order_id}`, `GET /trades`, `GET /orders/{order_id}/trades` | read |
 | Portfolio | `GET /portfolio/holdings`, `GET /portfolio/holdings/auctions`, `GET /portfolio/positions` | read |
-| Portfolio | `PUT /portfolio/positions` (conversion) | mutation |
+| Portfolio | `PUT /portfolio/positions` (conversion), `POST /portfolio/holdings/authorise` (§2.15) | mutation |
 | GTT | `POST /gtt/triggers`, `PUT /gtt/triggers/{id}`, `DELETE /gtt/triggers/{id}` (§2.12) | mutation |
 | GTT | `GET /gtt/triggers`, `GET /gtt/triggers/{id}` | read |
 | Market | `GET /instruments`, `GET /instruments/{exchange}` (CSV), `GET /quote`, `GET /quote/ohlc`, `GET /quote/ltp` | read |
@@ -56,8 +56,8 @@ on the minimum supported Rust version, 1.95.0, and on 1.98.0.
 | Margins and charges | `POST /margins/orders`, `POST /margins/basket`, `POST /charges/orders` | calculation |
 | Session | `POST /session/token` (exchange), `DELETE /session/token` (invalidation) | session |
 
-Not supported: alerts, placing or changing mutual fund orders and SIPs, holdings summary and
-authorisation, the full profile, the trigger range, and receiving postbacks over HTTP.
+Not supported: alerts, placing or changing mutual fund orders and SIPs, the holdings
+summary, the full profile, the trigger range, and receiving postbacks over HTTP.
 
 Every JSON endpoint is decoded into its documented response type, and success requires
 a 2xx status plus a `status: "success"` envelope (`kite:response-structure.md:15-28`). The
@@ -315,6 +315,23 @@ documentation names in its tables or examples; the official instrument list also
 scheme types it does not name, such as `liquid`, which are preserved as unknown.
 Timestamps are IST, and dates are `yyyy-mm-dd`.
 
+### 2.15 Holdings authorisation
+
+Selling equity holdings needs an electronic authorisation at the depository, which the
+user completes on the depository's portal by keying in their demat PIN
+(`kite:portfolio.md:503-514`). A sell order that needs one fails with HTTP 428
+(`kite:portfolio.md:512`), which `HttpError::requires_holdings_authorisation()` reports.
+
+| Item | Contract |
+|---|---|
+| Start | `Portfolio::authorise_holdings(&HoldingsAuthorisationRequest)`: `POST /portfolio/holdings/authorise`, form-encoded as an `isin` then a `quantity` for each instrument (`kite:portfolio.md:516-524`). `HoldingsAuthorisationRequest::all()` sends no pairs, and the entire holdings are presented (`kite:portfolio.md:535`) |
+| Validation | Each ISIN must be 12 ASCII uppercase letters or digits (the ISO 6166 form of the documented examples); any other ISIN is a `Validation` error and nothing is sent. Each quantity is a `Quantity`, which is positive by construction, so a zero quantity cannot be expressed |
+| Result | A `HoldingsAuthorisation` with the `request_id` (`kite:portfolio.md:526-533`). It is not an authorisation: `portal_url(&ApiKey)` gives the documented URL to open in a web view or pop-up (`kite:portfolio.md:537`), with both path segments percent-encoded. When the user finishes, the portal redirects to `.../{request_id}/finish?status=success` or `status=error` (`kite:portfolio.md:539`), which the application watches for |
+| Attempts | A mutation: one transport attempt, never retried after a 429, a lost response or a timeout (`B-HTTP-04`), in the `Standard` quota class (§3.6) |
+
+The SDK opens no browser, does not watch for the redirect, and does not retry the refused
+order; the application does each.
+
 ---
 
 ## 3. Runtime bounds
@@ -437,6 +454,7 @@ Additions within version 1:
 | `endpoint` values `/gtt/triggers` and `/gtt/triggers/{id}` (§2.12) | the domain grows from 22 to 24 values; the series bounds of the metrics labelled by `endpoint` grow with it (§4.4) |
 | `endpoint` value `/instruments/historical/{instrument_token}/{interval}` (§2.13) | the domain grows to 25 values, with the §4.4 bounds |
 | `endpoint` values `/mf/orders`, `/mf/orders/{order_id}`, `/mf/sips`, `/mf/holdings` and `/mf/instruments` (§2.14) | the domain grows to 30 values, with the §4.4 bounds |
+| `endpoint` value `/portfolio/holdings/authorise` (§2.15) | the domain grows to 31 values, with the §4.4 bounds |
 | `DecodeDiagnosticKind::InvalidField` (§4.5) | one more diagnostic kind |
 
 ### 4.2 Spans
@@ -463,7 +481,7 @@ or query parameters to Kite requests.
 | Key | Values |
 |---|---|
 | `method` | `GET`, `POST`, `PUT`, `DELETE` |
-| `endpoint` | the 29 endpoint templates of §2.1, and `unknown` |
+| `endpoint` | the 30 endpoint templates of §2.1, and `unknown` |
 | `quota_class` | `read`, `calc`, `mut`, `sess` |
 | `result` (HTTP operation) | `ok`, `http_status`, `broker_error`, `auth_rejected`, `transport_error`, `timeout`, `deadline`, `admission_rejected`, `cancelled`, `decode_error`, `validation` |
 | `result` (HTTP attempt) | `ok`, `http_status`, `broker_error`, `auth_rejected`, `transport_error`, `timeout`, `cancelled`, `decode_error` |
@@ -489,14 +507,14 @@ are never labels.
 
 | Instrument | Type, unit | Labels | Series bound |
 |---|---|---|---|
-| `manja_http_operations_total` | counter, operations | `method`, `endpoint`, `quota_class`, `result` | 5 280 |
-| `manja_http_operation_duration_seconds` | histogram, s | `method`, `endpoint`, `quota_class`, `result` | 5 280 |
-| `manja_http_attempts_total` | counter, attempts | `method`, `endpoint`, `result` | 960 |
-| `manja_http_attempt_duration_seconds` | histogram, s | `method`, `endpoint`, `result` | 960 |
+| `manja_http_operations_total` | counter, operations | `method`, `endpoint`, `quota_class`, `result` | 5 456 |
+| `manja_http_operation_duration_seconds` | histogram, s | `method`, `endpoint`, `quota_class`, `result` | 5 456 |
+| `manja_http_attempts_total` | counter, attempts | `method`, `endpoint`, `result` | 992 |
+| `manja_http_attempt_duration_seconds` | histogram, s | `method`, `endpoint`, `result` | 992 |
 | `manja_http_in_flight` | gauge, attempts | `quota_class` | 4 |
 | `manja_http_admission_waiters` | gauge, waiters | `quota_class` | 4 |
 | `manja_http_admission_wait_seconds` | histogram, s | `quota_class`, `admission_result` | 16 |
-| `manja_http_retries_total` | counter, retries | `method`, `endpoint`, `error_class` | 480 |
+| `manja_http_retries_total` | counter, retries | `method`, `endpoint`, `error_class` | 496 |
 | `manja_auth_rejections_total` | counter, rejections | `transport` | 2 |
 | `manja_ticker_connection_attempts_total` | counter, attempts | `result` | 6 |
 | `manja_ticker_connect_duration_seconds` | histogram, s | `result` | 6 |
@@ -568,6 +586,7 @@ These choices are not dictated by the Kite documentation alone.
 | Quota enforcement | Every documented window is enforced locally by default (§3.6) | Exceeding them is a documented broker error (`kite:exceptions.md:39`) |
 | Oversized quote requests | Rejected before sending, never split or truncated | A split would return several snapshots taken at different times as one result |
 | Endpoint support | Holdings auctions and the order charges calculation stay supported | Both are documented read or calculation endpoints with official fixtures |
+| Holdings authorisation | Supported as the HTTP call that starts the flow, with the documented portal URL; the portal itself is left to the application | The endpoint and its result are documented (`kite:portfolio.md:503-541`). The remaining steps happen in the user's browser on the depository's portal, which an SDK cannot and should not drive |
 | Mutual funds | Read-only: orders, SIPs, holdings and the instrument list | The documentation states that order placement cannot be done through the API (`kite:mutual-funds.md:3`) and lists only these reads (`kite:mutual-funds.md:5-11`). The official mocks still carry order and SIP placement, modification and cancellation responses, but no request for them is documented, so implementing them would mean inventing the request |
 | GTT orders | Only LIMIT orders, each for the condition's instrument; a modification sends the complete trigger | The documentation lists `LIMIT` as the only order type and shows each order repeating the condition's exchange and tradingsymbol (`kite:gtt.md:56-64`); it recommends fetching the trigger and sending it back modified (`kite:gtt.md:390-393`) |
 | Default features | `http`, `ticker` and `decoder` | Keeps every 0.1 import path available |

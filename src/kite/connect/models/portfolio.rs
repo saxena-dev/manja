@@ -290,3 +290,138 @@ impl PositionConversionRequest {
         ]
     }
 }
+
+/// A request to authorise holdings for sale at the depository:
+/// `POST /portfolio/holdings/authorise`, form-encoded
+/// (`kite:portfolio.md:516-537`).
+///
+/// Selling equity holdings needs an electronic authorisation that the user
+/// completes on the depository's portal, where they key in their demat PIN
+/// (`kite:portfolio.md:503-514`). This request starts that flow and returns
+/// a [`HoldingsAuthorisation`]; the SDK never opens the portal. With no
+/// instruments, the entire holdings are presented for authorisation; with
+/// some, only those ISINs and quantities are (`kite:portfolio.md:535`).
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct HoldingsAuthorisationRequest {
+    /// ISIN and quantity pairs, sent in this order.
+    pub instruments: Vec<(String, crate::kite::protocol::Quantity)>,
+}
+
+impl HoldingsAuthorisationRequest {
+    /// A request for the entire holdings.
+    pub fn all() -> Self {
+        Self::default()
+    }
+
+    /// A request for `quantity` units of the holding with `isin`.
+    pub fn with(
+        mut self,
+        isin: impl Into<String>,
+        quantity: crate::kite::protocol::Quantity,
+    ) -> Self {
+        self.instruments.push((isin.into(), quantity));
+        self
+    }
+
+    /// Check every ISIN: 12 ASCII uppercase letters or digits, the ISIN form
+    /// (ISO 6166) of the documented examples (`kite:portfolio.md:522-523`).
+    pub fn validate(&self) -> Result<(), crate::kite::connect::models::RequestError> {
+        for (isin, _) in &self.instruments {
+            if isin.len() != 12
+                || !isin
+                    .bytes()
+                    .all(|b| b.is_ascii_uppercase() || b.is_ascii_digit())
+            {
+                return Err(crate::kite::connect::models::RequestError {
+                    field: "isin",
+                    reason: "must be 12 ASCII uppercase letters or digits",
+                });
+            }
+        }
+        Ok(())
+    }
+
+    /// Form fields: an `isin` then a `quantity` for each instrument, as in
+    /// the documented example; none for the entire holdings.
+    #[cfg_attr(not(feature = "http"), allow(dead_code))]
+    pub(crate) fn form_pairs(&self) -> Vec<(&'static str, String)> {
+        self.instruments
+            .iter()
+            .flat_map(|(isin, q)| [("isin", isin.clone()), ("quantity", q.to_string())])
+            .collect()
+    }
+}
+
+/// The started authorisation: the request ID that identifies it
+/// (`kite:portfolio.md:526-533`).
+///
+/// It is not an authorisation. The user must still complete the flow on
+/// the depository's portal, reached through [`Self::portal_url`]; when they
+/// finish, the portal redirects to
+/// `/connect/portfolio/authorise/holdings/{api_key}/{request_id}/finish` with
+/// `status=success` or `status=error` (`kite:portfolio.md:539`).
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct HoldingsAuthorisation {
+    /// Identifies this authorisation flow.
+    pub request_id: String,
+}
+
+impl HoldingsAuthorisation {
+    /// The documented portal URL to open in a web view or pop-up
+    /// (`kite:portfolio.md:537`):
+    /// `https://kite.zerodha.com/connect/portfolio/authorise/holdings/{api_key}/{request_id}`.
+    /// Both path segments are percent-encoded, so a broker value cannot
+    /// alter the path.
+    pub fn portal_url(&self, api_key: &crate::kite::connect::credentials::ApiKey) -> String {
+        fn segment(s: &str) -> String {
+            let mut out = String::with_capacity(s.len());
+            for b in s.bytes() {
+                if b.is_ascii_alphanumeric() || matches!(b, b'-' | b'.' | b'_' | b'~') {
+                    out.push(b as char);
+                } else {
+                    out.push_str(&format!("%{b:02X}"));
+                }
+            }
+            out
+        }
+        format!(
+            "https://kite.zerodha.com/connect/portfolio/authorise/holdings/{}/{}",
+            segment(api_key.as_str()),
+            segment(&self.request_id)
+        )
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::kite::protocol::Quantity;
+
+    #[test]
+    fn authorisation_isins_must_be_twelve_uppercase_alphanumerics() {
+        let one =
+            |isin: &str| HoldingsAuthorisationRequest::all().with(isin, Quantity::new(1).unwrap());
+        assert_eq!(HoldingsAuthorisationRequest::all().validate(), Ok(()));
+        assert_eq!(one("INE002A01018").validate(), Ok(()));
+        for bad in [
+            "ine002a01018",
+            "INE002A0101",
+            "INE002A010189",
+            "INE002A0101-",
+            "",
+        ] {
+            assert_eq!(one(bad).validate().unwrap_err().field, "isin", "{bad:?}");
+        }
+        assert_eq!(
+            one("INE002A01018")
+                .with("INE009A01021", Quantity::new(50).unwrap())
+                .form_pairs(),
+            vec![
+                ("isin", "INE002A01018".to_string()),
+                ("quantity", "1".to_string()),
+                ("isin", "INE009A01021".to_string()),
+                ("quantity", "50".to_string()),
+            ]
+        );
+    }
+}

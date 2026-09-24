@@ -315,6 +315,14 @@ impl HttpError {
         self.0.detail.as_ref()
     }
 
+    /// Whether the broker refused a sell order because the holdings need
+    /// authorisation at the depository: HTTP 428 (`kite:portfolio.md:512`).
+    /// Start the flow with `Portfolio::authorise_holdings`, then retry the
+    /// order once the user has finished it.
+    pub fn requires_holdings_authorisation(&self) -> bool {
+        self.0.http_status == Some(428)
+    }
+
     /// Whether the request may have reached the broker. `true` unless the
     /// SDK has affirmative evidence that it did not.
     pub fn may_have_reached_broker(&self) -> bool {

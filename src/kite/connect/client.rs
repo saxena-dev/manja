@@ -1052,6 +1052,7 @@ pub(crate) fn endpoint_template(method: Method, path: &str) -> Endpoint {
         ["trades"] => Endpoint::Trades,
         ["portfolio", "holdings"] => Endpoint::Holdings,
         ["portfolio", "holdings", "auctions"] => Endpoint::HoldingsAuctions,
+        ["portfolio", "holdings", "authorise"] => Endpoint::HoldingsAuthorise,
         ["portfolio", "positions"] => Endpoint::Positions,
         ["instruments"] => Endpoint::Instruments,
         ["instruments", _] => Endpoint::InstrumentsExchange,
@@ -1269,6 +1270,11 @@ mod tests {
             (Delete, "/gtt/triggers/123", Endpoint::GttTriggersId),
             (Get, "/mf/orders/2b6ad4b7-c84e", Endpoint::MfOrdersId),
             (Get, "/mf/sips/", Endpoint::MfSips),
+            (
+                Post,
+                "/portfolio/holdings/authorise",
+                Endpoint::HoldingsAuthorise,
+            ),
             (Get, "/alerts", Endpoint::Unknown),
         ];
         for (m, path, expected) in cases {

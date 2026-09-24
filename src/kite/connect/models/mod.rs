@@ -86,7 +86,8 @@ pub use gtt::{
 ///
 mod portfolio;
 pub use portfolio::{
-    Auction, Holding, HoldingMtf, Position, PositionConversionRequest, PositionType, Positions,
+    Auction, Holding, HoldingMtf, HoldingsAuthorisation, HoldingsAuthorisationRequest, Position,
+    PositionConversionRequest, PositionType, Positions,
 };
 
 /// Models for the `/instruments/` and `/quote/` API group, providing market data

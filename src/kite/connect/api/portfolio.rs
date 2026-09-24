@@ -12,7 +12,10 @@
 
 use crate::kite::connect::{
     client::HTTPClient,
-    models::{Auction, Holding, KiteApiResponse, PositionConversionRequest, Positions},
+    models::{
+        Auction, Holding, HoldingsAuthorisation, HoldingsAuthorisationRequest, KiteApiResponse,
+        PositionConversionRequest, Positions,
+    },
     scheduler::DispatchPermit,
 };
 use crate::kite::error::Result;
@@ -122,19 +125,28 @@ impl<'c> Portfolio<'c> {
         self.client.get("/portfolio/holdings/auctions").await
     }
 
-    // TODO!
-    // Initiating authorisation
-    //
-    // curl --request POST https://api.kite.trade/portfolio/holdings/authorise
-    // -H "X-Kite-Version: 3" \
-    // -H "Authorization: token api_key:access_token" \
-    // -d "isin=INE002A01018" -d "quantity=50" \
-    // -d "isin=INE009A01021" -d "quantity=50"
-    //
-    // {
-    // "status": "success",
-    // "data": {
-    // "request_id": "na8QgCeQm05UHG6NL9sAGRzdfSF64UdB"
-    // }
-    // }
+    /// Start a depository authorisation for selling holdings:
+    /// `POST /portfolio/holdings/authorise`, form-encoded, one attempt
+    /// (`kite:portfolio.md:503-541`).
+    ///
+    /// A sell order that needs authorisation fails with HTTP 428
+    /// (`kite:portfolio.md:512`; see `HttpError::requires_holdings_authorisation`).
+    /// Send the user to [`HoldingsAuthorisation::portal_url`] to key in their
+    /// demat PIN, then retry the order. The SDK opens no browser and does not
+    /// retry anything. An ISIN that is not 12 ASCII uppercase letters or
+    /// digits is a `Validation` error, and nothing is sent.
+    pub async fn authorise_holdings(
+        &self,
+        request: &HoldingsAuthorisationRequest,
+    ) -> Result<KiteApiResponse<HoldingsAuthorisation>> {
+        self.client
+            .send_form(
+                reqwest::Method::POST,
+                "/portfolio/holdings/authorise",
+                request.validate(),
+                request.form_pairs(),
+                None,
+            )
+            .await
+    }
 }
