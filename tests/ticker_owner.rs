@@ -490,20 +490,3 @@ async fn invalid_urls_are_rejected_before_spawning() {
         );
     }
 }
-
-// The legacy client is deprecated; this checks it still behaves as before.
-#[allow(deprecated)]
-#[tokio::test]
-async fn the_legacy_stream_still_connects_and_yields_raw_messages() {
-    use manja::kite::ticker::{StreamState, WebSocketClient};
-    let h = WsHarness::start(vec![accept(vec![Step::Send(Message::Binary(vec![0]))])]).await;
-    let state = StreamState::from_parts(h.url(), "test_api_key".into(), TOKEN.into());
-    let mut legacy = WebSocketClient::connect(state).await.unwrap();
-    let first = tokio::time::timeout(Duration::from_secs(5), legacy.next())
-        .await
-        .unwrap()
-        .unwrap()
-        .unwrap();
-    assert_eq!(first, Message::Binary(vec![0]));
-    assert_eq!(h.handshakes().len(), 1);
-}

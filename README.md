@@ -19,7 +19,7 @@ An asynchronous Rust client library for [Zerodha](https://zerodha.com/)'s
 | Feature | What it adds | Default |
 |---|---|---|
 | `http` | `HTTPClient` and its resources: session, user, orders, GTT, portfolio, market, mutual funds, margins and charges | yes |
-| `ticker` | the supervised single-owner WebSocket ticker, plus the deprecated legacy client | yes |
+| `ticker` | the supervised single-owner WebSocket ticker | yes |
 | `decoder` | pure, bounded decoding of binary and text ticker messages, and a provenance adapter | yes |
 
 With no features, the crate is the common slice only (credentials, models, envelopes,
@@ -182,7 +182,7 @@ does not provide.
 ## Migrating from 0.1
 
 The browser login flow is removed, several response types and error behaviors were
-corrected, and the legacy WebSocket client is deprecated.
+corrected, and the 0.1 WebSocket client is removed.
 [`docs/migration.md`](docs/migration.md) lists every change. The short version: obtain
 the request token yourself, call `client.session(api_key).exchange(...)`, build
 `Credentials` from the returned session, and use `TickerBuilder` instead of

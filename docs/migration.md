@@ -10,14 +10,13 @@ its `BR-*` ID. The behavior you can rely on is in [`contract.md`](contract.md).
   `manja::kite::connect::client::HTTPClient`; the resources in
   `manja::kite::connect::api` (`Session`, `User`, `Orders`, `Portfolio`, `Market`,
   `Margins`, `Charges`); the model re-exports in `manja::kite::connect::models`; and
-  `manja::kite::ticker::{WebSocketClient, TickerStream, StreamState,
-  KiteStreamCredentials, Mode, TickerRequest}`.
+  `manja::kite::ticker::{Mode, TickerRequest}`.
 - **Features.** The default is `http`, `ticker` and `decoder`. A path disappears only
   when you disable default features. With no features the crate has no Tokio or
   network dependency.
 - **Minimum Rust version.** 1.88.0, with edition 2024.
-- **Deprecation.** Deprecated items keep compiling and behaving as before. They are
-  removed only in a later breaking release.
+- **No deprecations.** 0.2.0 is itself the breaking release, so code that only 0.1
+  callers needed is removed rather than deprecated (§4, §5).
 - **Safety corrections are not held back for compatibility.** Where the old behavior
   was unsafe (success reported for errors, unbounded retries, silently truncated input,
   tokens in URLs), it changed; each change is listed in §4.
@@ -54,8 +53,6 @@ its `BR-*` ID. The behavior you can rely on is in [`contract.md`](contract.md).
 | `HTTPClient::new`, `with_config` | Return `Result`: a construction failure is reported, not replaced |
 | `ManjaError` | `#[non_exhaustive]` |
 | `HttpError::detail`, `TextError::detail` | A response that fails to parse or decode is described by serde's error category and position, without serde's message, which quoted the offending value (`contract.md` §2.4). Code matching on the old text should use the error kind instead |
-| `TickerRequest::subscribe_with_mode` | Deprecated. It always built a `mode` request, never a subscription; `TickerRequest::set_mode` gives the same output under the right name |
-| `WebSocketClient`, `TickerStream`, `StreamState`, `KiteStreamCredentials`, `SubscriptionStream` | Deprecated with corrected documentation (§5). Behavior and the item type `Result<tungstenite::Message, tungstenite::Error>` are unchanged |
 
 ## 4. Intentional breaking fixes
 
@@ -71,7 +68,10 @@ its `BR-*` ID. The behavior you can rely on is in [`contract.md`](contract.md).
 | `BR-08` | Cancellation no longer puts the API key and access token in the URL | Nothing |
 | `BR-09` | Repeated 429s end within a total deadline; mutations and session operations make one attempt; the per-call `with_backoff` methods on the resources are removed | Configure `SchedulerLimits`. Retry a mutation yourself only after checking the order's state |
 | `BR-10` | The browser, WebDriver and TOTP login (`kite::login`), `KiteLoginFlow`, `Session::gen_request_token`, `KiteCredentials`, the login and redirect URLs in `Config`, and the `fantoccini`, `totp-rs`, `base32` and `url` dependencies are removed | Obtain the request token yourself, call `client.session(api_key).exchange(&request_token, &api_secret)`, then `session.credentials()` |
-| `BR-11` | The `EnvVarError`, `InvalidHeaderValueError`, `WebDriverNewSessionError`, `WebDriverError`, `Reqwest` and `TotpError` variants are removed | Remove those match arms |
+| `BR-11` | The `ManjaError` variants `EnvVarError`, `InvalidHeaderValueError`, `WebDriverNewSessionError`, `WebDriverError`, `Reqwest`, `TotpError`, `JSONDeserialize`, `IoError` and `Internal`, and `From<&str> for ManjaError`, are removed. Every failure is now `Http` or `Credential` | Remove those match arms |
+| `BR-12` | The legacy WebSocket client is removed: `WebSocketClient`, `TickerStream`, `StreamState`, `KiteStreamCredentials` and `SubscriptionStream`, and with them the `stubborn-io` dependency and the direct `tungstenite` dependency | Use `TickerBuilder` (§5). The ticker's WebSocket types come from `tokio_tungstenite::tungstenite` |
+| `BR-13` | `TickerRequest::subscribe_with_mode` is removed. It built a `mode` request, never a subscription | For the same message, call `TickerRequest::set_mode`, which produces identical bytes. To subscribe with a mode, send `TickerRequest::subscribe` and then `set_mode`, or use the ticker handle's `subscribe` |
+| `BR-14` | `kite::traits` is removed: `KiteAuth`, which the crate itself never used, and `KiteConfig`, whose `url` and `api_base` are now inherent methods of `Config` | Call `config.url(path)` and `config.api_base()` directly, and drop the trait imports. Replace a `KiteConfig` bound or `dyn KiteConfig` with `&Config`. In place of `add_auth_header`, set the `Authorization` header to `Credentials::authorization_header()`, which is `token api_key:access_token` (`kite:user.md:124`), or let `HTTPClient` send it |
 
 Other breaking changes made with these fixes:
 
@@ -107,26 +107,22 @@ Other breaking changes made with these fixes:
   typed, and `to_query` is replaced by `quote_key`.
 - Order, trade, holding, auction and position fields use `Inbound`, `InstrumentToken`,
   `Quantity` and `Option`, as documented on each type.
-- `kite::traits` requires the `http` feature and keeps only `KiteConfig::{url,
-  api_base}` and `KiteAuth`.
 - `dotenv` is no longer a dependency, and `tracing-subscriber` is a dev-dependency
   only: install your own subscriber.
 
-## 5. The legacy WebSocket client
+## 5. The removed WebSocket client
 
-`WebSocketClient` is deprecated, not repaired. It makes no readiness, reconnect or
-subscription-restoration guarantee. Its stream reads the current socket directly, so a
-lost connection ends or errors the stream and nothing is sent again. The requests it
-sends on connecting are `mode` requests, not subscriptions, so tokens not already
-subscribed on that connection receive nothing. `StreamState::from_credentials` reads
-`KITECONNECT_WSS_API_BASE` from the environment when it is set. Repairing the client
-would change its observable behavior, so the corrected behavior is in the new ticker
-instead.
+0.1's `WebSocketClient` is removed (`BR-12`). It made no readiness, reconnect or
+subscription-restoration guarantee: its stream read the current socket directly, so a
+lost connection ended the stream and nothing was sent again, and the requests it sent on
+connecting were `mode` requests, not subscriptions, so tokens not already subscribed on
+that connection received nothing. `TickerBuilder` replaces it:
 
-| Legacy | Replacement |
+| 0.1 | 0.2 |
 |---|---|
 | `StreamState::from_credentials(KiteStreamCredentials)` | `TickerBuilder::new(Credentials)` |
 | `.subscribe_token(mode, token)` | `handle.subscribe([InstrumentToken::new(token)], mode).await`: subscribe, then mode, on every connection |
+| the `KITECONNECT_WSS_API_BASE` environment variable, or the base URL in `StreamState::from_parts` | `TickerBuilder::url(...)`. The variable is no longer read, so a ticker without `url` connects to the documented production endpoint |
 | `WebSocketClient::connect(state).await` | `TickerBuilder::spawn()`, which returns `(handle, events, guard)` |
 | `ticker.next()` yielding a `tungstenite::Message` | `events.next()` yielding `TickerEvent::Raw(RawObservation)` or `TickerEvent::Lifecycle(LifecycleEvent)` |
 | dropping the client | `handle.shutdown().await`, then drain `events` to `None`; `guard.join().await` gives the outcome |

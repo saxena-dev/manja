@@ -20,8 +20,8 @@ documentation pages listed, with access time and SHA-256, in
 
 | Feature | Modules | Adds dependencies |
 |---|---|---|
-| `http` | `kite::connect::{api, client, config, admission, scheduler}`, `kite::traits` | `reqwest`, `tokio` (timers and synchronization), `csv`, `hex`, `sha2` |
-| `ticker` | `kite::ticker`, including `kite::ticker::actor` | `tokio` (also TCP and runtime handle), `tokio-tungstenite`, `tungstenite`, `futures-util`, `stubborn-io` (the deprecated legacy client only) |
+| `http` | `kite::connect::{api, client, config, admission, scheduler}` | `reqwest`, `tokio` (timers and synchronization), `csv`, `hex`, `sha2` |
+| `ticker` | `kite::ticker`, including `kite::ticker::actor` | `tokio` (also TCP and runtime handle), `tokio-tungstenite`, `futures-util` |
 | `decoder` | `kite::decoder` | none |
 
 The default enables all three. `kite::connect::{credentials, models}`,
@@ -666,7 +666,7 @@ These choices are not dictated by the Kite documentation alone.
 | GTT orders | Only LIMIT orders, each for the condition's instrument; a modification sends the complete trigger | The documentation lists `LIMIT` as the only order type and shows each order repeating the condition's exchange and tradingsymbol (`kite:gtt.md:56-64`); it recommends fetching the trigger and sending it back modified (`kite:gtt.md:390-393`) |
 | Default features | `http`, `ticker` and `decoder` | Keeps every 0.1 import path available |
 | Edition and minimum Rust version | Edition 2024; `rust-version` 1.88.0 | 1.88 is the first release with let chains, which the code uses. Every feature row, doc tests included, passes on 1.88.0, and 1.87.0 rejects the let chains (E0658). With `rust-version` at 1.88 the resolver picks dependency versions that build on it. Dependencies alone do not set the floor: down to 1.85 the resolver still finds compatible releases (the `icu_*` 2.3 crates, which need 1.88, fall back to earlier 2.x releases), and with the let chains reverted the all-features suite passes on 1.87.0 (checked on 2026-09-24) |
-| Legacy ticker | `WebSocketClient` and its types are deprecated, not repaired; see `migration.md` §5 | Its stream reads the socket directly, so repairing it would change its behavior |
+| 0.1 code | Removed in 0.2.0 rather than deprecated: the `WebSocketClient` ticker, `TickerRequest::subscribe_with_mode`, `kite::traits` and the error variants nothing constructs (`migration.md` §4) | 0.2.0 is itself the breaking release, so keeping code only 0.1 callers needed would carry it into a release that already requires migration. The old ticker read the socket directly, so it could not have been repaired without changing its behavior |
 | Observability budgets | As in `verification.md` §5 | Measured on a recorded host; exceeding one fails the benchmark |
 
 ---

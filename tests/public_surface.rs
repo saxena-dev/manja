@@ -4,7 +4,7 @@
 //! the default features and touches no network.
 
 // The imports are the check: each must resolve through its public path.
-#![allow(dead_code, deprecated, unused_imports)]
+#![allow(dead_code, unused_imports)]
 
 use manja::kite::connect::admission::{
     Admission, AdmissionError, AdmissionGrant, AdmissionLimits, QuotaProfile, RateClass, Window,
@@ -52,9 +52,7 @@ use manja::kite::ticker::actor::subscriptions::{
     DesiredSubscriptions, Revision, SubscriptionCommand, SubscriptionError,
 };
 use manja::kite::ticker::typed::{TypedEvent, TypedEvents};
-use manja::kite::ticker::{
-    KiteStreamCredentials, Mode, StreamState, TickerRequest, TickerStream, WebSocketClient,
-};
+use manja::kite::ticker::{Mode, TickerRequest};
 
 // Every resource is reachable from a shared reference, portfolio included,
 // and the old `&mut` call shapes still compile.
@@ -193,7 +191,7 @@ fn the_public_surface_is_reachable_and_constructible_offline() {
     assert_eq!(ticker_parts().unwrap_err(), TickerSpawnError::NoRuntime);
     assert_eq!(
         TickerRequest::set_mode(vec![1], Mode::LTP).to_string(),
-        TickerRequest::subscribe_with_mode(vec![1], Mode::LTP).to_string()
+        r#"{"a":"mode","v":["ltp",[1]]}"#
     );
 }
 

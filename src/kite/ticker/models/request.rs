@@ -97,20 +97,6 @@ impl TickerRequest {
         )
     }
 
-    /// A `mode` request, despite its name: it sets the mode of tokens
-    /// that must already be subscribed and subscribes nothing. Its output is
-    /// identical to [`Self::set_mode`].
-    ///
-    /// To subscribe with a mode, send [`Self::subscribe`] and then
-    /// [`Self::set_mode`], or use the actor ticker's `subscribe`.
-    #[deprecated(
-        since = "0.2.0",
-        note = "builds a mode request, not a subscription; use `subscribe` then `set_mode`"
-    )]
-    pub fn subscribe_with_mode(instrument_tokens: Vec<u32>, mode: Mode) -> TickerRequest {
-        TickerRequest::set_mode(instrument_tokens, mode)
-    }
-
     /// A `mode` request: set `mode` for tokens already subscribed
     /// (`kite:websocket.md:36-47`).
     ///

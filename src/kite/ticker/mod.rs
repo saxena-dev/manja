@@ -1,27 +1,10 @@
-//! Async WebSocket client and additional functionality.
+//! The Kite Connect WebSocket ticker.
 //!
-//! This module is compiled with the `ticker` feature. It holds the legacy
-//! WebSocket client and its replacement, `actor`.
-//!
-//! # Legacy client
-//!
-//! [`WebSocketClient`] connects to the Kite Connect WebSocket API with the
-//! credentials and instrument tokens held in a [`StreamState`] and yields the
-//! `tungstenite` messages it receives, uninterpreted. It makes no readiness,
-//! reconnection or subscription-restoration guarantee: polling reads the
-//! current socket directly, and the initial requests it sends are built by
-//! [`TickerRequest::subscribe_with_mode`], which creates a `mode` action, not a
-//! `subscribe` action.
-//!
-//! It is deprecated with corrected documentation, not repaired in place
-//! (`docs/migration.md` §5), and the same disposition
-//! covers `subscribe_with_mode`. The legacy client stays compiled and exported
-//! during migration, its stream item type does not change, and it is removed
-//! only in a later documented breaking release after its replacement ships.
+//! This module is compiled with the `ticker` feature.
 //!
 //! # Raw and typed streams
 //!
-//! The replacement, built in `actor` (`docs/contract.md` §2.5), is one
+//! The ticker, built in `actor` (`docs/contract.md` §2.5), is one
 //! socket-owning task with typed commands, a status handle and a supervised task
 //! guard. Its primary receiver yields raw observations and lifecycle events
 //! before any interpretation, and it needs no decoder. Typed market events come
@@ -37,20 +20,7 @@ pub mod actor;
 #[cfg(feature = "decoder")]
 pub mod typed;
 
-// Contains the `WebSocketClient` and `TickerStream` structs, which are used to
-// connect to the WebSocket API and handle data streaming.
-mod client;
-#[allow(deprecated)]
-pub use client::{TickerStream, WebSocketClient};
-
-// Defines the structures for managing the stream state and credentials, including
-// `KiteStreamCredentials` and `StreamState`.
-mod stream;
-#[allow(deprecated)]
-pub use stream::{KiteStreamCredentials, StreamState};
-
 // Contains data models and request types like `Mode` and `TickerRequest` used
 // for interacting with the WebSocket API.
 mod models;
-#[allow(unused_imports)]
 pub use models::{Mode, TickerRequest};

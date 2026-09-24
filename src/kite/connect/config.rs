@@ -12,7 +12,6 @@
 //! [`Config::new`] takes the base URL from the caller.
 //!
 use crate::kite::connect::scheduler::SchedulerLimits;
-use crate::kite::traits::KiteConfig;
 
 /// Default v3 API base url.
 ///
@@ -169,17 +168,6 @@ impl Default for Config {
     }
 }
 
-impl KiteConfig for Config {
-    /// The URL of `path`, which starts with a slash.
-    fn url(&self, path: &str) -> String {
-        format!("{}{}", self.api_base, path)
-    }
-
-    fn api_base(&self) -> &str {
-        self.api_base.as_str()
-    }
-}
-
 impl Config {
     /// A configuration for the API at `api_base`, with default limits.
     pub fn new(api_base: impl Into<String>) -> Self {
@@ -187,6 +175,16 @@ impl Config {
             api_base: api_base.into(),
             limits: HttpLimits::default(),
         }
+    }
+
+    /// The API base URL.
+    pub fn api_base(&self) -> &str {
+        self.api_base.as_str()
+    }
+
+    /// The URL of `path`, which starts with a slash.
+    pub fn url(&self, path: &str) -> String {
+        format!("{}{}", self.api_base, path)
     }
 
     /// Replace the runtime bounds.
