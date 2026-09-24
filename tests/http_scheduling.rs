@@ -19,7 +19,7 @@ use manja::kite::connect::models::{
 };
 use manja::kite::connect::scheduler::{PermitTarget, SchedulerLimits};
 use manja::kite::error::{HttpErrorKind, TransportStage};
-use manja::kite::protocol::Quantity;
+use manja::kite::protocol::{OrderId, Quantity};
 
 use support::fixtures;
 use support::http::{HttpHarness, Reply};
@@ -103,12 +103,13 @@ async fn each_one_attempt_operation(replies: fn() -> Vec<Reply>) {
     once!("place", |c| c.orders().place_order(&place_request()));
     once!("modify", |c| c.orders().modify_order(
         OrderVariety::Regular,
-        "151220000000000",
+        &OrderId::new("151220000000000").unwrap(),
         &modify_request()
     ));
-    once!("cancel", |c| c
-        .orders()
-        .cancel_order(OrderVariety::Regular, "151220000000000"));
+    once!("cancel", |c| c.orders().cancel_order(
+        OrderVariety::Regular,
+        &OrderId::new("151220000000000").unwrap()
+    ));
     once!("convert", |c| {
         let c2 = c.clone();
         async move {

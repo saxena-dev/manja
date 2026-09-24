@@ -27,7 +27,7 @@ pub use datetime::{
     parse_broker_date, parse_broker_datetime, BrokerTimestamp, DateTimeError, IST_OFFSET_SECONDS,
 };
 pub use enums::{Inbound, UnknownValue, WireEnum};
-pub use ids::InstrumentToken;
+pub use ids::{InstrumentToken, MfOrderId, OrderId, OrderIdError};
 pub use order_update::OrderUpdate;
 pub use scale::{price_divisor, ScaleError, Segment};
 pub use units::{Quantity, ScaledPrice, UnitError, CONVERSION_POLICY_VERSION};

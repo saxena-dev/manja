@@ -36,7 +36,7 @@ its `BR-*` ID. The behavior you can rely on is in [`contract.md`](contract.md).
 | Accessors | `HTTPClient::portfolio()`; every resource accessor takes `&self` |
 | Diagnostics | `HTTPClient::diagnostics()` returns `HttpDiagnostics` |
 | Observability | `Observability` (disabled by default), `MetricRecorder`, `InMemoryRecorder`, `BridgeRecorder`; `HTTPClient::with_observability`, `HttpClientBuilder::observability`, `TickerBuilder::observability` |
-| Protocol types | `InstrumentToken`, `Quantity`, `ScaledPrice`, `Segment`, `Inbound<T>`, `OrderUpdate` |
+| Protocol types | `InstrumentToken`, `OrderId`, `MfOrderId`, `OrderIdError`, `Quantity`, `ScaledPrice`, `Segment`, `Inbound<T>`, `OrderUpdate` |
 | Envelopes | `RawObservation`, `LifecycleEvent`, `SourceKey`, `SourceIdentity`, `SourceSequencer`, `GapFacts`, `ENVELOPE_VERSION` |
 | Ticker | `kite::ticker::actor`: `TickerBuilder::spawn` returns `(TickerHandle, TickerEvents, TaskGuard)`; the commands `subscribe`, `unsubscribe`, `set_mode` and `replace`; `TickerStatus`; `TickerLimits`, `ReconnectLimits`; `TickerRequest::set_mode` |
 | Decoder | `kite::decoder::{framing, packets, text, adapter}`; `kite::ticker::typed::TypedEvents` with both `ticker` and `decoder` |
@@ -83,6 +83,24 @@ Other breaking changes made with these fixes:
   replaced by `exchange` and `invalidate`, which install and clear nothing.
   `UserSession` tokens are secret-wrapped, `UserSession` is no longer `Serialize`, and
   `refresh_token` and `enctoken` are `Option`.
+- Order IDs are checked types (`kite::protocol`; `contract.md` §2.16):
+  - Order endpoints take `&OrderId` rather than `&str`: `modify_order`, `cancel_order`,
+    their `_with_permit` forms, `get_order_history` and `get_order_trades`.
+    `PermitTarget::ModifyOrder` holds an `OrderId`.
+  - `MutualFunds::get_order` takes `&MfOrderId`, a separate type that also allows the
+    hyphens of the documented UUIDs.
+  - The `order_id` fields of `Order`, `Trade`, `OrderReceipt`, `SliceResult::Placed` and
+    `OrderUpdate`, and the parent order IDs, are `OrderId`s; `GttOrderOutcome::order_id`
+    is `Option<OrderId>`; `MfOrder::order_id` is an `MfOrderId`.
+  - Build one with `OrderId::new(id)` or `id.parse::<OrderId>()`, which return
+    `Result<OrderId, OrderIdError>`, or pass one from a response straight back.
+    `OrderIdError` implements `std::error::Error`, but there is no conversion into
+    `ManjaError`, so map it yourself before using `?` in a function that returns the
+    crate's `Result`.
+  - An invalid caller ID used to fail at call time as a `Validation` error, recorded as a
+    rejected operation. It now fails when the ID is built, as an `OrderIdError`, and
+    nothing is sent or recorded.
+  - A response whose order ID fails the grammar is now a `Decode` error.
 - `get_quotes` takes `&[&str]` keys and returns `Quotes<Q>`. `Instrument` fields are
   typed, and `to_query` is replaced by `quote_key`.
 - Order, trade, holding, auction and position fields use `Inbound`, `InstrumentToken`,

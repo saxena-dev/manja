@@ -51,6 +51,7 @@ use crate::kite::obs::schema::{
     AdmissionResult, Endpoint, HttpAttemptResult, Instrument, Method, QuotaClass, RetryCause,
     TransportLabel,
 };
+use crate::kite::protocol::OrderId;
 
 /// Retry class of an endpoint (see the module table).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -304,7 +305,7 @@ pub enum PermitTarget {
     /// `PUT /orders/{variety}/{order_id}` for this order.
     ModifyOrder {
         /// The order to modify.
-        order_id: String,
+        order_id: OrderId,
     },
     /// `DELETE /orders/{variety}/{order_id}`.
     CancelOrder,
@@ -324,7 +325,7 @@ impl PermitTarget {
 
     fn order_id(&self) -> Option<&str> {
         match self {
-            Self::ModifyOrder { order_id } => Some(order_id),
+            Self::ModifyOrder { order_id } => Some(order_id.as_str()),
             _ => None,
         }
     }
@@ -1225,7 +1226,7 @@ mod tests {
             .admit_q(
                 &a,
                 PermitTarget::ModifyOrder {
-                    order_id: "A".into(),
+                    order_id: "A".parse().unwrap(),
                 },
             )
             .await

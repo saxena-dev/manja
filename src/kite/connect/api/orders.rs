@@ -13,6 +13,9 @@
 //! or malformed response after dispatch does not show whether the broker
 //! acted: the error's stage says so, and the caller decides what to do next.
 //!
+//! Order IDs are [`OrderId`]s, valid by construction, so no caller string
+//! can change a request path.
+//!
 //! Each mutation has a `*_with_permit` variant that dispatches with a
 //! [`DispatchPermit`] obtained from `HTTPClient::admit`, giving the caller an
 //! explicit point between admission and dispatch.
@@ -20,12 +23,13 @@
 use crate::kite::connect::{
     client::HTTPClient,
     models::{
-        check_order_id, KiteApiResponse, ModifyOrderRequest, Order, OrderReceipt, OrderVariety,
-        PlaceOrderRequest, Trade,
+        KiteApiResponse, ModifyOrderRequest, Order, OrderReceipt, OrderVariety, PlaceOrderRequest,
+        Trade,
     },
     scheduler::DispatchPermit,
 };
 use crate::kite::error::Result;
+use crate::kite::protocol::OrderId;
 
 /// Order placement, modification and cancellation, the order book and the
 /// trade book.
@@ -84,7 +88,7 @@ impl<'c> Orders<'c> {
     pub async fn modify_order(
         &self,
         variety: OrderVariety,
-        order_id: &str,
+        order_id: &OrderId,
         request: &ModifyOrderRequest,
     ) -> Result<KiteApiResponse<OrderReceipt>> {
         self.modify(variety, order_id, request, None).await
@@ -95,7 +99,7 @@ impl<'c> Orders<'c> {
     pub async fn modify_order_with_permit(
         &self,
         variety: OrderVariety,
-        order_id: &str,
+        order_id: &OrderId,
         request: &ModifyOrderRequest,
         permit: DispatchPermit,
     ) -> Result<KiteApiResponse<OrderReceipt>> {
@@ -105,21 +109,15 @@ impl<'c> Orders<'c> {
     async fn modify(
         &self,
         variety: OrderVariety,
-        order_id: &str,
+        order_id: &OrderId,
         request: &ModifyOrderRequest,
         permit: Option<DispatchPermit>,
     ) -> Result<KiteApiResponse<OrderReceipt>> {
-        let valid = check_order_id(order_id).and_then(|_| request.validate(variety));
-        let path = if valid.is_ok() {
-            format!("/orders/{variety}/{order_id}")
-        } else {
-            format!("/orders/{variety}/invalid")
-        };
         self.client
             .send_form(
                 reqwest::Method::PUT,
-                &path,
-                valid,
+                &format!("/orders/{variety}/{order_id}"),
+                request.validate(variety),
                 request.form_pairs(),
                 permit,
             )
@@ -135,7 +133,7 @@ impl<'c> Orders<'c> {
     pub async fn cancel_order(
         &self,
         variety: OrderVariety,
-        order_id: &str,
+        order_id: &OrderId,
     ) -> Result<KiteApiResponse<OrderReceipt>> {
         self.cancel(variety, order_id, None).await
     }
@@ -145,7 +143,7 @@ impl<'c> Orders<'c> {
     pub async fn cancel_order_with_permit(
         &self,
         variety: OrderVariety,
-        order_id: &str,
+        order_id: &OrderId,
         permit: DispatchPermit,
     ) -> Result<KiteApiResponse<OrderReceipt>> {
         self.cancel(variety, order_id, Some(permit)).await
@@ -154,17 +152,17 @@ impl<'c> Orders<'c> {
     async fn cancel(
         &self,
         variety: OrderVariety,
-        order_id: &str,
+        order_id: &OrderId,
         permit: Option<DispatchPermit>,
     ) -> Result<KiteApiResponse<OrderReceipt>> {
-        let valid = check_order_id(order_id);
-        let path = if valid.is_ok() {
-            format!("/orders/{variety}/{order_id}")
-        } else {
-            format!("/orders/{variety}/invalid")
-        };
         self.client
-            .send_form(reqwest::Method::DELETE, &path, valid, Vec::new(), permit)
+            .send_form(
+                reqwest::Method::DELETE,
+                &format!("/orders/{variety}/{order_id}"),
+                Ok(()),
+                Vec::new(),
+                permit,
+            )
             .await
     }
 
@@ -176,7 +174,10 @@ impl<'c> Orders<'c> {
     }
 
     /// The history of one order: `GET /orders/{order_id}`.
-    pub async fn get_order_history(&self, order_id: &str) -> Result<KiteApiResponse<Vec<Order>>> {
+    pub async fn get_order_history(
+        &self,
+        order_id: &OrderId,
+    ) -> Result<KiteApiResponse<Vec<Order>>> {
         self.client.get(&format!("/orders/{order_id}")).await
     }
 
@@ -186,7 +187,10 @@ impl<'c> Orders<'c> {
     }
 
     /// The trades of one order: `GET /orders/{order_id}/trades`.
-    pub async fn get_order_trades(&self, order_id: &str) -> Result<KiteApiResponse<Vec<Trade>>> {
+    pub async fn get_order_trades(
+        &self,
+        order_id: &OrderId,
+    ) -> Result<KiteApiResponse<Vec<Trade>>> {
         self.client.get(&format!("/orders/{order_id}/trades")).await
     }
 }

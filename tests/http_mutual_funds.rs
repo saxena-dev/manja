@@ -23,9 +23,9 @@ use manja::kite::connect::models::{
     SipStatus, TransactionType,
 };
 use manja::kite::connect::scheduler::SchedulerLimits;
-use manja::kite::error::{HttpErrorKind, TransportStage};
+use manja::kite::error::HttpErrorKind;
 use manja::kite::obs::schema::{Endpoint, Method};
-use manja::kite::protocol::Inbound;
+use manja::kite::protocol::{Inbound, MfOrderId, OrderId};
 
 use support::fixtures;
 use support::http::{HttpHarness, RecordedRequest, Reply};
@@ -129,7 +129,7 @@ async fn one_order_is_fetched_by_its_uuid() {
     let h = serve("mf_orders_info.json").await;
     let o = client(&h.base_url())
         .mutual_funds()
-        .get_order("2b6ad4b7-c84e-4c76-b459-f3a8994184f1")
+        .get_order(&MfOrderId::new("2b6ad4b7-c84e-4c76-b459-f3a8994184f1").unwrap())
         .await
         .unwrap()
         .data
@@ -147,17 +147,15 @@ async fn one_order_is_fetched_by_its_uuid() {
 }
 
 #[tokio::test]
-async fn an_order_id_that_could_change_the_path_sends_nothing() {
-    let h = HttpHarness::start(vec![]).await;
-    let c = client(&h.base_url());
+async fn an_order_id_that_could_change_the_path_cannot_be_built() {
+    // The endpoint takes an MfOrderId, so these never reach it.
     for bad in ["", "a/../b", "a?x=y", "has space"] {
-        let err = c.mutual_funds().get_order(bad).await.unwrap_err();
-        let e = err.as_http().unwrap();
-        assert_eq!(e.kind(), HttpErrorKind::Validation, "{bad:?}");
-        assert_eq!(e.stage(), TransportStage::NotStarted);
-        assert_eq!(e.endpoint(), Endpoint::MfOrdersId);
+        assert!(MfOrderId::new(bad).is_err(), "{bad:?}");
     }
-    assert!(h.requests().is_empty());
+    // A UUID is a mutual fund ID, not an equity one.
+    let uuid = "2b6ad4b7-c84e-4c76-b459-f3a8994184f1";
+    assert!(MfOrderId::new(uuid).is_ok());
+    assert!(OrderId::new(uuid).is_err());
 }
 
 #[tokio::test]
@@ -341,7 +339,7 @@ async fn an_unknown_status_is_preserved() {
     let h = HttpHarness::start(vec![Reply::json(body)]).await;
     let o = client(&h.base_url())
         .mutual_funds()
-        .get_order("2b6ad4b7-c84e-4c76-b459-f3a8994184f1")
+        .get_order(&MfOrderId::new("2b6ad4b7-c84e-4c76-b459-f3a8994184f1").unwrap())
         .await
         .unwrap()
         .data

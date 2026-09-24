@@ -28,7 +28,7 @@ use crate::kite::connect::models::{
     Exchange, OrderStatus, OrderType, OrderValidity, OrderVariety, ProductType, TransactionType,
 };
 use crate::kite::protocol::datetime::serde_opt_datetime;
-use crate::kite::protocol::{Inbound, InstrumentToken};
+use crate::kite::protocol::{Inbound, InstrumentToken, OrderId};
 
 /// The postback `checksum` field. It is derived from the API secret, so
 /// `Debug` redacts it.
@@ -54,13 +54,13 @@ impl fmt::Debug for PostbackChecksum {
 #[non_exhaustive]
 pub struct OrderUpdate {
     /// Unique order ID. The only required field.
-    pub order_id: String,
+    pub order_id: OrderId,
     /// Exchange order ID; `null` for orders that never reached the exchange.
     #[serde(default)]
     pub exchange_order_id: Option<String>,
     /// Parent order ID, for multi-legged orders.
     #[serde(default)]
-    pub parent_order_id: Option<String>,
+    pub parent_order_id: Option<OrderId>,
     /// Current status. Documented postback values are COMPLETE, REJECTED,
     /// CANCELLED and UPDATE.
     #[serde(default)]

@@ -14,10 +14,11 @@
 //!
 use crate::kite::connect::{
     client::HTTPClient,
-    models::{check_mf_order_id, KiteApiResponse, MfHolding, MfInstrument, MfOrder, MfSip},
+    models::{KiteApiResponse, MfHolding, MfInstrument, MfOrder, MfSip},
 };
 use crate::kite::error::{HttpError, HttpErrorKind, Result, TransportStage};
 use crate::kite::obs::schema::{Endpoint, Method};
+use crate::kite::protocol::MfOrderId;
 
 /// Mutual fund orders, SIPs, holdings and instruments.
 pub struct MutualFunds<'c> {
@@ -40,20 +41,9 @@ impl<'c> MutualFunds<'c> {
     /// One order, whatever its age: `GET /mf/orders/{order_id}`
     /// (`kite:mutual-funds.md:171-173`).
     ///
-    /// Fails before admission, sending nothing, for an order ID that is not
-    /// 1 to 64 ASCII letters, digits or hyphens.
-    pub async fn get_order(&self, order_id: &str) -> Result<KiteApiResponse<MfOrder>> {
-        check_mf_order_id(order_id).map_err(|e| {
-            self.client.reject(
-                HttpError::new(
-                    HttpErrorKind::Validation,
-                    Method::Get,
-                    Endpoint::MfOrdersId,
-                    TransportStage::NotStarted,
-                )
-                .with_detail(&e.to_string()),
-            )
-        })?;
+    /// The ID is an [`MfOrderId`], valid by construction, so it cannot change
+    /// the request path; an equity `OrderId` is a different type.
+    pub async fn get_order(&self, order_id: &MfOrderId) -> Result<KiteApiResponse<MfOrder>> {
         self.client.get(&format!("/mf/orders/{order_id}")).await
     }
 

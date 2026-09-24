@@ -17,7 +17,7 @@ use manja::kite::connect::models::{
 };
 use manja::kite::connect::scheduler::SchedulerLimits;
 use manja::kite::error::HttpErrorKind;
-use manja::kite::protocol::{BrokerTimestamp, Inbound, InstrumentToken};
+use manja::kite::protocol::{BrokerTimestamp, Inbound, InstrumentToken, OrderId};
 
 use support::fixtures;
 use support::http::{HttpHarness, RecordedRequest, Reply};
@@ -164,7 +164,7 @@ async fn order_history_preserves_an_undocumented_status() {
     let c = client(&h.base_url());
     let history = c
         .orders()
-        .get_order_history("171229000724687")
+        .get_order_history(&OrderId::new("171229000724687").unwrap())
         .await
         .unwrap()
         .data
@@ -211,7 +211,7 @@ async fn trade_book_and_order_trades() {
     let c = client(&h.base_url());
     let trades = c
         .orders()
-        .get_order_trades("200000000000000")
+        .get_order_trades(&OrderId::new("200000000000000").unwrap())
         .await
         .unwrap()
         .data

@@ -39,7 +39,9 @@ use manja::kite::error::{BrokerError, HttpError, HttpErrorKind, ManjaError, Tran
 use manja::kite::obs::{
     BridgeRecorder, InMemoryRecorder, Instrument as MetricInstrument, MetricRecorder, Observability,
 };
-use manja::kite::protocol::{Inbound, InstrumentToken, OrderUpdate, Quantity, ScaledPrice};
+use manja::kite::protocol::{
+    Inbound, InstrumentToken, MfOrderId, OrderId, OrderIdError, OrderUpdate, Quantity, ScaledPrice,
+};
 use manja::kite::ticker::actor::lifecycle::ReconnectLimits;
 use manja::kite::ticker::actor::owner::{
     CommandError, TaskGuard, TaskOutcome, TerminalReason, TickerBuilder, TickerError, TickerEvent,
@@ -77,6 +79,18 @@ fn old_call_shapes(mut c: HTTPClient) {
 // Signatures of the main async operations, by type.
 async fn signatures(c: &HTTPClient, h: &TickerHandle) {
     let _: Result<KiteApiResponse<Vec<Order>>, ManjaError> = c.orders().list_orders().await;
+    let id: OrderId = "151220000000000".parse().unwrap();
+    let _: Result<KiteApiResponse<Vec<Order>>, ManjaError> =
+        c.orders().get_order_history(&id).await;
+    let _: Result<KiteApiResponse<Vec<Trade>>, ManjaError> = c.orders().get_order_trades(&id).await;
+    let _: Result<KiteApiResponse<OrderReceipt>, ManjaError> = c
+        .orders()
+        .cancel_order(manja::kite::connect::models::OrderVariety::Regular, &id)
+        .await;
+    let _: Result<OrderId, OrderIdError> = OrderId::new("1");
+    let _ = PermitTarget::ModifyOrder {
+        order_id: id.clone(),
+    };
     let _: Result<KiteApiResponse<Vec<Holding>>, ManjaError> = c.portfolio().get_holdings().await;
     let _: Result<KiteApiResponse<Positions>, ManjaError> = c.portfolio().get_positions().await;
     let gtt: GttRequest = GttRequest::single(
@@ -114,7 +128,8 @@ async fn signatures(c: &HTTPClient, h: &TickerHandle) {
     let _: fn(&HttpError) -> bool = HttpError::requires_holdings_authorisation;
     let mf = c.mutual_funds();
     let _: Result<KiteApiResponse<Vec<MfOrder>>, ManjaError> = mf.list_orders().await;
-    let _: Result<KiteApiResponse<MfOrder>, ManjaError> = mf.get_order("1").await;
+    let _: Result<KiteApiResponse<MfOrder>, ManjaError> =
+        mf.get_order(&"1".parse::<MfOrderId>().unwrap()).await;
     let _: Result<KiteApiResponse<Vec<MfSip>>, ManjaError> = mf.list_sips().await;
     let _: Result<KiteApiResponse<Vec<MfHolding>>, ManjaError> = mf.list_holdings().await;
     let _: Result<Vec<MfInstrument>, ManjaError> = mf.get_instruments().await;

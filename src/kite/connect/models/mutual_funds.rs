@@ -18,11 +18,10 @@ use std::collections::BTreeMap;
 use chrono::{DateTime, FixedOffset, NaiveDate};
 use serde::{Deserialize, Deserializer, Serialize};
 
-use crate::kite::connect::models::order::RequestError;
 use crate::kite::connect::models::order_enums::TransactionType;
 use crate::kite::protocol::datetime::{serde_opt_date, serde_opt_datetime};
 use crate::kite::protocol::enums::wire_enum;
-use crate::kite::protocol::Inbound;
+use crate::kite::protocol::{Inbound, MfOrderId};
 
 /// The status of a mutual fund order. "There may be other values as well"
 /// (`kite:mutual-funds.md:152`); those are preserved as unknown.
@@ -167,7 +166,7 @@ wire_enum!(MfPlan {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct MfOrder {
     /// Unique order ID.
-    pub order_id: String,
+    pub order_id: MfOrderId,
     /// Exchange order ID, once the order reaches the exchange.
     #[serde(default)]
     pub exchange_order_id: Option<String>,
@@ -381,43 +380,11 @@ fn optional_csv_date<'de, D: Deserializer<'de>>(d: D) -> Result<Option<NaiveDate
     serde_opt_date::deserialize(d)
 }
 
-/// Check an order ID used in a mutual fund request path: 1 to 64 ASCII
-/// letters, digits or hyphens. The documented IDs are UUIDs
-/// (`kite:mutual-funds.md:42`), so the equity order ID rule, which has no
-/// hyphen, does not apply; nothing else can alter the path.
-#[cfg_attr(not(feature = "http"), allow(dead_code))]
-pub(crate) fn check_mf_order_id(order_id: &str) -> Result<(), RequestError> {
-    if order_id.is_empty()
-        || order_id.len() > 64
-        || !order_id
-            .bytes()
-            .all(|b| b.is_ascii_alphanumeric() || b == b'-')
-    {
-        return Err(RequestError {
-            field: "order_id",
-            reason: "must be 1-64 ASCII letters, digits or hyphens",
-        });
-    }
-    Ok(())
-}
-
-#[cfg(test)]
+// The only test here parses CSV, which needs the `http` feature's `csv`.
+#[cfg(all(test, feature = "http"))]
 mod tests {
     use super::*;
 
-    #[test]
-    fn mutual_fund_order_ids_allow_uuids_and_nothing_path_changing() {
-        assert_eq!(
-            check_mf_order_id("2b6ad4b7-c84e-4c76-b459-f3a8994184f1"),
-            Ok(())
-        );
-        assert_eq!(check_mf_order_id("123123"), Ok(()));
-        for bad in ["", "a/b", "a?b=c", "a b", "..", &"x".repeat(65)] {
-            assert!(check_mf_order_id(bad).is_err(), "{bad}");
-        }
-    }
-
-    #[cfg(feature = "http")]
     #[test]
     fn instrument_flags_must_be_zero_or_one() {
         let header = "tradingsymbol,amc,name,purchase_allowed,redemption_allowed,minimum_purchase_amount,purchase_amount_multiplier,minimum_additional_purchase_amount,minimum_redemption_quantity,redemption_quantity_multiplier,dividend_type,scheme_type,plan,settlement_type,last_price,last_price_date";

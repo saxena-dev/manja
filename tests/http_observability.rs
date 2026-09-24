@@ -19,6 +19,7 @@ use manja::kite::connect::credentials::{ApiKey, ApiSecret, Credentials, RequestT
 use manja::kite::connect::models::{LTPQuote, OrderVariety};
 use manja::kite::connect::scheduler::SchedulerLimits;
 use manja::kite::obs::{BridgeRecorder, InMemoryRecorder, Instrument, Observability};
+use manja::kite::protocol::OrderId;
 use tracing::field::{Field, Visit};
 use tracing::span::{Attributes, Id, Record};
 use tracing::Subscriber;
@@ -289,7 +290,10 @@ async fn mutations_never_count_a_retry() {
     let c = client(&h.base_url(), &obs);
     c.clone()
         .orders()
-        .cancel_order(OrderVariety::Regular, "151220000000000")
+        .cancel_order(
+            OrderVariety::Regular,
+            &OrderId::new("151220000000000").unwrap(),
+        )
         .await
         .unwrap_err();
     assert_eq!(h.requests().len(), 1);
@@ -510,12 +514,12 @@ async fn labels_and_fields_carry_no_identifier_path_body_or_secret() {
     let c = client(&h.base_url(), &obs);
     c.clone()
         .orders()
-        .cancel_order(OrderVariety::Regular, ORDER_ID)
+        .cancel_order(OrderVariety::Regular, &OrderId::new(ORDER_ID).unwrap())
         .await
         .unwrap();
     c.clone()
         .orders()
-        .get_order_history(ORDER_ID)
+        .get_order_history(&OrderId::new(ORDER_ID).unwrap())
         .await
         .unwrap();
     c.user().profile().await.unwrap_err();
@@ -606,7 +610,7 @@ async fn scripted(obs: Observability) -> (Vec<String>, usize) {
             "{:?}",
             c.clone()
                 .orders()
-                .cancel_order(OrderVariety::Regular, ORDER_ID)
+                .cancel_order(OrderVariety::Regular, &OrderId::new(ORDER_ID).unwrap())
                 .await
                 .map_err(|e| {
                     let e = e.as_http().unwrap();

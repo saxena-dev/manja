@@ -47,8 +47,6 @@ pub use user::{Available, Segment, SegmentKind, UserMargins, UserProfile, Utilis
 ///
 mod order;
 mod order_enums;
-#[cfg(feature = "http")]
-pub(crate) use order::check_order_id;
 pub use order::{
     ModifyOrderRequest, Order, OrderReceipt, PlaceOrderRequest, RequestError, SliceError,
     SliceResult, Trade,
@@ -62,8 +60,6 @@ pub use order_enums::{
 /// instruments.
 ///
 mod mutual_funds;
-#[cfg(feature = "http")]
-pub(crate) use mutual_funds::check_mf_order_id;
 pub use mutual_funds::{
     DividendType, MfHolding, MfInstrument, MfOrder, MfOrderStatus, MfOrderVariety, MfPlan,
     MfPurchaseType, MfSip, SchemeType, SipFrequency, SipStatus,

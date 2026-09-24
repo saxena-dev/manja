@@ -75,7 +75,9 @@ impl OrderMarginRequest {
 /// One order in a virtual contract note calculation (`kite:margins.md:391-403`).
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct OrderChargesRequest {
-    /// Order ID; for a hypothetical order it may be any string.
+    /// A label for this order in the calculation. The documentation allows
+    /// any string (`kite:margins.md:395`), and it travels in the JSON body,
+    /// never in a path, so it is not an [`OrderId`](crate::kite::protocol::OrderId).
     pub order_id: String,
     /// Exchange. `NONE` and `INDICES` are rejected.
     pub exchange: Exchange,

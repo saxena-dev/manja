@@ -64,6 +64,8 @@ a 2xx status plus a `status: "success"` envelope (`kite:response-structure.md:15
 mutual fund SIP list is documented without a `status` (`kite:mutual-funds.md:219-221`),
 so for that endpoint alone an absent `status` is accepted; any `status` other than
 `success` is still an error.
+Order IDs used in request paths, and those in responses, are checked types, valid by
+construction (§2.16).
 Order placement, modification and conversion, and GTT placement and modification, take
 dedicated request types and are form-encoded (`kite:response-structure.md:2`); margin and charge calculations are JSON
 (`kite:margins.md:13`). Quote requests above the documented key limits (500 for
@@ -302,7 +304,7 @@ admitted in the `Standard` quota class (§3.6).
 | Operation | Contract |
 |---|---|
 | `list_orders()` | `GET /mf/orders`: orders placed in the last 7 days (`kite:mutual-funds.md:17-19`), as `MfOrder`s |
-| `get_order(order_id)` | `GET /mf/orders/{order_id}`: one order, whatever its age (`kite:mutual-funds.md:171-173`). The documented IDs are UUIDs, so an ID must be 1 to 64 ASCII letters, digits or hyphens; anything else is a `Validation` error and nothing is sent |
+| `get_order(&MfOrderId)` | `GET /mf/orders/{order_id}`: one order, whatever its age (`kite:mutual-funds.md:171-173`). The ID is an `MfOrderId` (§2.16), because the documented IDs are UUIDs |
 | `list_sips()` | `GET /mf/sips`: active and paused SIPs (`kite:mutual-funds.md:209-211`), as `MfSip`s. `instalments` and `pending_instalments` are `-1` for a SIP active until cancelled (`MfSip::is_open_ended`) |
 | `list_holdings()` | `GET /mf/holdings`: allotted units (`kite:mutual-funds.md:362-364`), as `MfHolding`s. An empty `last_price_date`, as in the official sample, is `None` |
 | `get_instruments()`, `get_instruments_csv()` | `GET /mf/instruments`: the CSV list of funds (`kite:mutual-funds.md:426-463`), parsed into `MfInstrument`s or returned raw, under the CSV body bound (`B-HTTP-08`). The `0` or `1` flags become booleans; any other value is a `Decode` error naming the row |
@@ -331,6 +333,30 @@ user completes on the depository's portal by keying in their demat PIN
 
 The SDK opens no browser, does not watch for the redirect, and does not retry the refused
 order; the application does each.
+
+### 2.16 Order IDs
+
+An order ID becomes a path segment of the order endpoints, so every one is a checked
+type in `kite::protocol`, and a value that could change the path cannot be constructed.
+
+| Type | Grammar | Used by |
+|---|---|---|
+| `OrderId` | 1 to 64 ASCII letters or digits | `Orders::modify_order`, `cancel_order` (and their `_with_permit` forms), `get_order_history` and `get_order_trades`; `PermitTarget::ModifyOrder`; the `order_id` of `Order`, `Trade`, `OrderReceipt`, `SliceResult::Placed` and `OrderUpdate`, `Order::parent_order_id` and `OrderUpdate::parent_order_id`, and `GttOrderOutcome::order_id` |
+| `MfOrderId` | 1 to 64 ASCII letters, digits or hyphens | `MutualFunds::get_order` and `MfOrder::order_id` |
+
+Both are built with `new`, `TryFrom<&str>`, `TryFrom<String>` or `FromStr`, and deserialize
+through the same check. A failure is an `OrderIdError` naming the field. The two types are
+distinct, so a mutual fund ID cannot be passed where an equity ID is expected, or the other
+way round. An ID read from a response goes straight back into an order endpoint with no
+conversion.
+
+Every equity order ID in the official samples is a string of digits, and every mutual fund
+order ID a UUID. A response whose ID fails its grammar is a `Decode` error rather than an
+unvalidated ID, so no broker value can reach a request path unchecked. The error covers the
+whole response: one malformed ID fails an entire order book or trade list. For a ticker
+order update, it fails only that text message. The order ID in an
+`OrderChargesRequest` is not an `OrderId`: the documentation allows any string there
+(`kite:margins.md:395`), and it travels in the JSON body, never in a path.
 
 ---
 
@@ -587,6 +613,7 @@ These choices are not dictated by the Kite documentation alone.
 | Oversized quote requests | Rejected before sending, never split or truncated | A split would return several snapshots taken at different times as one result |
 | Endpoint support | Holdings auctions and the order charges calculation stay supported | Both are documented read or calculation endpoints with official fixtures |
 | Holdings authorisation | Supported as the HTTP call that starts the flow, with the documented portal URL; the portal itself is left to the application | The endpoint and its result are documented (`kite:portfolio.md:503-541`). The remaining steps happen in the user's browser on the depository's portal, which an SDK cannot and should not drive |
+| Order IDs | Checked types; a response ID that fails its grammar is a `Decode` error | An ID is a request path segment. A lenient fallback would let a malformed broker value reach a path unchecked, and every ID in the official samples already fits its grammar |
 | Mutual funds | Read-only: orders, SIPs, holdings and the instrument list | The documentation states that order placement cannot be done through the API (`kite:mutual-funds.md:3`) and lists only these reads (`kite:mutual-funds.md:5-11`). The official mocks still carry order and SIP placement, modification and cancellation responses, but no request for them is documented, so implementing them would mean inventing the request |
 | GTT orders | Only LIMIT orders, each for the condition's instrument; a modification sends the complete trigger | The documentation lists `LIMIT` as the only order type and shows each order repeating the condition's exchange and tradingsymbol (`kite:gtt.md:56-64`); it recommends fetching the trigger and sending it back modified (`kite:gtt.md:390-393`) |
 | Default features | `http`, `ticker` and `decoder` | Keeps every 0.1 import path available |

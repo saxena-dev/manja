@@ -20,7 +20,7 @@ use manja::kite::connect::config::{Config, HttpLimits};
 use manja::kite::connect::credentials::{
     AccessToken, ApiKey, ApiSecret, Credentials, RequestToken,
 };
-use manja::kite::connect::models::{LTPQuote, OrderVariety};
+use manja::kite::connect::models::{LTPQuote, ModifyOrderRequest, OrderVariety};
 use manja::kite::connect::scheduler::SchedulerLimits;
 use manja::kite::decoder::adapter::Adapter;
 use manja::kite::envelope::{
@@ -31,7 +31,7 @@ use manja::kite::obs::schema::{series_bound, SourceMode};
 use manja::kite::obs::{
     BridgeRecorder, InMemoryRecorder, Instrument, MetricRecorder, Observability,
 };
-use manja::kite::protocol::InstrumentToken;
+use manja::kite::protocol::{InstrumentToken, OrderId};
 use manja::kite::ticker::actor::lifecycle::ReconnectLimits;
 use manja::kite::ticker::actor::owner::{TickerBuilder, TickerEvent, TickerEvents, TickerLimits};
 use manja::kite::ticker::Mode;
@@ -169,7 +169,7 @@ async fn no_seeded_value_reaches_any_telemetry_sink() {
     c.user().profile().await.unwrap();
     let err = c.user().margins().await.unwrap_err();
     c.orders()
-        .cancel_order(OrderVariety::Regular, ORDER_ID)
+        .cancel_order(OrderVariety::Regular, &OrderId::new(ORDER_ID).unwrap())
         .await
         .unwrap();
     let symbol = format!("NSE:{SYMBOL}");
@@ -291,8 +291,13 @@ async fn a_hundred_thousand_dynamic_identifiers_stay_within_series_bounds() {
         .unwrap()
         .with_credentials(Credentials::new("k", "t").unwrap());
     for i in 0..50_000u32 {
-        let id = format!("bad-{i}");
-        let _ = c.orders().cancel_order(OrderVariety::Regular, &id).await;
+        // An empty modification is refused before dispatch; the ID is
+        // distinct each time.
+        let id = OrderId::new(format!("{i}")).unwrap();
+        let _ = c
+            .orders()
+            .modify_order(OrderVariety::Regular, &id, &ModifyOrderRequest::default())
+            .await;
         let key = format!("X{i}");
         let _ = c.market().get_quotes::<LTPQuote>(&[key.as_str()]).await;
     }

@@ -19,7 +19,7 @@ use crate::kite::connect::models::order_enums::{
     OrderStatus, OrderType, OrderValidity, OrderVariety, ProductType, TransactionType,
 };
 use crate::kite::protocol::datetime::serde_opt_datetime;
-use crate::kite::protocol::{BrokerTimestamp, Inbound, InstrumentToken};
+use crate::kite::protocol::{BrokerTimestamp, Inbound, InstrumentToken, OrderId};
 
 /// The acknowledgement of a placement, modification or cancellation.
 ///
@@ -42,7 +42,7 @@ use crate::kite::protocol::{BrokerTimestamp, Inbound, InstrumentToken};
 pub struct OrderReceipt {
     /// The order ID the request was registered against: the first slice
     /// of a sliced placement.
-    pub order_id: String,
+    pub order_id: OrderId,
     /// The further slices of an automatically sliced placement, in broker
     /// order; empty otherwise.
     #[serde(rename = "children", skip_serializing_if = "Vec::is_empty")]
@@ -66,7 +66,7 @@ pub enum SliceResult {
     /// The slice was registered as its own order.
     Placed {
         /// Its order ID.
-        order_id: String,
+        order_id: OrderId,
     },
     /// The slice was rejected.
     Failed(SliceError),
@@ -90,7 +90,7 @@ pub struct SliceError {
 #[derive(Deserialize)]
 struct SliceWire {
     #[serde(default)]
-    order_id: Option<String>,
+    order_id: Option<OrderId>,
     #[serde(default)]
     error: Option<SliceError>,
 }
@@ -111,7 +111,7 @@ impl<'de> Deserialize<'de> for OrderReceipt {
         #[serde(untagged)]
         enum Shape {
             Object {
-                order_id: String,
+                order_id: OrderId,
                 #[serde(default)]
                 children: Vec<SliceWire>,
             },
@@ -146,12 +146,12 @@ impl<'de> Deserialize<'de> for OrderReceipt {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Order {
     /// Unique order ID.
-    pub order_id: String,
+    pub order_id: OrderId,
 
     /// Order ID of the parent order (only applicable in case of multi-legged
     /// orders like CO).
     #[serde(default)]
-    pub parent_order_id: Option<String>,
+    pub parent_order_id: Option<OrderId>,
 
     /// Exchange generated order ID. Orders that don't reach the exchange have
     /// null IDs.
@@ -283,7 +283,7 @@ pub struct Trade {
     pub trade_id: String,
 
     /// Unique order ID.
-    pub order_id: String,
+    pub order_id: OrderId,
 
     /// Exchange generated order ID.
     #[serde(default)]
@@ -362,19 +362,6 @@ fn check_market_protection(p: Option<f64>) -> Result<(), RequestError> {
         Some(_) => invalid("market_protection", "must be -1 or in (0, 100]"),
         None => Ok(()),
     }
-}
-
-/// Validate an order ID used in a request path: 1 to 64 ASCII letters or
-/// digits, so it can never alter the path or query.
-#[cfg_attr(not(feature = "http"), allow(dead_code))]
-pub(crate) fn check_order_id(order_id: &str) -> Result<(), RequestError> {
-    if order_id.is_empty()
-        || order_id.len() > 64
-        || !order_id.bytes().all(|b| b.is_ascii_alphanumeric())
-    {
-        return invalid("order_id", "must be 1-64 ASCII letters or digits");
-    }
-    Ok(())
 }
 
 #[cfg_attr(not(feature = "http"), allow(dead_code))]

@@ -22,7 +22,7 @@ use crate::kite::connect::models::order_enums::{
 };
 use crate::kite::protocol::datetime::serde_opt_datetime;
 use crate::kite::protocol::enums::wire_enum;
-use crate::kite::protocol::{Inbound, InstrumentToken, Quantity};
+use crate::kite::protocol::{Inbound, InstrumentToken, OrderId, Quantity};
 
 /// The kind of a GTT (`kite:gtt.md:80-167`).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -201,14 +201,17 @@ pub struct GttOrderOutcome {
     pub status: String,
     /// The placed order's ID; `None` when the broker sent an empty one.
     #[serde(default, deserialize_with = "empty_as_none")]
-    pub order_id: Option<String>,
+    pub order_id: Option<OrderId>,
     /// Why the placement was rejected, if it was.
     #[serde(default)]
     pub rejection_reason: Option<String>,
 }
 
-fn empty_as_none<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Option<String>, D::Error> {
-    Ok(Option::<String>::deserialize(d)?.filter(|s| !s.is_empty()))
+fn empty_as_none<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Option<OrderId>, D::Error> {
+    match Option::<String>::deserialize(d)? {
+        Some(s) if !s.is_empty() => OrderId::new(s).map(Some).map_err(serde::de::Error::custom),
+        _ => Ok(None),
+    }
 }
 
 // --- [ Request DTOs ] ---

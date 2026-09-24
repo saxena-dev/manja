@@ -21,7 +21,7 @@ use manja::kite::connect::models::{
 };
 use manja::kite::connect::scheduler::{PermitTarget, SchedulerLimits};
 use manja::kite::error::{HttpErrorKind, ManjaError, TransportStage};
-use manja::kite::protocol::Quantity;
+use manja::kite::protocol::{OrderId, Quantity};
 
 use support::fixtures;
 use support::http::{HttpHarness, RecordedRequest, Reply};
@@ -75,6 +75,10 @@ fn limit_buy() -> PlaceOrderRequest {
     r
 }
 
+fn id(s: &str) -> OrderId {
+    OrderId::new(s).unwrap()
+}
+
 fn is_validation(e: &ManjaError) -> bool {
     let h = e.as_http().unwrap();
     h.kind() == HttpErrorKind::Validation && h.stage() == TransportStage::NotStarted
@@ -120,7 +124,7 @@ async fn modification_sends_only_the_set_fields() {
     };
     let ack = client(&h.base_url())
         .orders()
-        .modify_order(OrderVariety::Regular, "151220000000000", &request)
+        .modify_order(OrderVariety::Regular, &id("151220000000000"), &request)
         .await
         .unwrap()
         .data
@@ -142,7 +146,7 @@ async fn cancellation_puts_no_credential_in_the_url() {
     let h = serve("order_cancel.json").await;
     let ack = client(&h.base_url())
         .orders()
-        .cancel_order(OrderVariety::Regular, "151220000000000")
+        .cancel_order(OrderVariety::Regular, &id("151220000000000"))
         .await
         .unwrap()
         .data
@@ -274,7 +278,7 @@ async fn invalid_requests_are_rejected_before_any_transport() {
     let empty = ModifyOrderRequest::default();
     assert!(is_validation(
         &orders
-            .modify_order(OrderVariety::Regular, "1", &empty)
+            .modify_order(OrderVariety::Regular, &id("1"), &empty)
             .await
             .unwrap_err()
     ));
@@ -284,17 +288,14 @@ async fn invalid_requests_are_rejected_before_any_transport() {
     };
     assert!(is_validation(
         &orders
-            .modify_order(OrderVariety::Cover, "1", &co_quantity)
+            .modify_order(OrderVariety::Cover, &id("1"), &co_quantity)
             .await
             .unwrap_err()
     ));
+    // An ID that could change the path cannot be built, so it can never
+    // reach an order endpoint.
     for bad_id in ["", "1/../2", "1?x=y", "12 3"] {
-        assert!(is_validation(
-            &orders
-                .cancel_order(OrderVariety::Regular, bad_id)
-                .await
-                .unwrap_err()
-        ));
+        assert!(OrderId::new(bad_id).is_err(), "{bad_id:?}");
     }
     let same_product = PositionConversionRequest {
         tradingsymbol: "INFY".into(),
@@ -478,6 +479,49 @@ async fn a_sliced_placement_reports_every_slice_including_failures() {
     let err = client(&h.base_url())
         .orders()
         .place_order(&request)
+        .await
+        .unwrap_err();
+    assert_eq!(err.as_http().unwrap().kind(), HttpErrorKind::Decode);
+}
+
+#[tokio::test]
+async fn an_order_id_from_the_order_book_goes_straight_back_into_a_modification() {
+    let book = serve("orders.json").await;
+    let orders = client(&book.base_url())
+        .orders()
+        .list_orders()
+        .await
+        .unwrap()
+        .data
+        .unwrap();
+    // The ID is already an OrderId: no parsing or string conversion.
+    let target = &orders[0].order_id;
+    let h = serve("order_modify.json").await;
+    let request = ModifyOrderRequest {
+        price: Some(1500.5),
+        ..Default::default()
+    };
+    let ack = client(&h.base_url())
+        .orders()
+        .modify_order(OrderVariety::Regular, target, &request)
+        .await
+        .unwrap()
+        .data
+        .unwrap();
+    assert_eq!(ack.order_id, "151220000000000");
+    assert_eq!(only(&h).target, format!("/orders/regular/{target}"));
+}
+
+#[tokio::test]
+async fn a_response_order_id_that_could_change_a_path_is_a_decode_error() {
+    // Supplemental, derived from order_response.json: the ID carries a path.
+    let body = fixtures::json_body("order_response.json")
+        .unwrap()
+        .replace("151220000000000", "1/../2");
+    let h = HttpHarness::start(vec![Reply::json(body)]).await;
+    let err = client(&h.base_url())
+        .orders()
+        .place_order(&limit_buy())
         .await
         .unwrap_err();
     assert_eq!(err.as_http().unwrap().kind(), HttpErrorKind::Decode);
