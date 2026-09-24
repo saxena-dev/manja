@@ -129,7 +129,7 @@ impl<'de> Deserialize<'de> for OrderReceipt {
                     _ => {
                         return Err(serde::de::Error::custom(
                             "the first slice of a placement was not placed",
-                        ))
+                        ));
                     }
                 }
             }
@@ -479,21 +479,21 @@ impl PlaceOrderRequest {
         check_price("trigger_price", self.trigger_price)?;
         match self.order_type {
             OrderType::Limit if self.price.is_none() => {
-                return invalid("price", "is required for LIMIT orders")
+                return invalid("price", "is required for LIMIT orders");
             }
             OrderType::Stoploss if self.price.is_none() || self.trigger_price.is_none() => {
-                return invalid("trigger_price", "SL orders need price and trigger_price")
+                return invalid("trigger_price", "SL orders need price and trigger_price");
             }
             OrderType::StoplossMarket if self.trigger_price.is_none() => {
-                return invalid("trigger_price", "is required for SL-M orders")
+                return invalid("trigger_price", "is required for SL-M orders");
             }
             OrderType::Market | OrderType::StoplossMarket if self.price.is_some() => {
-                return invalid("price", "is not accepted for MARKET or SL-M orders")
+                return invalid("price", "is not accepted for MARKET or SL-M orders");
             }
             OrderType::Market | OrderType::Limit
                 if self.trigger_price.is_some() && self.variety != OrderVariety::Cover =>
             {
-                return invalid("trigger_price", "is only for SL, SL-M and cover orders")
+                return invalid("trigger_price", "is only for SL, SL-M and cover orders");
             }
             _ => {}
         }
@@ -517,10 +517,10 @@ impl PlaceOrderRequest {
                 return invalid(
                     "validity_ttl",
                     "a positive TTL is required with TTL validity",
-                )
+                );
             }
             (OrderValidity::Day | OrderValidity::ImmediateOrCancel, Some(_)) => {
-                return invalid("validity_ttl", "is only for TTL validity")
+                return invalid("validity_ttl", "is only for TTL validity");
             }
             _ => {}
         }
@@ -531,7 +531,7 @@ impl PlaceOrderRequest {
                 return invalid(
                     "iceberg_legs",
                     "iceberg orders need 2-50 legs and a leg quantity",
-                )
+                );
             }
             (false, None, None) => {}
             (false, _, _) => return invalid("iceberg_legs", "is only for iceberg orders"),

@@ -510,7 +510,7 @@ impl AgeGuard {
     /// Record the enqueue time of this contributor's oldest item, or `None`
     /// when it holds nothing.
     pub(crate) fn set_oldest(&self, oldest: Option<Instant>) {
-        *self.0 .0.lock().unwrap_or_else(|e| e.into_inner()) = oldest;
+        *self.0.0.lock().unwrap_or_else(|e| e.into_inner()) = oldest;
     }
 }
 
@@ -862,9 +862,11 @@ mod tests {
         let b = Observability::builder()
             .static_dimension("client", "primary")
             .unwrap();
-        assert!(Observability::builder()
-            .static_dimension("bad key", "v")
-            .is_err());
+        assert!(
+            Observability::builder()
+                .static_dimension("bad key", "v")
+                .is_err()
+        );
         let mut b = b;
         for i in 0..3 {
             b = b.static_dimension(format!("k{i}"), "v").unwrap();

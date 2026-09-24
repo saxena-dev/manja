@@ -62,8 +62,8 @@ use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-use reqwest::header::{HeaderValue, AUTHORIZATION};
-use serde::{de::DeserializeOwned, Serialize};
+use reqwest::header::{AUTHORIZATION, HeaderValue};
+use serde::{Serialize, de::DeserializeOwned};
 use serde_json::Value;
 use tracing::{Instrument as _, Span};
 
@@ -79,10 +79,10 @@ use crate::kite::{
         },
     },
     error::{
-        json_error_detail, BrokerError, HttpError, HttpErrorKind, KiteApiException, ManjaError,
-        Result, TransportStage as Stage,
+        BrokerError, HttpError, HttpErrorKind, KiteApiException, ManjaError, Result,
+        TransportStage as Stage, json_error_detail,
     },
-    obs::diagnostics::{BoundedText, FailureHistory, DEFAULT_HISTORY},
+    obs::diagnostics::{BoundedText, DEFAULT_HISTORY, FailureHistory},
     obs::handle::{Labels, Observability},
     obs::schema::{Endpoint, HttpOperationResult, Instrument, Method, QuotaClass},
     protocol::Inbound,
@@ -1226,7 +1226,7 @@ pub(crate) fn classify_json<T: DeserializeOwned>(
     match (obj.get("status"), endpoint) {
         (Some(s), _) if s.as_str() == Some("success") => {}
         (Some(s), _) if s.as_str() == Some("error") => {
-            return Err(error_response(status, &value, method, endpoint))
+            return Err(error_response(status, &value, method, endpoint));
         }
         // The documented SIP list, like its official sample, is `{"data":
         // [...]}` with no status (`kite:mutual-funds.md:219-221`). Only that

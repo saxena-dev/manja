@@ -12,8 +12,8 @@ use manja::kite::connect::credentials::Credentials;
 use manja::kite::envelope::PayloadKind;
 use manja::kite::obs::Observability;
 use manja::kite::protocol::InstrumentToken;
-use manja::kite::ticker::actor::owner::{TickerBuilder, TickerEvent};
 use manja::kite::ticker::Mode;
+use manja::kite::ticker::actor::owner::{TickerBuilder, TickerEvent};
 use tokio_tungstenite::tungstenite::Message;
 
 #[tokio::main]

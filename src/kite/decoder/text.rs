@@ -25,7 +25,7 @@ use std::fmt;
 use serde_json::Value;
 
 use crate::kite::error::json_error_detail;
-use crate::kite::obs::diagnostics::{BoundedText, DecodeDiagnosticKind, DEFAULT_TEXT_BYTES};
+use crate::kite::obs::diagnostics::{BoundedText, DEFAULT_TEXT_BYTES, DecodeDiagnosticKind};
 use crate::kite::protocol::OrderUpdate;
 
 /// Default `B-DEC-03`: text message bytes, 1 MiB.
@@ -180,7 +180,7 @@ pub fn parse(text: &str, limits: TextLimits) -> Result<TextEvent, TextError> {
             return Err(TextError::new(
                 InvalidText,
                 "the message has no string type",
-            ))
+            ));
         }
     };
     let data = object.remove("data");

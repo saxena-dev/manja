@@ -71,31 +71,31 @@ use std::collections::BTreeMap;
 use std::fmt;
 use std::panic::AssertUnwindSafe;
 use std::pin::Pin;
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::task::{Context, Poll};
 use std::time::Duration;
 
 use futures_util::{FutureExt, SinkExt, Stream, StreamExt};
 use secrecy::{ExposeSecret, Secret};
 use tokio::net::TcpStream;
-use tokio::sync::{mpsc, oneshot, watch, Notify};
+use tokio::sync::{Notify, mpsc, oneshot, watch};
 use tokio::task::JoinHandle;
 use tokio::time::Instant;
-use tokio_tungstenite::tungstenite::{self, protocol::WebSocketConfig, Message};
+use tokio_tungstenite::tungstenite::{self, Message, protocol::WebSocketConfig};
 use tokio_tungstenite::{MaybeTlsStream, WebSocketStream};
 
 use crate::kite::connect::credentials::Credentials;
 use crate::kite::envelope::{
-    DisconnectReason, GapFacts, LifecycleEvent, LifecycleKind, PayloadKind, RawObservation,
-    ReceiveTime, SourceIdentity, SourceKey, SourceSequencer, MAX_PAYLOAD_BYTES_LIMIT,
+    DisconnectReason, GapFacts, LifecycleEvent, LifecycleKind, MAX_PAYLOAD_BYTES_LIMIT,
+    PayloadKind, RawObservation, ReceiveTime, SourceIdentity, SourceKey, SourceSequencer,
 };
+use crate::kite::obs::Observability;
 use crate::kite::obs::handle::GaugeGuard;
 use crate::kite::obs::schema::{
     ConnectionResult, Decision, PayloadKindLabel, QueueRole, ReconnectReason, RestoreResult,
     ShutdownResult,
 };
-use crate::kite::obs::Observability;
 use crate::kite::protocol::InstrumentToken;
 use crate::kite::ticker::actor::delivery;
 use crate::kite::ticker::actor::lifecycle::{self, Backoff, Disposition, ReconnectLimits};
@@ -104,8 +104,8 @@ use crate::kite::ticker::actor::status::{
     self, QueueGauges, QueueStatus, StatusCore, TickerFailure, TickerObs, Traffic,
 };
 use crate::kite::ticker::actor::subscriptions::{
-    reconcile, DesiredSubscriptions, Revision, SubscriptionCommand, SubscriptionError,
-    MAX_INSTRUMENTS_PER_CONNECTION,
+    DesiredSubscriptions, MAX_INSTRUMENTS_PER_CONNECTION, Revision, SubscriptionCommand,
+    SubscriptionError, reconcile,
 };
 use crate::kite::ticker::models::Mode;
 
@@ -1522,7 +1522,7 @@ impl Owner {
                 (PayloadKind::Text, t.into_bytes())
             }
             Some(Ok(Message::Close(_))) => {
-                return self.disconnected(DisconnectReason::RemoteClose).await
+                return self.disconnected(DisconnectReason::RemoteClose).await;
             }
             // Ping, pong and frames are transport traffic, not messages.
             Some(Ok(_)) => return Ok(()),
@@ -1761,17 +1761,19 @@ mod tests {
         assert!(d.clone().with_queue_messages(15).is_err());
         assert!(d.clone().with_queue_messages(16).is_ok());
         assert!(d.clone().with_command_mailbox(0).is_err());
-        assert!(d
-            .clone()
-            .with_handshake_timeout(Duration::from_millis(999))
-            .is_err());
+        assert!(
+            d.clone()
+                .with_handshake_timeout(Duration::from_millis(999))
+                .is_err()
+        );
         assert!(d.clone().with_max_payload(16 << 20).is_ok());
-        assert!(d
-            .clone()
-            .with_max_payload(2 << 20)
-            .unwrap()
-            .with_queue_bytes(1 << 20)
-            .is_err());
+        assert!(
+            d.clone()
+                .with_max_payload(2 << 20)
+                .unwrap()
+                .with_queue_bytes(1 << 20)
+                .is_err()
+        );
         assert!(d.with_shutdown_deadline(Duration::from_secs(61)).is_err());
     }
 

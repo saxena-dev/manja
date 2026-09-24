@@ -22,6 +22,6 @@ pub mod schema;
 
 pub use handle::{
     AgeGuard, BridgeRecord, BridgeRecorder, GaugeGuard, GaugeSample, InMemoryRecorder, Labels,
-    MetricRecorder, ObsConfigError, Observability, ObservabilityBuilder, MAX_STATIC_DIMENSIONS,
+    MAX_STATIC_DIMENSIONS, MetricRecorder, ObsConfigError, Observability, ObservabilityBuilder,
 };
 pub use schema::{Instrument, InstrumentKind, OBS_SCHEMA_VERSION};

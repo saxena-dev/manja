@@ -10,11 +10,11 @@ use std::time::Duration;
 use futures_util::{FutureExt, StreamExt};
 use manja::kite::connect::credentials::Credentials;
 use manja::kite::protocol::InstrumentToken;
+use manja::kite::ticker::Mode;
 use manja::kite::ticker::actor::owner::{
     CommandError, TickerBuilder, TickerError, TickerEvent, TickerEvents, TickerLimits,
 };
 use manja::kite::ticker::actor::subscriptions::{Revision, SubscriptionError};
-use manja::kite::ticker::Mode;
 use tokio_tungstenite::tungstenite::Message;
 
 use support::ws::{Handshake, Step, WsConnection, WsHarness};
@@ -239,10 +239,12 @@ async fn a_full_mailbox_is_an_immediate_error_and_dropped_commands_are_not_rolle
     let (handle, mut events, _guard) = builder(&h.url()).limits(limits).spawn().unwrap();
     tokio::time::sleep(Duration::from_millis(200)).await;
     // Submitted on the first poll, then abandoned.
-    assert!(handle
-        .subscribe([t(42)], Mode::LTP)
-        .now_or_never()
-        .is_none());
+    assert!(
+        handle
+            .subscribe([t(42)], Mode::LTP)
+            .now_or_never()
+            .is_none()
+    );
     // The mailbox holds that one command: the next is refused at once.
     let refused = tokio::time::timeout(
         Duration::from_millis(100),

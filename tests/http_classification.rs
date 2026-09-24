@@ -19,7 +19,7 @@ use manja::kite::obs::schema::{Endpoint, Method};
 use manja::kite::protocol::Inbound;
 
 use support::fixtures;
-use support::http::{refused_base_url, HttpHarness, Reply};
+use support::http::{HttpHarness, Reply, refused_base_url};
 
 const SENTINEL: &str = "SENTINELaccessTOKEN0123456789abcdef";
 
@@ -256,12 +256,14 @@ async fn known_and_unknown_error_types_are_distinguished() {
     )])
     .await;
     let err = result.unwrap_err();
-    assert!(http(&err)
-        .broker()
-        .unwrap()
-        .error_type()
-        .unwrap()
-        .is_unknown());
+    assert!(
+        http(&err)
+            .broker()
+            .unwrap()
+            .error_type()
+            .unwrap()
+            .is_unknown()
+    );
 }
 
 #[tokio::test]

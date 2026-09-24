@@ -47,7 +47,7 @@ use std::time::Duration;
 use tokio::time::Instant;
 
 use crate::kite::envelope::{ConnectionEpoch, DisconnectReason};
-use crate::kite::obs::diagnostics::{FailureHistory, DEFAULT_HISTORY};
+use crate::kite::obs::diagnostics::{DEFAULT_HISTORY, FailureHistory};
 use crate::kite::obs::handle::{GaugeGuard, Labels, Observability};
 use crate::kite::obs::schema::{
     CommandKind, ConnectionResult, Decision, Instrument, PayloadKindLabel, QueueRole,

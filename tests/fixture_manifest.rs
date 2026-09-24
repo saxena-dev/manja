@@ -233,9 +233,11 @@ fn the_capture_container_frames_all_19_records() {
     let payload_bytes: usize = records.iter().map(|r| r.payload.len()).sum();
     assert_eq!(payload_bytes + 19 * 12, bytes.len());
     // Receipt times are non-decreasing in this capture.
-    assert!(records
-        .windows(2)
-        .all(|w| w[0].receipt_unix_nanos <= w[1].receipt_unix_nanos));
+    assert!(
+        records
+            .windows(2)
+            .all(|w| w[0].receipt_unix_nanos <= w[1].receipt_unix_nanos)
+    );
     assert_eq!(records[0].receipt_unix_nanos, 1_769_019_551_354_728_000);
     assert_eq!(records[0].payload.len(), 453_458);
 }

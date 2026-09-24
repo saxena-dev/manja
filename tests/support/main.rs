@@ -22,7 +22,7 @@ use manja::kite::connect::config::Config;
 use manja::kite::ticker::{Mode, StreamState, WebSocketClient};
 
 use support::fixtures::{self, FixtureError};
-use support::http::{refused_base_url, HttpHarness, Reply};
+use support::http::{HttpHarness, Reply, refused_base_url};
 use support::ws::{Handshake, Step, WsConnection, WsHarness};
 
 /// Bound on every wait below, so a harness defect fails a test instead of hanging it.

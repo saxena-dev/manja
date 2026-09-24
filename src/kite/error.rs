@@ -27,8 +27,8 @@ use std::fmt;
 use crate::kite::connect::credentials::CredentialError;
 use crate::kite::obs::diagnostics::BoundedText;
 use crate::kite::obs::schema::{Endpoint, Method};
-use crate::kite::protocol::enums::wire_enum;
 use crate::kite::protocol::Inbound;
+use crate::kite::protocol::enums::wire_enum;
 
 /// A `Result` alias where the `Err` case is `manja::kite::ManjaError`.
 pub type Result<T> = std::result::Result<T, ManjaError>;

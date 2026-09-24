@@ -21,7 +21,7 @@ use std::fmt;
 
 use serde::{Deserialize, Serialize};
 
-use crate::kite::protocol::scale::{price_divisor, ScaleError, Segment};
+use crate::kite::protocol::scale::{ScaleError, Segment, price_divisor};
 
 /// Version of the numeric conversion policy described in this module.
 ///

@@ -1014,37 +1014,44 @@ mod tests {
     #[test]
     fn bounds_are_validated() {
         let d = SchedulerLimits::default();
-        assert!(d
-            .clone()
-            .with_operation_deadline(Duration::from_secs(1))
-            .is_err()); // < attempt timeout
-        assert!(d
-            .clone()
-            .with_attempt_timeout(Duration::from_millis(99))
-            .is_err());
-        assert!(d
-            .clone()
-            .with_attempt_timeout(Duration::from_secs(31))
-            .is_err()); // > deadline
+        assert!(
+            d.clone()
+                .with_operation_deadline(Duration::from_secs(1))
+                .is_err()
+        ); // < attempt timeout
+        assert!(
+            d.clone()
+                .with_attempt_timeout(Duration::from_millis(99))
+                .is_err()
+        );
+        assert!(
+            d.clone()
+                .with_attempt_timeout(Duration::from_secs(31))
+                .is_err()
+        ); // > deadline
         assert!(d.clone().with_read_attempts(0).is_err());
         assert!(d.clone().with_read_attempts(6).is_err());
         assert!(d.clone().with_read_attempts(5).is_ok());
-        assert!(d
-            .clone()
-            .with_backoff(Duration::from_secs(1), Duration::from_millis(500))
-            .is_err());
-        assert!(d
-            .clone()
-            .with_backoff(Duration::from_millis(10), Duration::from_millis(10))
-            .is_ok());
-        assert!(d
-            .clone()
-            .with_session_deadline(Duration::from_secs(61))
-            .is_err());
-        assert!(d
-            .clone()
-            .with_permit_validity(Duration::from_millis(9))
-            .is_err());
+        assert!(
+            d.clone()
+                .with_backoff(Duration::from_secs(1), Duration::from_millis(500))
+                .is_err()
+        );
+        assert!(
+            d.clone()
+                .with_backoff(Duration::from_millis(10), Duration::from_millis(10))
+                .is_ok()
+        );
+        assert!(
+            d.clone()
+                .with_session_deadline(Duration::from_secs(61))
+                .is_err()
+        );
+        assert!(
+            d.clone()
+                .with_permit_validity(Duration::from_millis(9))
+                .is_err()
+        );
         assert!(d.with_permit_validity(Duration::from_secs(30)).is_ok());
     }
 

@@ -27,18 +27,18 @@ use manja::kite::envelope::{
     MonotonicElapsed, PayloadKind, RawObservation, ReceiveTime, SourceIdentity, SourceSequencer,
 };
 use manja::kite::obs::handle::Labels;
-use manja::kite::obs::schema::{series_bound, SourceMode};
+use manja::kite::obs::schema::{SourceMode, series_bound};
 use manja::kite::obs::{
     BridgeRecorder, InMemoryRecorder, Instrument, MetricRecorder, Observability,
 };
 use manja::kite::protocol::{InstrumentToken, OrderId};
+use manja::kite::ticker::Mode;
 use manja::kite::ticker::actor::lifecycle::ReconnectLimits;
 use manja::kite::ticker::actor::owner::{TickerBuilder, TickerEvent, TickerEvents, TickerLimits};
-use manja::kite::ticker::Mode;
 use tokio_tungstenite::tungstenite::Message;
+use tracing::Subscriber;
 use tracing::field::{Field, Visit};
 use tracing::span::{Attributes, Id, Record};
-use tracing::Subscriber;
 use tracing_subscriber::layer::{Context, Layer, SubscriberExt};
 
 use support::fixtures;

@@ -21,16 +21,16 @@ use std::time::{Duration, Instant};
 
 use manja::kite::decoder::adapter::{Adapter, DecodedEvent, VERSIONS};
 use manja::kite::decoder::framing::{
-    frame, DecodeDiagnosticKind, FramingLimits, Message, PacketFamily,
+    DecodeDiagnosticKind, FramingLimits, Message, PacketFamily, frame,
 };
-use manja::kite::decoder::packets::{decode_bytes, scaled, Packet, PacketErrorKind};
-use manja::kite::decoder::text::{parse, TextEvent, TextLimits};
+use manja::kite::decoder::packets::{Packet, PacketErrorKind, decode_bytes, scaled};
+use manja::kite::decoder::text::{TextEvent, TextLimits, parse};
 use manja::kite::envelope::{
     MonotonicElapsed, PayloadKind, RawObservation, ReceiveTime, RunId, SourceIdentity,
     SourceSequencer,
 };
-use manja::kite::obs::schema::SourceMode;
 use manja::kite::obs::Observability;
+use manja::kite::obs::schema::SourceMode;
 use manja::kite::protocol::scale::Segment;
 
 use support::capture::{read_capture, read_real_capture, read_ticker_fixture};
@@ -355,10 +355,11 @@ fn golden_text_scale_and_provenance() {
         .decode(&o)
         .unwrap();
     assert_eq!(d.versions, VERSIONS);
-    assert!(d
-        .events
-        .iter()
-        .all(|e| matches!(e, DecodedEvent::Packet { source, .. } if source == o.source())));
+    assert!(
+        d.events
+            .iter()
+            .all(|e| matches!(e, DecodedEvent::Packet { source, .. } if source == o.source()))
+    );
 }
 
 #[test]

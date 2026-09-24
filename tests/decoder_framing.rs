@@ -7,7 +7,7 @@
 mod support;
 
 use manja::kite::decoder::framing::{
-    frame, DecodeDiagnosticKind, FramingLimits, Message, PacketFamily,
+    DecodeDiagnosticKind, FramingLimits, Message, PacketFamily, frame,
 };
 
 use support::capture::{read_capture, read_real_capture, read_ticker_fixture};

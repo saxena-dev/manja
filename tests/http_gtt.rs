@@ -254,12 +254,14 @@ async fn the_trigger_list_decodes_both_documented_triggers() {
     );
     assert_eq!(fired.order_result.status, "failed");
     assert_eq!(fired.order_result.order_id, None, "an empty ID is no ID");
-    assert!(fired
-        .order_result
-        .rejection_reason
-        .as_deref()
-        .unwrap()
-        .starts_with("Your order price is lower than the current lower circuit limit"));
+    assert!(
+        fired
+            .order_result
+            .rejection_reason
+            .as_deref()
+            .unwrap()
+            .starts_with("Your order price is lower than the current lower circuit limit")
+    );
 }
 
 #[tokio::test]

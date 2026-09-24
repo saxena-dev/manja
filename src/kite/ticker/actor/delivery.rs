@@ -44,7 +44,7 @@
 use std::collections::VecDeque;
 use std::sync::{Arc, Mutex};
 
-use tokio::sync::{mpsc, OwnedSemaphorePermit, Semaphore};
+use tokio::sync::{OwnedSemaphorePermit, Semaphore, mpsc};
 use tokio::time::Instant;
 
 #[cfg(doc)]

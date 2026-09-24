@@ -429,17 +429,20 @@ async fn a_sliced_placement_reports_every_slice_including_failures() {
         SliceResult::Failed(e) => {
             assert_eq!(e.code, Some(400));
             assert_eq!(e.error_type.as_ref().unwrap().as_wire(), "MarginException");
-            assert!(e
-                .message
-                .as_deref()
-                .unwrap()
-                .starts_with("Insufficient funds"));
+            assert!(
+                e.message
+                    .as_deref()
+                    .unwrap()
+                    .starts_with("Insufficient funds")
+            );
         }
         other => panic!("{other:?}"),
     }
-    assert!(String::from_utf8(only(&h).body)
-        .unwrap()
-        .contains("autoslice=true"));
+    assert!(
+        String::from_utf8(only(&h).body)
+            .unwrap()
+            .contains("autoslice=true")
+    );
 
     // Supplemental, derived from the same fixture: the array form the
     // documentation shows (kite:orders.md:548-560), whose first entry is the
