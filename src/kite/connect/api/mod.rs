@@ -1,14 +1,11 @@
 //! API endpoint definitions and functions for interacting with Kite Connect API.
 //!
 //! This module organizes the various API groups for Kite Connect API. It includes
-//! submodules for managing sessions, user data, orders, portfolio, market data,
-//! and margins. Each submodule corresponds to a specific set of endpoints in
-//! Kite Connect API, making it easier to interact with different aspects of the
-//! trading platform.
+//! submodules for managing sessions, user data, orders, GTT orders, portfolio,
+//! market data, mutual funds, and margins. Each submodule corresponds to a specific set of
+//! endpoints in Kite Connect API, making it easier to interact with different
+//! aspects of the trading platform.
 //!
-use backoff::{ExponentialBackoff, ExponentialBackoffBuilder};
-use std::time::Duration;
-
 // Manages the `/session/` API group, including authentication and session management.
 mod session;
 pub use session::Session;
@@ -22,6 +19,15 @@ pub use user::User;
 // and status checks.
 mod orders;
 pub use orders::Orders;
+
+// Manages the `/mf/` API group: mutual fund orders, SIPs, holdings and
+// instruments.
+mod mutual_funds;
+pub use mutual_funds::MutualFunds;
+
+// Manages the `/gtt/` API group: Good Till Triggered orders.
+mod gtt;
+pub use gtt::Gtt;
 
 // Manages the `/portfolio/` API group, including holdings and positions.
 //
@@ -37,34 +43,3 @@ pub use market::Market;
 // requirements and charges.
 mod margins;
 pub use margins::{Charges, Margins};
-
-/// Creates an ExponentialBackoff policy with a specified rate limit.
-///
-/// This function sets up an exponential backoff policy to control the rate of
-/// API requests, ensuring compliance with rate limits by introducing a minimum
-/// interval between requests.
-///
-/// # Arguments
-///
-/// * `rate_limit_per_second` - The number of allowed API requests per second.
-///
-/// # Returns
-///
-/// An `ExponentialBackoff` instance configured with the specified rate limit.
-///
-/// # Example
-///
-/// ```ignore
-/// let backoff_policy = create_backoff_policy(10); // 10 requests per second
-/// ```
-fn create_backoff_policy(rate_limit_per_second: u64) -> ExponentialBackoff {
-    // Calculate the minimum duration between requests
-    let min_interval = Duration::from_secs_f64(1.0 / rate_limit_per_second as f64);
-
-    ExponentialBackoffBuilder::new()
-        .with_initial_interval(min_interval)
-        .with_multiplier(1.0) // No exponential increase in delay
-        .with_max_interval(min_interval) // Ensure max interval does not exceed rate limit
-        .with_max_elapsed_time(None) // No maximum elapsed time for retries
-        .build()
-}

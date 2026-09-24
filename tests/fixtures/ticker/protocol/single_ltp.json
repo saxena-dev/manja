@@ -1,0 +1,11 @@
+{
+  "description": "Single LTP packet (8 bytes) - synthetic",
+  "expected_packets": 1,
+  "expected_type": "Ltp",
+  "packet": {
+    "kind": "ltp",
+    "raw_len": 8,
+    "instrument_token": 256265,
+    "last_traded_price": 2245000
+  }
+}

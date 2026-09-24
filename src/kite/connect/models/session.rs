@@ -1,97 +1,100 @@
-//! User session type.
+//! The token exchange response (`kite:user.md:33-120`).
 //!
-//! This module provides structures and functions for managing user sessions
-//! and authentication in Kite Connect API.
+//! [`UserSession`] holds the user profile and the tokens a successful
+//! exchange returns. Every token is secret-wrapped: `Debug` redacts it, and
+//! the type implements no `Serialize`, so generic serialization cannot export
+//! a credential:
 //!
+//! ```compile_fail
+//! # fn f(s: manja::kite::connect::models::UserSession) {
+//! let _ = serde_json::to_string(&s);
+//! # }
+//! ```
+//!
+//! Reading a token is an explicit call, such as [`UserSession::credentials`].
+//! Nothing in the SDK stores or installs the returned tokens: the caller
+//! decides whether to keep them and which clients to build with them.
+//!
+use chrono::{DateTime, FixedOffset};
 use secrecy::{ExposeSecret, Secret};
-use serde::{ser::SerializeStruct, Deserialize, Deserializer, Serialize, Serializer};
+use serde::{Deserialize, Deserializer};
 
-/// Represents additional metadata for the user session.
-///
-#[derive(Debug, Serialize, Deserialize, Clone)]
+use crate::kite::connect::credentials::{AccessToken, ApiKey, CredentialError, Credentials};
+use crate::kite::protocol::datetime::parse_broker_datetime;
+
+/// Additional session metadata.
+#[derive(Clone, Debug, PartialEq, Eq, Deserialize)]
 pub struct Meta {
-    /// Consent for demat account.
-    demat_consent: String,
+    /// Demat consent: empty, `consent` or `physical`.
+    pub demat_consent: String,
 }
 
-/// Represents a user's session, including authentication tokens and profile
-/// information.
+/// A successful token exchange.
 ///
+/// The access token expires at 6 AM the next day unless invalidated earlier
+/// (`kite:user.md:115`). A refresh token is issued only to certain approved
+/// platforms (`kite:user.md:117`); an empty value is `None`.
 #[derive(Clone, Debug)]
 pub struct UserSession {
-    /// Type of user.
+    /// User's registered role, `individual` for retail users.
     pub user_type: String,
-    /// User's email address.
+    /// User's email.
     pub email: String,
-    /// User's email address.
+    /// User's real name.
     pub user_name: String,
-    /// User's short name.
+    /// Shortened name.
     pub user_shortname: String,
-    /// Broker's name.
+    /// Broker ID.
     pub broker: String,
-    /// List of exchanges enabled for the user.
+    /// Exchanges enabled for the user.
     pub exchanges: Vec<String>,
-    /// List of product types enabled for the user.
+    /// Margin products enabled for the user.
     pub products: Vec<String>,
-    /// List of order types enabled for the user.
+    /// Order types enabled for the user.
     pub order_types: Vec<String>,
-    /// URL to the user's avatar.
+    /// Avatar URL, if any.
     pub avatar_url: Option<String>,
-    /// Unique user ID.
+    /// User ID.
     pub user_id: String,
-    /// API key.
+    /// The API key the exchange was performed for.
     pub api_key: Secret<String>,
-    /// Access token for authentication.
+    /// The access token for subsequent requests.
     pub access_token: Secret<String>,
-    /// Public token for session validation.
+    /// Token for public session validation.
     pub public_token: Secret<String>,
-    /// Refresh token for extended access.
-    pub refresh_token: Secret<String>,
-    /// Encrypted token.
-    pub enctoken: Secret<String>,
-    /// Timestamp of the user's last login.
-    pub login_time: String,
-    /// Additional metadata for the session.
+    /// Refresh token, for approved platforms only.
+    pub refresh_token: Option<Secret<String>>,
+    /// The `enctoken`, if returned.
+    pub enctoken: Option<Secret<String>>,
+    /// Last login time (IST).
+    pub login_time: Option<DateTime<FixedOffset>>,
+    /// Additional metadata.
     pub meta: Option<Meta>,
 }
 
-// Custom implementation of `Serialize` for `UserSession` because secrets
-// should not be exposed.
-impl Serialize for UserSession {
-    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
-    where
-        S: Serializer,
-    {
-        let mut state = serializer.serialize_struct("UserSession", 16)?;
-        state.serialize_field("user_type", &self.user_type)?;
-        state.serialize_field("email", &self.email)?;
-        state.serialize_field("user_name", &self.user_name)?;
-        state.serialize_field("user_shortname", &self.user_shortname)?;
-        state.serialize_field("broker", &self.broker)?;
-        state.serialize_field("exchanges", &self.exchanges)?;
-        state.serialize_field("products", &self.products)?;
-        state.serialize_field("order_types", &self.order_types)?;
-        state.serialize_field("avatar_url", &self.avatar_url)?;
-        state.serialize_field("user_id", &self.user_id)?;
-        state.serialize_field("api_key", self.api_key.expose_secret())?;
-        state.serialize_field("access_token", self.access_token.expose_secret())?;
-        state.serialize_field("public_token", self.public_token.expose_secret())?;
-        state.serialize_field("refresh_token", self.refresh_token.expose_secret())?;
-        state.serialize_field("enctoken", self.enctoken.expose_secret())?;
-        state.serialize_field("login_time", &self.login_time)?;
-        state.serialize_field("meta", &self.meta)?;
-        state.end()
+impl UserSession {
+    /// Build runtime [`Credentials`] from the returned API key and access
+    /// token. This is the intentional export point; nothing else in the SDK
+    /// reads the tokens.
+    pub fn credentials(&self) -> Result<Credentials, CredentialError> {
+        Ok(Credentials::from_parts(
+            ApiKey::new(self.api_key.expose_secret().as_str())?,
+            AccessToken::new(self.access_token.expose_secret().as_str())?,
+        ))
     }
 }
 
-// Custom implementation of `Deserialize` for `UserSession`.
+fn non_empty(s: Option<String>) -> Option<Secret<String>> {
+    s.filter(|v| !v.is_empty()).map(Secret::new)
+}
+
 impl<'de> Deserialize<'de> for UserSession {
     fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
     where
         D: Deserializer<'de>,
     {
         #[derive(Deserialize)]
-        struct UserSessionFields {
+        struct Fields {
             user_type: String,
             email: String,
             user_name: String,
@@ -100,37 +103,46 @@ impl<'de> Deserialize<'de> for UserSession {
             exchanges: Vec<String>,
             products: Vec<String>,
             order_types: Vec<String>,
+            #[serde(default)]
             avatar_url: Option<String>,
             user_id: String,
             api_key: String,
             access_token: String,
             public_token: String,
-            refresh_token: String,
-            enctoken: String,
-            login_time: String,
+            #[serde(default)]
+            refresh_token: Option<String>,
+            #[serde(default)]
+            enctoken: Option<String>,
+            #[serde(default)]
+            login_time: Option<String>,
+            #[serde(default)]
             meta: Option<Meta>,
         }
 
-        let fields = UserSessionFields::deserialize(deserializer)?;
-
+        let f = Fields::deserialize(deserializer)?;
+        let login_time = f
+            .login_time
+            .map(|t| parse_broker_datetime(&t))
+            .transpose()
+            .map_err(serde::de::Error::custom)?;
         Ok(UserSession {
-            user_type: fields.user_type,
-            email: fields.email,
-            user_name: fields.user_name,
-            user_shortname: fields.user_shortname,
-            broker: fields.broker,
-            exchanges: fields.exchanges,
-            products: fields.products,
-            order_types: fields.order_types,
-            avatar_url: fields.avatar_url,
-            user_id: fields.user_id,
-            api_key: Secret::new(fields.api_key),
-            access_token: Secret::new(fields.access_token),
-            public_token: Secret::new(fields.public_token),
-            refresh_token: Secret::new(fields.refresh_token),
-            enctoken: Secret::new(fields.enctoken),
-            login_time: fields.login_time,
-            meta: fields.meta,
+            user_type: f.user_type,
+            email: f.email,
+            user_name: f.user_name,
+            user_shortname: f.user_shortname,
+            broker: f.broker,
+            exchanges: f.exchanges,
+            products: f.products,
+            order_types: f.order_types,
+            avatar_url: f.avatar_url,
+            user_id: f.user_id,
+            api_key: Secret::new(f.api_key),
+            access_token: Secret::new(f.access_token),
+            public_token: Secret::new(f.public_token),
+            refresh_token: non_empty(f.refresh_token),
+            enctoken: non_empty(f.enctoken),
+            login_time,
+            meta: f.meta,
         })
     }
 }

@@ -1,261 +1,187 @@
 //! Order related enums.
 //!
-//! This module defines various enums representing the attributes and statuses
-//! of trading orders. It provides a comprehensive set of enums to manage order
-//! varieties, statuses, types, product types, validity, and transaction types,
-//! which are essential for placing and managing orders in a trading system.
+//! Each enum lists the values documented in
+//! `kite:orders.md:19-40` (and, for
+//! [`OrderStatus::Update`], `kite:postbacks.md:67`). `Display` and `Serialize`
+//! produce the exact wire string, which is also used for URL routing.
 //!
-//! Additionally, `fmt::Display` trait has been implemented for each enum, enabling
-//! easy conversion to their string representations. This is particularly useful
-//! for logging, debugging, and routing API requests based on order attributes.
+//! Deserializing one of these enums directly is strict: an unknown string is
+//! an error. Response DTOs wrap them in
+//! [`Inbound`](crate::kite::protocol::Inbound), which preserves an unknown
+//! value instead; request DTOs take the plain enum, so an unknown inbound
+//! value can never be sent as a command.
 //!
-use std::fmt;
+use crate::kite::protocol::enums::wire_enum;
 
-use serde::{Deserialize, Serialize};
-
-/// Represents the variety of an order.
-///
-/// This enum contains several constant values used for placing different types of orders.
-///
-#[derive(Debug, Serialize, Deserialize)]
+/// The variety of an order, which selects the placement route.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum OrderVariety {
     /// Regular order.
-    #[serde(rename = "regular")]
     Regular,
-
     /// After Market Order.
-    #[serde(rename = "amo")]
     AfterMarket,
-
     /// Cover Order.
-    #[serde(rename = "co")]
     Cover,
-
     /// Iceberg Order.
-    #[serde(rename = "iceberg")]
     Iceberg,
-
     /// Auction Order.
-    #[serde(rename = "auction")]
     Auction,
 }
 
-impl fmt::Display for OrderVariety {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let display_str = match self {
-            // NOTE: String representation is primarily used for routing to the
-            // particulart API endpoint for placing orders
-            OrderVariety::Regular => "regular",
-            OrderVariety::AfterMarket => "amo",
-            OrderVariety::Cover => "co",
-            OrderVariety::Iceberg => "iceberg",
-            OrderVariety::Auction => "auction",
-        };
-        write!(f, "{}", display_str)
-    }
-}
+wire_enum!(OrderVariety {
+    Regular => "regular",
+    AfterMarket => "amo",
+    Cover => "co",
+    Iceberg => "iceberg",
+    Auction => "auction",
+});
 
-/// Represents the various statuses an order can have during its lifecycle.
+/// The status of an order.
 ///
-/// The status field in the order response shows the current state of the order.
-/// The most common statuses are OPEN, COMPLETE, CANCELLED, and REJECTED.
-/// An order can traverse through several interim and temporary statuses during
-/// its lifetime. For example, when an order is first placed or modified, it
-/// instantly passes through several stages before reaching its end state. Some
-/// of these are highlighted below.
-///
-#[derive(Debug, Serialize, Deserialize)]
+/// The most common statuses are OPEN, COMPLETE, CANCELLED and REJECTED; an
+/// order passes through several interim statuses. Statuses not listed here
+/// arrive as [`Inbound::Unknown`](crate::kite::protocol::Inbound::Unknown).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum OrderStatus {
-    /// The order has been placed and is currently open.
-    #[serde(rename = "OPEN")]
+    /// The order is open.
     Open,
-
     /// The order has been completely filled.
-    #[serde(rename = "COMPLETE")]
     Complete,
-
     /// The order has been cancelled.
-    #[serde(rename = "CANCELLED")]
     Cancelled,
-
     /// The order has been rejected.
-    #[serde(rename = "REJECTED")]
     Rejected,
-
     /// Order request has been received by the backend.
-    #[serde(rename = "PUT ORDER REQ RECEIVED")]
     PutOrderReqReceived,
-
     /// Order pending validation by the RMS (Risk Management System).
-    #[serde(rename = "VALIDATION PENDING")]
     ValidationPending,
-
     /// Order is pending registration at the exchange.
-    #[serde(rename = "OPEN PENDING")]
     OpenPending,
-
     /// Order's modification values are pending validation by the RMS.
-    #[serde(rename = "MODIFY VALIDATION PENDING")]
     ModifyValidationPending,
-
     /// Order's modification values are pending registration at the exchange.
-    #[serde(rename = "MODIFY PENDING")]
     ModifyPending,
-
     /// Order's placed but the fill is pending based on a trigger price.
-    #[serde(rename = "TRIGGER PENDING")]
     TriggerPending,
-
     /// Order's cancellation request is pending registration at the exchange.
-    #[serde(rename = "CANCEL PENDING")]
     CancelPending,
-
     /// Same as `PUT ORDER REQ RECEIVED`, but for AMOs (After Market Orders).
-    #[serde(rename = "AMO REQ RECEIVED")]
     AmoReqReceived,
+    /// Postback-only status: an open order was modified or partially filled
+    /// (`kite:postbacks.md:3`). It says nothing about the final order state.
+    Update,
 }
 
-impl fmt::Display for OrderStatus {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let display_str = match self {
-            OrderStatus::Open => "OPEN",
-            OrderStatus::Complete => "COMPLETE",
-            OrderStatus::Cancelled => "CANCELLED",
-            OrderStatus::Rejected => "REJECTED",
-            OrderStatus::PutOrderReqReceived => "PUT ORDER REQ RECEIVED",
-            OrderStatus::ValidationPending => "VALIDATION PENDING",
-            OrderStatus::OpenPending => "OPEN PENDING",
-            OrderStatus::ModifyValidationPending => "MODIFY VALIDATION PENDING",
-            OrderStatus::ModifyPending => "MODIFY PENDING",
-            OrderStatus::TriggerPending => "TRIGGER PENDING",
-            OrderStatus::CancelPending => "CANCEL PENDING",
-            OrderStatus::AmoReqReceived => "AMO REQ RECEIVED",
-        };
-        write!(f, "{}", display_str)
-    }
-}
+wire_enum!(OrderStatus {
+    Open => "OPEN",
+    Complete => "COMPLETE",
+    Cancelled => "CANCELLED",
+    Rejected => "REJECTED",
+    PutOrderReqReceived => "PUT ORDER REQ RECEIVED",
+    ValidationPending => "VALIDATION PENDING",
+    OpenPending => "OPEN PENDING",
+    ModifyValidationPending => "MODIFY VALIDATION PENDING",
+    ModifyPending => "MODIFY PENDING",
+    TriggerPending => "TRIGGER PENDING",
+    CancelPending => "CANCEL PENDING",
+    AmoReqReceived => "AMO REQ RECEIVED",
+    Update => "UPDATE",
+});
 
-/// Represents the type of an order, such as `market`, `limit`, `stoploss`, and
-/// `stoploss-market` orders.
-///
-/// This enum contains several constant values used for placing different types
-/// of orders.
-///
-#[derive(Debug, Serialize, Deserialize)]
+/// The type of an order.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum OrderType {
     /// Market order.
-    #[serde(rename = "MARKET")]
     Market,
-
     /// Limit order.
-    #[serde(rename = "LIMIT")]
     Limit,
-
     /// Stoploss order.
-    #[serde(rename = "SL")]
     Stoploss,
-
     /// Stoploss-market order.
-    #[serde(rename = "SL-M")]
     StoplossMarket,
 }
 
-impl fmt::Display for OrderType {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let display_str = match self {
-            OrderType::Market => "MARKET",
-            OrderType::Limit => "LIMIT",
-            OrderType::Stoploss => "SL",
-            OrderType::StoplossMarket => "SL-M",
-        };
-        write!(f, "{}", display_str)
-    }
-}
+wire_enum!(OrderType {
+    Market => "MARKET",
+    Limit => "LIMIT",
+    Stoploss => "SL",
+    StoplossMarket => "SL-M",
+});
 
-/// Represents the product type for an order, such as `cash and carry`, `normal`, and
-/// `margin intraday squareoff`.
-///
-/// This enum contains several constant values used for specifying the product type.
-///
-#[derive(Debug, Serialize, Deserialize)]
+/// The margin product of an order.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum ProductType {
     /// Cash & Carry for equity.
-    #[serde(rename = "CNC")]
     CashAndCarry,
-
     /// Normal for futures and options.
-    #[serde(rename = "NRML")]
     Normal,
-
     /// Margin Intraday Squareoff for futures and options.
-    #[serde(rename = "MIS")]
     MarginIntradaySquareoff,
+    /// Margin Trading Facility.
+    MarginTradingFacility,
 }
 
-impl fmt::Display for ProductType {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let display_str = match self {
-            ProductType::CashAndCarry => "CNC",
-            ProductType::Normal => "NRML",
-            ProductType::MarginIntradaySquareoff => "MIS",
-        };
-        write!(f, "{}", display_str)
-    }
-}
+wire_enum!(ProductType {
+    CashAndCarry => "CNC",
+    Normal => "NRML",
+    MarginIntradaySquareoff => "MIS",
+    MarginTradingFacility => "MTF",
+});
 
-/// Represents the validity of an order, such as `day`, `immediate or cancel`,
-/// and `time to live`.
-///
-/// This enum contains several constant values used for specifying the order validity.
-///
-#[derive(Debug, Serialize, Deserialize)]
+/// The validity of an order.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum OrderValidity {
     /// Regular order.
-    #[serde(rename = "DAY")]
     Day,
-
     /// Immediate or Cancel.
-    #[serde(rename = "IOC")]
     ImmediateOrCancel,
-
     /// Order validity in minutes.
-    #[serde(rename = "TTL")]
     TimeToLive,
 }
 
-impl fmt::Display for OrderValidity {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let display_str = match self {
-            OrderValidity::Day => "DAY",
-            OrderValidity::ImmediateOrCancel => "IOC",
-            OrderValidity::TimeToLive => "TTL",
-        };
-        write!(f, "{}", display_str)
-    }
-}
+wire_enum!(OrderValidity {
+    Day => "DAY",
+    ImmediateOrCancel => "IOC",
+    TimeToLive => "TTL",
+});
 
-/// Represents the transaction type, either `BUY` or `SELL`.
-///
-/// This enum contains constant values used for specifying the order transaction
-/// type.
-///
-#[derive(Debug, Serialize, Deserialize)]
+/// The transaction type, `BUY` or `SELL`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum TransactionType {
     /// Buy.
-    #[serde(rename = "BUY")]
     BUY,
-
     /// Sell.
-    #[serde(rename = "SELL")]
     SELL,
 }
 
-impl fmt::Display for TransactionType {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let display_str = match self {
-            TransactionType::BUY => "BUY",
-            TransactionType::SELL => "SELL",
-        };
-        write!(f, "{}", display_str)
+wire_enum!(TransactionType {
+    BUY => "BUY",
+    SELL => "SELL",
+});
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::kite::protocol::Inbound;
+
+    #[test]
+    fn wire_strings_round_trip_exactly() {
+        assert_eq!(OrderVariety::AfterMarket.to_string(), "amo");
+        assert_eq!(
+            serde_json::to_string(&OrderType::StoplossMarket).unwrap(),
+            "\"SL-M\""
+        );
+        let s: OrderStatus = serde_json::from_str("\"PUT ORDER REQ RECEIVED\"").unwrap();
+        assert_eq!(s, OrderStatus::PutOrderReqReceived);
+        let s: Inbound<OrderStatus> = serde_json::from_str("\"UPDATE\"").unwrap();
+        assert_eq!(s.known(), Some(&OrderStatus::Update));
+    }
+
+    #[test]
+    fn unknown_inbound_values_are_preserved_but_not_outbound() {
+        let p: Inbound<ProductType> = serde_json::from_str("\"BO\"").unwrap();
+        assert_eq!(p.as_wire(), "BO");
+        assert!(ProductType::try_from(p).is_err());
+        assert!(serde_json::from_str::<ProductType>("\"BO\"").is_err());
     }
 }

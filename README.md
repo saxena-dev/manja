@@ -1,96 +1,197 @@
 manja
 =====
 
+[![CI](https://github.com/saxena-dev/manja/actions/workflows/ci.yml/badge.svg)](https://github.com/saxena-dev/manja/actions/workflows/ci.yml)
+[![Coverage](https://codecov.io/gh/saxena-dev/manja/graph/badge.svg)](https://codecov.io/gh/saxena-dev/manja)
+[![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+[![Rust 1.95+](https://img.shields.io/badge/rust-1.95%2B-orange.svg)](https://www.rust-lang.org/)
+[![Docs.rs](https://docs.rs/manja/badge.svg)](https://docs.rs/manja)
+[![Crates.io](https://img.shields.io/crates/v/manja.svg)](https://crates.io/crates/manja)
+[![Downloads](https://img.shields.io/crates/d/manja.svg)](https://crates.io/crates/manja)
+
 > **Manja** (IPA: /maːŋdʒʱaː/) n.: A type of abrasive string utilized primarily for flying fighter kites, especially prevalent in South Asian countries. It is crafted by coating cotton string with powdered glass or a similar abrasive substance.
 
-This crate provides a Rust client library for [Zerodha](https://zerodha.com/)'s [Kite Connect](https://kite.trade/) trading APIs (a set of REST-like HTTP APIs).
+An asynchronous Rust client library for [Zerodha](https://zerodha.com/)'s
+[Kite Connect](https://kite.trade/) HTTP and WebSocket APIs.
 
-## `manja` Features
+## Features and MSRV
 
-`manja` strives to improve the developer experience by providing better support in IDEs with features like auto-completion, type-inference, and inline documentation.
+| Feature | What it adds | Default |
+|---|---|---|
+| `http` | `HTTPClient` and its resources: session, user, orders, GTT, portfolio, market, mutual funds, margins and charges | yes |
+| `ticker` | the supervised single-owner WebSocket ticker, plus the deprecated legacy client | yes |
+| `decoder` | pure, bounded decoding of binary and text ticker messages, and a provenance adapter | yes |
 
-- [x] **Type safe**
-    - *Compile-time Type Checking*: type safety ensures that errors related to type mismatches are caught during compilation rather than at runtime.
-    - *Consistent Data Models*: `manja` uses strongly typed data models that match Kite Connect API's expected inputs and outputs.
-    - *Enhanced Security*: by ensuring that only valid data types are sent to and received from the API, the risk of data-related vulnerabilities is reduced.
-    - *Automatic Serialization/Deserialization*: `manja` handles the serialization (converting data structures to JSON) and deserialization (converting JSON responses back to data structures) automatically and correctly. This ensures that the data sent to and received from Kite Connect API adheres to the expected types.
-    
-- [x] **Asynchronous**: built on the performant `tokio` async-runtime, `manja` delivers unmatched performance, ensuring your applications run faster and more efficiently than ever before.
-    - *Resource Efficiency*: maximize the use of your system's resources. `manja`'s asynchronous nature allows for optimal resource management, reducing overhead and improving overall performance.
-    - *Concurrent Task Handling*: manage multiple tasks simultaneously without sacrificing performance or reliability.
-    - *Improved latency*: experience reduced latency and faster response times, ensuring your applications are always responsive.
+With no features, the crate is the common slice only (credentials, models, envelopes,
+observability types, protocol types): no Tokio, no network stack. `http` does not pull in
+the WebSocket stack, and `ticker` pulls in neither the HTTP stack nor the decoder.
+`ticker` and `decoder` together enable `kite::ticker::typed`.
 
-- [x] **Distributed Logging**: stay ahead of issues with real-time distributed logging using the `tracing` crate.
-    - *Streamline Development*: facilitate smoother development cycles with better debugging and faster issue resolution.
-    - *Reduce Downtime*: with real-time insights and quick access to logs, identify and resolve issues faster, minimizing downtime.
-    - *Enhance User Experience*: quickly address errors and performance bottlenecks to provide a better experience for your users.
+The minimum supported Rust version is **1.95.0**.
 
-- [x] **WebSocket** support for streaming binary market data.
-    - *Auto-reconnect Mechanism*: `manja` provides a reliable async WebSocket client with a configurable exponential backoff retry mechanism.
- 
-- [x] **WebDriver** integration for retrieving `request token` from the redirect URL after successfully authenticating with the Kite platform.
+## Quick start
 
+```rust
+use futures_util::StreamExt;
+use manja::kite::connect::client::HTTPClient;
+use manja::kite::connect::config::Config;
+use manja::kite::connect::credentials::Credentials;
+use manja::kite::protocol::InstrumentToken;
+use manja::kite::ticker::actor::owner::{TickerBuilder, TickerEvent};
+use manja::kite::ticker::Mode;
 
+async fn run() -> Result<(), Box<dyn std::error::Error>> {
+    let credentials = Credentials::new("api_key", "access_token")?;
 
-## Kite Connect 3.0 API: Supported Endpoints
+    let client = HTTPClient::new(Config::default())?.with_credentials(credentials.clone());
+    let _profile = client.user().profile().await?;
 
-- [x] **User**
-    - [x] POST      `/session/token`                Authenticate and obtain the `access_token` after the login flow
-    - [x] GET       `/user/profile`                 Retrieve the user profile
-    - [x] GET       `/user/margins/:segment`        Retrieve detailed funds and margin information
-    - [x] DELETE    `/session/token`                Logout and invalidate the API session and `access_token`
-- [x] **Orders**
-    - [x] POST      `/orders/:variety`              Place an order of a particular variety
-    - [x] PUT       `/orders/:variety/:order_id`    Modify an open or pending order
-    - [x] DELETE    `/orders/:variety/:order_id`    Cancel an open or pending order
-    - [x] GET       `/orders`                       Retrieve the list of all orders (open and executed) for the day
-    - [x] GET       `/orders/:order_id`             Retrieve the history of a given order
-    - [x] GET       `/trades`                       Retrieve the list of all executed trades for the day
-    - [x] GET       `/orders/:order_id/trades`      Retrieve the trades generated by an order
-- [ ] **GTT - Good Till Triggered orders**
-    - [ ] POST      `/gtt/triggers`                 Places a GTT
-    - [ ] GET       `/gtt/triggers`                 Retrieve a list of all GTTs visible in GTT order book
-    - [ ] GET       `/gtt/triggers/:id`             Retrieve an individual trigger
-    - [ ] PUT       `/gtt/triggers/:id`             Modify an active GTT
-    - [ ] DELETE    `/gtt/triggres/:id`             Delete an active GTT
-- [x] **Portfolio**
-    - [x] GET       `/portfolio/holdings`           Retrieve the list of long term equity holdings
-    - [x] GET       `/portfolio/positions`          Retrieve the list of short term positions
-    - [x] PUT       `/portfolio/positions`          Convert the margin product of an open position
-    - [x] GET       `/portfolio/holdings/auctions`  Retrieve the list of auctions that are currently being held
-    - [ ] POST      `/portfolio/holdings/authorise` Place an electronic authorisation to debit shares and settle the transactions
-- [x] **Market quotes and instruments**
-    - [x] GET       `/instruments`                  Retrieve the CSV dump of all tradable instruments
-    - [x] GET       `/instruments/:exchange`        Retrieve the CSV dump of instruments in the particular exchange
-    - [x] GET       `/quote`                        Retrieve the full market quotes for one or more instruments
-    - [x] GET       `/quote/ohlc`                   Retrieve OHLC quotes for one or more instruments
-    - [x] GET       `/quote/ltp`                    Retrieve LTP quotes for one or more instruments
-- [ ] **Historical candle data**
-    - [ ] GET       `/instruments/historical/:instrument_token/:interval`   Retrieve historical candle records for a given instrument
-- [ ] **Mutual funds**
-    - [ ] POST      `/mf/orders`                    Place a buy or sell order
-    - [ ] DELETE    `/mf/orders/:order_id`          Cancel an open or pending order
-    - [ ] GET       `/mf/orders`                    Retrieve the list of all orders (open and executed) over the last 7 days
-    - [ ] GET       `/mf/orders/:order_id`          Retrieve an individual order
-    - [ ] POST      `/mf/sips`                      Place a SIP order
-    - [ ] PUT       `/mf/sips/:order_id`            Modify an open SIP order
-    - [ ] DELETE    `/mf/sips/:order_id`            Cancel an open SIP order
-    - [ ] GET       `/mf/sips`                      Retrieve the list of all open SIP orders
-    - [ ] GET       `/mf/sips/:order_id`            Retrieve an individual SIP order
-    - [ ] GET       `/mf/holdings`                  Retrieve the list of mutual fund holdings available in the DEMAT
-    - [ ] GET       `/mf/instruments`               Retrieve the master list of all mutual funds available on the platform
-- [x] **Margin calculation**
-    - [x] POST      `/margins/orders`               Calculates margins for each order considering the existing positions and open orders
-    - [x] POST      `/margins/basket`               Calculates margins for spread orders
-    - [x] POST      `/charges/orders`               Calculates order-wise charges for orderbook
+    let (handle, mut events, guard) = TickerBuilder::new(credentials).spawn()?;
+    handle.subscribe([InstrumentToken::new(408065)], Mode::Full).await?;
+    while let Some(item) = events.next().await {
+        if let TickerEvent::Raw(observation) = item? {
+            let _bytes = observation.payload().as_bytes();
+        }
+    }
+    guard.join().await;
+    Ok(())
+}
+```
 
-- [x] **WebSocket streaming**
-    - [x] Auto-reconnect mechanism with subscription 
+## Examples
 
-### Disclaimer
+Every example runs against loopback servers that serve the official
+[`kiteconnect-mocks`](https://github.com/zerodha/kiteconnect-mocks) responses or the
+vendored ticker bytes. None contacts a live endpoint unless you ask it to with inputs you
+supply.
 
-**Important Notice**:
+| Example | Shows | Features |
+|---|---|---|
+| `http_client` | profile, funds, holdings, positions and orders; order construction and placement with a dispatch permit; quotes with missing keys; diagnostics; a host-owned tracing formatter and in-memory metrics | `http` |
+| `session` | pre-session token exchange and invalidation without a secret; `live` mode only with supplied inputs (secret on stdin) | `http` |
+| `ticker` | raw heartbeat, binary and text delivery; subscribe, set mode, unsubscribe; revisions and lifecycle; status; clean shutdown | `ticker` |
+| `ticker_typed` | the ticker composed with the decoder: each observation with its decoded packets | `ticker`, `decoder` |
+| `decode_offline` | framing, packet decoding and provenance over a captured file, with no runtime | `decoder` |
 
-* The `manja` crate is currently in development and should be considered unstable. The API is subject to change without notice, and breaking changes are likely to occur.
+```text
+cargo run --example http_client
+cargo run --example decode_offline --no-default-features --features decoder
+```
 
-* The software is provided "as-is" without any warranties, express or implied. The author and contributors of this SDK do not take responsibility for any financial losses, damages, or other issues that may arise from the use of this project.
+## What the SDK guarantees, and what it does not
+
+**Credentials.** A client or ticker holds an immutable `Credentials` snapshot (API key
+and access token) that you supply. The SDK never logs in, stores, refreshes or
+invalidates credentials on its own. Token exchange borrows the API secret for one call;
+invalidation takes no secret. Tokens and secrets never appear in `Debug`, errors,
+diagnostics, spans or metric labels.
+
+**HTTP responses.** Success requires a 2xx status and a `status: "success"` envelope
+whose data matches the endpoint's type. Anything else is an `HttpError` with a
+category, the endpoint template, the HTTP status and broker error type if any, the
+attempt number, and **stage evidence**: `NotStarted` only when the SDK knows the request
+never left the process, `Started` once the broker may have received it.
+
+**Retries, admission and permits.** Reads and margin calculations retry transient
+failures (429, 502–504, transport faults, attempt timeouts) with capped, jittered backoff
+within a total deadline. Order placement, modification, cancellation, position
+conversion, holdings authorisation, GTT placement, modification and deletion, and the
+session operations make **exactly one attempt**: a lost response is reported, never
+retried or assumed.
+Admission enforces the documented quotas (quote 1/s; historical candles 3/s; orders
+10/s, 400/min, 5000/day; 25 modifications per order; others 10/s). A `DispatchPermit` from
+`HTTPClient::admit` reserves capacity for one specific order, position or GTT mutation,
+expires after one second, and is consumed by use.
+
+**Units and values.** Order and quote models use the broker's JSON numbers. Ticker
+prices are raw `int32` integers; convert with the segment you supply (currencies ÷ 10⁷,
+others ÷ 100; the BSE currency segment has no verified scale and is refused). Broker
+datetimes without an offset are IST. Values the SDK does not know (a new order status,
+exchange or text message type) are preserved as `Inbound::Unknown`, never coerced, and
+never usable as outbound values. Optional broker fields are `Option`s; an empty refresh
+token is `None`.
+
+**Bounds.** Every queue, body, payload, count and wait has a documented default, minimum
+and maximum (`HttpLimits`, `SchedulerLimits`, `AdmissionLimits`, `TickerLimits`,
+`ReconnectLimits`, `FramingLimits`, `TextLimits`). Exceeding one is an explicit error.
+
+**Ticker ownership and delivery.** One owner task holds the socket, epochs, sequence and
+termination; you get a `TickerHandle` (clone, send, sync), the one primary
+`TickerEvents` receiver, and a `TaskGuard`. Every binary and text message, heartbeats
+included, is delivered raw before any decoding, in source order with lifecycle events.
+The queue is bounded by messages, retained bytes, payload size, oldest age and delivery
+wait; a consumer that falls behind ends delivery with an explicit error rather than a
+silent drop. Reconnects are bounded, get fresh epochs, report gap facts without
+backfilling, and restore the desired subscriptions (subscribe, then mode) before
+`Active`. A 401 or 403 handshake stops the ticker. The stream ends with `None` only after
+a clean shutdown; any other end yields one error first.
+
+**Acceptance, acknowledgement, fill and freshness.** A subscription command completes
+when the owner accepts it, with a revision; `CommandsSent` means it was written to the
+socket, not that the broker acted on it. `Active` means the desired map was written to a
+connection, not that quotes are current. An order receipt means the broker accepted the
+request, not that it filled; a GTT receipt names the trigger, not that it fired. Whether market data is current is yours to decide.
+
+**Cancellation and concurrency.** Futures are lazy: dropping one before its first poll
+does nothing. Dropping an HTTP future after dispatch does not cancel anything at the
+broker. Dropping a ticker command future after its first poll does not withdraw an
+accepted command. Clients are cheap to clone and share one transport and admission scope
+with no client-wide lock.
+
+**Observability.** Nothing is installed globally. Pass an `Observability` handle with
+your own `MetricRecorder` (or none), and your own `tracing` subscriber; spans and metrics
+use closed label domains only. `HTTPClient::diagnostics` and `TickerHandle::status` work
+with no collector at all.
+
+## Documentation
+
+- [`docs/contract.md`](docs/contract.md): capabilities, runtime bounds with their
+  defaults and ranges, the observability schema, and the decisions behind them.
+- [`docs/verification.md`](docs/verification.md): fixtures, test targets, decoder
+  qualification and observability budgets.
+- [`docs/migration.md`](docs/migration.md): changes from 0.1.
+- [`docs/kite-sources.toml`](docs/kite-sources.toml): the Kite Connect documentation
+  pages cited as `kite:<page>.md:<lines>`, with the time each was accessed and its
+  SHA-256. `scripts/verify-kite-sources.sh` checks them against the live pages.
+
+## Supported Kite Connect 3.0 endpoints
+
+- **Session**: `POST /session/token` (exchange), `DELETE /session/token` (invalidate)
+- **User**: `GET /user/profile`, `GET /user/margins`, `GET /user/margins/:segment`
+- **Orders**: `POST /orders/:variety`, `PUT /orders/:variety/:order_id`,
+  `DELETE /orders/:variety/:order_id`, `GET /orders`, `GET /orders/:order_id`,
+  `GET /trades`, `GET /orders/:order_id/trades`
+- **GTT**: `POST /gtt/triggers`, `GET /gtt/triggers`, `GET /gtt/triggers/:id`,
+  `PUT /gtt/triggers/:id`, `DELETE /gtt/triggers/:id`
+- **Portfolio**: `GET /portfolio/holdings`, `GET /portfolio/positions`,
+  `PUT /portfolio/positions`, `GET /portfolio/holdings/auctions`,
+  `POST /portfolio/holdings/authorise` (starts the depository flow; the portal is yours)
+- **Market**: `GET /instruments`, `GET /instruments/:exchange`, `GET /quote`,
+  `GET /quote/ohlc`, `GET /quote/ltp`
+- **Historical data**: `GET /instruments/historical/:instrument_token/:interval`
+- **Mutual funds** (read-only): `GET /mf/orders`, `GET /mf/orders/:order_id`,
+  `GET /mf/sips`, `GET /mf/holdings`, `GET /mf/instruments`
+- **Margins and charges**: `POST /margins/orders`, `POST /margins/basket`,
+  `POST /charges/orders`
+- **WebSocket**: binary market data (LTP, quote, full and index packets), text order
+  updates, errors and messages
+
+Not supported: placing or changing mutual fund orders and SIPs, which the documentation
+does not provide.
+
+## Migrating from 0.1
+
+The browser login flow is removed, several response types and error behaviors were
+corrected, and the legacy WebSocket client is deprecated.
+[`docs/migration.md`](docs/migration.md) lists every change. The short version: obtain
+the request token yourself, call `client.session(api_key).exchange(...)`, build
+`Credentials` from the returned session, and use `TickerBuilder` instead of
+`WebSocketClient`.
+
+## Disclaimer
+
+* `manja` is in development and should be considered unstable; its API may change.
+* The software is provided "as-is" without any warranties, express or implied. The author
+  and contributors take no responsibility for any financial losses, damages, or other
+  issues that may arise from its use. Nothing in this crate is a statement that data is
+  fresh, complete or fit for trading.

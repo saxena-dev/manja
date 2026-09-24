@@ -14,7 +14,7 @@ use sha2::{Digest, Sha256};
 ///
 /// * `api_key` - The API key obtained from the Kite Connect developer portal.
 /// * `request_token` - The one-time token obtained after the login flow, used
-///     to request the access token.
+///   to request the access token.
 /// * `api_secret` - The API secret obtained from the Kite Connect developer portal.
 ///
 /// # Returns

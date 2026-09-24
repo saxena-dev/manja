@@ -1,200 +1,389 @@
-//! User credential type for accessing Kite Connect API.
+//! Credential types for Kite Connect.
 //!
-//! This module provides the `KiteCredentials` struct for securely handling
-//! user credentials required for accessing Kite Connect API.
+//! [`Credentials`] is the immutable runtime snapshot that ordinary
+//! authenticated HTTP requests and the ticker use. It holds exactly an
+//! [`ApiKey`] and an [`AccessToken`]: no API secret, password, TOTP key,
+//! browser setting or lifecycle callback. [`ApiSecret`] and [`RequestToken`]
+//! exist only to be borrowed by the explicit token-exchange operation, and are
+//! never stored in a snapshot.
 //!
-//! # Environment variables:
+//! Every type in this module redacts its secret material in `Debug`, and none
+//! of them implements `Serialize`, so generic serialization can never export a
+//! credential. Reading a secret back is an explicit call to an `expose_*`
+//! method.
 //!
-//! The following environment variables must be set to use the functionality
-//! in this module:
+//! Nothing in this module reads environment variables, secret stores or
+//! files, and nothing here performs a network request: constructing, cloning
+//! and dropping a snapshot never exchanges, refreshes or invalidates a
+//! session. Cloning a snapshot copies it; it does not create shared revocation.
+//! Replacing credentials means constructing a new snapshot and a new client.
 //!
-//! - `KITECONNECT_API_KEY`: API key available from the Kite Connect developer portal
-//! - `KITECONNECT_API_SECRET`: API secret available from the Kite Connect developer portal
-//! - `KITECONNECT_USER_ID`: User login ID
-//! - `KITECONNECT_PASSWORD`: User password
-//! - `KITECONNECT_TOTP_KEY`: Time-based One-Time Password for 2FA, available
-//!     from the Kite web portal
+//! ```
+//! use manja::kite::connect::credentials::Credentials;
 //!
-use secrecy::Secret;
+//! let creds = Credentials::new("my_api_key", "my_access_token").unwrap();
+//! assert_eq!(creds.api_key().as_str(), "my_api_key");
+//! // Debug output never contains the token.
+//! assert!(!format!("{creds:?}").contains("my_access_token"));
+//! // Header construction is explicit and fallible at construction time.
+//! assert_eq!(
+//!     creds.authorization_header().expose(),
+//!     "token my_api_key:my_access_token"
+//! );
+//! // Invalid input is a configuration error, not a panic.
+//! assert!(Credentials::new("key", "bad\ntoken").is_err());
+//! ```
+//!
+use std::fmt;
 
-/// Represents Kite Connect credentials.
-///
-/// This struct securely stores the credentials required to access Kite Connect APIs.
-/// When `KiteCredentials` is dropped, its contents are zeroed in memory to prevent leakage.
-///
-/// # Examples
-///
-/// Creating new credentials from environment variables:
-///
-/// ```ignore
-/// let credentials = KiteCredentials::load_from_env();
-/// ```
-///
-/// Creating new credentials directly:
-///
-/// ```ignore
-/// let credentials = KiteCredentials::new("api_key", "api_secret", "user_id", "user_pwd", "totp_key");
-/// ```
-///
-#[derive(Clone, Debug)]
-pub struct KiteCredentials {
-    api_key: Secret<String>,
-    api_secret: Secret<String>,
-    user_id: Secret<String>,
-    user_pwd: Secret<String>,
-    totp_key: Secret<String>,
+use secrecy::{ExposeSecret, Secret};
+
+/// Placeholder used wherever a secret would otherwise be rendered.
+pub(crate) const REDACTED: &str = "<redacted>";
+
+/// Why a credential value was rejected. The rejected value is never included.
+#[derive(Clone, Debug, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct CredentialError {
+    field: &'static str,
+    kind: CredentialErrorKind,
 }
 
-impl Default for KiteCredentials {
-    /// Creates `KiteCredentials` using values from environment variables.
-    ///
-    /// If the environment variables are not set, the corresponding fields
-    /// will be empty strings.
-    ///
-    fn default() -> Self {
-        // Default to loading credentials from environment variables
-        Self::load_from_env()
+/// Category of a [`CredentialError`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum CredentialErrorKind {
+    /// The value is empty.
+    Empty,
+    /// The value contains whitespace, a control character, a non-ASCII
+    /// character, or (for an API key) a `:` that would make the
+    /// `Authorization` header ambiguous.
+    InvalidCharacter,
+}
+
+impl CredentialError {
+    fn new(field: &'static str, kind: CredentialErrorKind) -> Self {
+        Self { field, kind }
+    }
+
+    /// Name of the rejected field, for example `"access_token"`.
+    pub fn field(&self) -> &'static str {
+        self.field
+    }
+
+    /// Why the field was rejected.
+    pub fn kind(&self) -> CredentialErrorKind {
+        self.kind
     }
 }
 
-impl KiteCredentials {
-    /// Creates `KiteCredentials`.
-    ///
-    /// Intended to be used from a customs credentials provider implementation.
-    /// It is __NOT__ safe to hardcode credentials in your application.
-    ///
-    /// # Arguments
-    ///
-    /// * `api_key` - The API key for Kite Connect.
-    /// * `api_secret` - The API secret for Kite Connect.
-    /// * `user_id` - The user ID for Kite Connect.
-    /// * `user_pwd` - The user password for Kite Connect.
-    /// * `totp_key` - The TOTP key for 2FA.
-    ///
-    pub fn new<InS>(
-        api_key: InS,
-        api_secret: InS,
-        user_id: InS,
-        user_pwd: InS,
-        totp_key: InS,
-    ) -> Self
-    where
-        InS: Into<String>,
-    {
-        KiteCredentials {
-            api_key: Secret::new(api_key.into()),
-            api_secret: Secret::new(api_secret.into()),
-            user_id: Secret::new(user_id.into()),
-            user_pwd: Secret::new(user_pwd.into()),
-            totp_key: Secret::new(totp_key.into()),
+impl fmt::Display for CredentialError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let why = match self.kind {
+            CredentialErrorKind::Empty => "is empty",
+            CredentialErrorKind::InvalidCharacter => "contains an invalid character",
+        };
+        write!(f, "credential field `{}` {why}", self.field)
+    }
+}
+
+impl std::error::Error for CredentialError {}
+
+// Tokens and keys are printable ASCII without whitespace. Checking this at
+// construction makes every later header or query construction infallible.
+fn validate(field: &'static str, value: &str, allow_colon: bool) -> Result<(), CredentialError> {
+    if value.is_empty() {
+        return Err(CredentialError::new(field, CredentialErrorKind::Empty));
+    }
+    let ok = value
+        .bytes()
+        .all(|b| b.is_ascii_graphic() && (allow_colon || b != b':'));
+    if ok {
+        Ok(())
+    } else {
+        Err(CredentialError::new(
+            field,
+            CredentialErrorKind::InvalidCharacter,
+        ))
+    }
+}
+
+/// A secret string that can only be read through [`Self::expose`].
+///
+/// `Debug` prints `<redacted>`. Used for values built from credentials, such
+/// as the `Authorization` header and the WebSocket query string.
+#[derive(Clone)]
+pub struct SecretText(Secret<String>);
+
+impl SecretText {
+    /// Read the secret value. Callers must not log or persist it.
+    pub fn expose(&self) -> &str {
+        self.0.expose_secret()
+    }
+}
+
+impl fmt::Debug for SecretText {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(REDACTED)
+    }
+}
+
+/// The public Kite Connect API key of an app.
+///
+/// The key is not a secret in the protocol sense, but it identifies an
+/// account's app, so `Debug` redacts it and it never becomes a metric label.
+#[derive(Clone, PartialEq, Eq)]
+pub struct ApiKey(String);
+
+impl ApiKey {
+    /// Validate and wrap an API key.
+    pub fn new(value: impl Into<String>) -> Result<Self, CredentialError> {
+        let value = value.into();
+        validate("api_key", &value, false)?;
+        Ok(Self(value))
+    }
+
+    /// The key as sent on the wire.
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl fmt::Debug for ApiKey {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "ApiKey({REDACTED})")
+    }
+}
+
+macro_rules! secret_type {
+    ($(#[$doc:meta])* $name:ident, $field:literal, $expose:ident) => {
+        $(#[$doc])*
+        #[derive(Clone)]
+        pub struct $name(Secret<String>);
+
+        impl $name {
+            /// Validate and wrap the secret value.
+            pub fn new(value: impl Into<String>) -> Result<Self, CredentialError> {
+                let value = value.into();
+                validate($field, &value, true)?;
+                Ok(Self(Secret::new(value)))
+            }
+
+            /// Read the secret value. This is the only way to obtain it;
+            /// callers must not log or persist it.
+            pub fn $expose(&self) -> &str {
+                self.0.expose_secret()
+            }
         }
+
+        impl fmt::Debug for $name {
+            fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+                write!(f, concat!(stringify!($name), "({})"), REDACTED)
+            }
+        }
+    };
+}
+
+secret_type!(
+    /// A Kite Connect access token, obtained from token exchange.
+    AccessToken,
+    "access_token",
+    expose_secret
+);
+
+secret_type!(
+    /// A Kite Connect API secret.
+    ///
+    /// Only the explicit token-exchange operation borrows it, to compute the
+    /// checksum. It is never stored in a [`Credentials`] snapshot, a client or
+    /// a ticker.
+    ApiSecret,
+    "api_secret",
+    expose_secret
+);
+
+secret_type!(
+    /// The one-time request token returned by the browser login redirect.
+    RequestToken,
+    "request_token",
+    expose_secret
+);
+
+/// Immutable runtime credentials: an API key and an access token.
+///
+/// This is the only credential material ordinary HTTP requests and the ticker
+/// hold. Construction validates both values, so building the `Authorization`
+/// header or the WebSocket query string never fails afterwards.
+///
+/// The snapshot is immutable. Cloning it copies the values; a clone is not
+/// revoked when the original is dropped, and invalidating the session at the
+/// broker does not change either copy. To use new credentials, build a new
+/// snapshot and a new client.
+///
+/// `Credentials` implements neither `Serialize` nor `Deserialize`:
+///
+/// ```compile_fail
+/// let creds = manja::kite::connect::credentials::Credentials::new("k", "t").unwrap();
+/// let _ = serde_json::to_string(&creds);
+/// ```
+#[derive(Clone)]
+pub struct Credentials {
+    api_key: ApiKey,
+    access_token: AccessToken,
+}
+
+impl Credentials {
+    /// Validate and build a snapshot from an API key and an access token.
+    pub fn new(
+        api_key: impl Into<String>,
+        access_token: impl Into<String>,
+    ) -> Result<Self, CredentialError> {
+        Ok(Self::from_parts(
+            ApiKey::new(api_key)?,
+            AccessToken::new(access_token)?,
+        ))
     }
 
-    /// Loads credentials from environment variables.
-    ///
-    /// # Returns
-    ///
-    /// A `KiteCredentials` instance populated with values from environment variables.
-    ///
-    pub fn load_from_env() -> Self {
+    /// Build a snapshot from already validated parts.
+    pub fn from_parts(api_key: ApiKey, access_token: AccessToken) -> Self {
         Self {
-            api_key: std::env::var("KITECONNECT_API_KEY")
-                .unwrap_or_else(|_| "".to_string())
-                .into(),
-            api_secret: std::env::var("KITECONNECT_API_SECRET")
-                .unwrap_or_else(|_| "".to_string())
-                .into(),
-            user_id: std::env::var("KITECONNECT_USER_ID")
-                .unwrap_or_else(|_| "".to_string())
-                .into(),
-            user_pwd: std::env::var("KITECONNECT_PASSWORD")
-                .unwrap_or_else(|_| "".to_string())
-                .into(),
-            totp_key: std::env::var("KITECONNECT_TOTP_KEY")
-                .unwrap_or_else(|_| "".to_string())
-                .into(),
+            api_key,
+            access_token,
         }
     }
 
-    /// Returns the API key.
-    ///
-    /// # Returns
-    ///
-    /// A `Secret<String>` containing the API key.
-    ///
-    pub fn api_key(&self) -> Secret<String> {
-        self.api_key.clone()
+    /// The API key.
+    pub fn api_key(&self) -> &ApiKey {
+        &self.api_key
     }
 
-    /// Returns the API secret.
-    ///
-    /// # Returns
-    ///
-    /// A `Secret<String>` containing the API secret.
-    ///
-    pub fn api_secret(&self) -> Secret<String> {
-        self.api_secret.clone()
+    /// The access token. Reading its value requires
+    /// [`AccessToken::expose_secret`].
+    pub fn access_token(&self) -> &AccessToken {
+        &self.access_token
     }
 
-    /// Returns the user ID.
-    ///
-    /// # Returns
-    ///
-    /// A `Secret<String>` containing the user ID.
-    ///
-    pub fn user_id(&self) -> Secret<String> {
-        self.user_id.clone()
+    /// The `Authorization` header value, `token api_key:access_token`
+    /// (`kite:user.md:124`).
+    pub fn authorization_header(&self) -> SecretText {
+        SecretText(Secret::new(format!(
+            "token {}:{}",
+            self.api_key.as_str(),
+            self.access_token.expose_secret()
+        )))
     }
 
-    /// Returns the user password.
+    /// The WebSocket connection query string,
+    /// `api_key=…&access_token=…` (`kite:websocket.md:20`).
     ///
-    /// # Returns
-    ///
-    /// A `Secret<String>` containing the user password.
-    ///
-    pub fn user_pwd(&self) -> Secret<String> {
-        self.user_pwd.clone()
+    /// Both values are validated printable ASCII; the reserved query
+    /// characters `&`, `=`, `#`, `+`, `%` and `?` are percent-encoded.
+    pub fn websocket_query(&self) -> SecretText {
+        SecretText(Secret::new(format!(
+            "api_key={}&access_token={}",
+            encode_query_value(self.api_key.as_str()),
+            encode_query_value(self.access_token.expose_secret())
+        )))
     }
+}
 
-    /// Returns the TOTP key.
-    ///
-    /// # Returns
-    ///
-    /// A `Secret<String>` containing the TOTP key.
-    ///
-    pub fn totp_key(&self) -> Secret<String> {
-        self.totp_key.clone()
+impl fmt::Debug for Credentials {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Credentials")
+            .field("api_key", &self.api_key)
+            .field("access_token", &self.access_token)
+            .finish()
     }
+}
+
+// Percent-encode the characters that are significant inside a query value.
+pub(crate) fn encode_query_value(value: &str) -> String {
+    let mut out = String::with_capacity(value.len());
+    for b in value.bytes() {
+        match b {
+            b'&' | b'=' | b'#' | b'+' | b'%' | b'?' | b' ' => {
+                out.push_str(&format!("%{b:02X}"));
+            }
+            _ => out.push(b as char),
+        }
+    }
+    out
 }
 
 #[cfg(test)]
 mod test {
-    use secrecy::ExposeSecret;
-
     use super::*;
-    use std::env;
+
+    const SENTINEL: &str = "SENTINEL-s3cr3t-7f1c";
 
     #[test]
-    fn test_kite_credentials_default() {
-        // Setup env vars
-        env::set_var("KITECONNECT_API_KEY", "notanapikey42");
-        env::set_var("KITECONNECT_API_SECRET", "thatreallylongsupersecret42");
-        env::set_var("KITECONNECT_USER_ID", "XY12345");
-        env::set_var("KITECONNECT_PASSWORD", "ohsosecret");
-        env::set_var("KITECONNECT_TOTP_KEY", "JBSWY3DPEHPK3PXPZVZSWIDGNJQXGZLE");
+    fn snapshot_holds_key_and_token_only() {
+        let creds = Credentials::new("key", SENTINEL).unwrap();
+        assert_eq!(creds.api_key().as_str(), "key");
+        assert_eq!(creds.access_token().expose_secret(), SENTINEL);
+        // A clone is an independent copy.
+        let clone = creds.clone();
+        drop(creds);
+        assert_eq!(clone.access_token().expose_secret(), SENTINEL);
+    }
 
-        let kc = KiteCredentials::default();
+    #[test]
+    fn debug_and_errors_never_render_secrets() {
+        let creds = Credentials::new("key", SENTINEL).unwrap();
+        let renders = [
+            format!("{creds:?}"),
+            format!("{creds:#?}"),
+            format!("{:?}", creds.access_token()),
+            format!("{:?}", creds.authorization_header()),
+            format!("{:?}", creds.websocket_query()),
+            format!("{:?}", ApiSecret::new(SENTINEL).unwrap()),
+            format!("{:?}", RequestToken::new(SENTINEL).unwrap()),
+            // A nested value keeps the redaction.
+            format!("{:?}", Some(vec![creds.clone()])),
+        ];
+        for render in renders {
+            assert!(!render.contains(SENTINEL), "{render}");
+        }
+        let err = AccessToken::new(format!("{SENTINEL}\n")).unwrap_err();
+        assert!(!err.to_string().contains(SENTINEL));
+        assert!(!format!("{err:?}").contains(SENTINEL));
+    }
 
-        assert_eq!(kc.api_key().expose_secret(), &String::from("notanapikey42"));
+    #[test]
+    fn construction_is_fallible_and_explains_the_field() {
+        let err = Credentials::new("", "token").unwrap_err();
         assert_eq!(
-            kc.api_secret().expose_secret(),
-            &String::from("thatreallylongsupersecret42")
+            (err.field(), err.kind()),
+            ("api_key", CredentialErrorKind::Empty)
         );
-        assert_eq!(kc.user_id().expose_secret(), &String::from("XY12345"));
-        assert_eq!(kc.user_pwd().expose_secret(), &String::from("ohsosecret"));
+        let err = Credentials::new("key", "tok en").unwrap_err();
         assert_eq!(
-            kc.totp_key().expose_secret(),
-            &String::from("JBSWY3DPEHPK3PXPZVZSWIDGNJQXGZLE")
+            (err.field(), err.kind()),
+            ("access_token", CredentialErrorKind::InvalidCharacter)
         );
+        // A colon in the key would make `token key:token` ambiguous.
+        assert!(ApiKey::new("a:b").is_err());
+        assert!(AccessToken::new("a:b").is_ok());
+        assert!(AccessToken::new("tøken").is_err());
+        assert!(AccessToken::new("line\r\nbreak").is_err());
+    }
+
+    #[test]
+    fn header_and_query_are_built_from_the_snapshot() {
+        let creds = Credentials::new("key", "a&b=c").unwrap();
+        assert_eq!(creds.authorization_header().expose(), "token key:a&b=c");
+        assert_eq!(
+            creds.websocket_query().expose(),
+            "api_key=key&access_token=a%26b%3Dc"
+        );
+    }
+
+    #[test]
+    fn construction_reads_no_environment() {
+        // The legacy `load_from_env` path is gone: a snapshot contains only
+        // what the caller passed, whatever the process environment holds.
+        std::env::set_var("KITECONNECT_API_KEY", SENTINEL);
+        let creds = Credentials::new("explicit", "token").unwrap();
+        assert_eq!(creds.api_key().as_str(), "explicit");
     }
 }

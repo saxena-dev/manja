@@ -1,213 +1,286 @@
-//! Orders API group: `/orders/`
+//! Orders API group: `/orders/` and `/trades`.
 //!
-//! This module provides functionality to interact with the orders-related
-//! endpoints of Kite Connect API.
+//! Placing an order registers it with the OMS. That does not guarantee its
+//! receipt at the exchange, and its status is not known when placement
+//! returns (`kite:orders.md:42-52`). The
+//! acknowledgements returned here ([`OrderReceipt`]) therefore assert no
+//! fill, no final modification and no confirmed cancellation; the order book,
+//! order history and order updates report what happened.
 //!
-//! Placing an order implies registering it with the OMS via the API. This does
-//! not guarantee the order's receipt at the exchange. The fate of an order is
-//! dependent on several factors including market hours, availability of funds,
-//! risk checks and so on. Under normal circumstances, order placement, receipt
-//! by the OMS, transport to the exchange, execution, and the confirmation
-//! roundtrip happen instantly.
+//! Placement, modification and cancellation make exactly one transport
+//! attempt per call, including after an HTTP 429 or a lost response, and are
+//! validated before admission, so an invalid request sends nothing. A lost
+//! or malformed response after dispatch does not show whether the broker
+//! acted: the error's stage says so, and the caller decides what to do next.
 //!
-//! When an order is successfully placed, the API returns an `order_id`. The status
-//! of the order is not known at the moment of placing because of the aforementioned
-//! reasons.
+//! Order IDs are [`OrderId`]s, valid by construction, so no caller string
+//! can change a request path.
 //!
-//! Refer to the official [API documentation](https://kite.trade/docs/connect/v3/orders/).
+//! Each mutation has a `*_with_permit` variant that dispatches with a
+//! [`DispatchPermit`] obtained from `HTTPClient::admit`, giving the caller an
+//! explicit point between admission and dispatch.
 //!
-use backoff::ExponentialBackoff;
-
-use crate::kite::connect::api::create_backoff_policy;
 use crate::kite::connect::{
-    client::HTTPClient,
-    models::{KiteApiResponse, Order, OrderReceipt, Trade},
+    client::{HTTPClient, RowPolicy},
+    models::{
+        KiteApiResponse, ModifyOrderRequest, Order, OrderReceipt, OrderVariety, PlaceOrderRequest,
+        Row, Rows, Trade,
+    },
+    scheduler::DispatchPermit,
 };
 use crate::kite::error::Result;
+use crate::kite::protocol::OrderId;
 
-/// The order APIs let you place orders of different varities, modify and
-/// cancel pending orders, retrieve the daily order and more.
-///
+/// Order placement, modification and cancellation, the order book and the
+/// trade book.
 pub struct Orders<'c> {
     /// Reference to the HTTP client used for making API requests.
     pub client: &'c HTTPClient,
-    /// Backoff policy for retrying API requests.
-    backoff: ExponentialBackoff,
 }
 
 impl<'c> Orders<'c> {
-    /// Creates a new instance of `Orders` with default API rate limits.
-    ///
-    /// # Arguments
-    ///
-    /// * `client` - A reference to the `HTTPClient` used for making API requests.
-    ///
-    /// # Returns
-    ///
-    /// A new instance of `Orders`.
-    ///
+    /// Order APIs on `client`.
     pub fn new(client: &'c HTTPClient) -> Self {
-        Self {
-            client,
-            // Default API rate limit: 10 req/sec
-            backoff: create_backoff_policy(10),
-        }
+        Self { client }
     }
 
-    /// Sets a custom backoff policy for the `Orders` instance.
+    // ===== [ Mutations: one attempt each ] =====
+
+    /// Place an order: `POST /orders/{variety}`, form-encoded.
     ///
-    /// # Arguments
-    ///
-    /// * `backoff` - An `ExponentialBackoff` instance specifying the backoff policy.
-    ///
-    /// # Returns
-    ///
-    /// The `Orders` instance with the updated backoff policy.
-    ///
-    pub fn with_backoff(mut self, backoff: ExponentialBackoff) -> Self {
-        self.backoff = backoff;
-        self
+    /// The request is validated first; an invalid one is a `Validation`
+    /// error and nothing is sent.
+    pub async fn place_order(
+        &self,
+        request: &PlaceOrderRequest,
+    ) -> Result<KiteApiResponse<OrderReceipt>> {
+        self.place(request, None).await
     }
 
-    // ===== [ KiteConnect API endpoints ] =====
+    /// [`Self::place_order`] with admitted capacity from
+    /// `HTTPClient::admit(PermitTarget::PlaceOrder)`.
+    pub async fn place_order_with_permit(
+        &self,
+        request: &PlaceOrderRequest,
+        permit: DispatchPermit,
+    ) -> Result<KiteApiResponse<OrderReceipt>> {
+        self.place(request, Some(permit)).await
+    }
 
-    /// Places an order of a particular variety.
-    ///
-    /// Placing an order implies registering it with the OMS via the API. This does
-    /// not guarantee the order's receipt at the exchange. The fate of an order is
-    /// dependent on several factors including market hours, availability of funds,
-    /// risk checks and so on. Under normal circumstances, order placement, receipt
-    /// by the OMS, transport to the exchange, execution, and the confirmation
-    /// roundtrip happen instantly.
-    ///
-    /// When an order is successfully placed, the API returns an `order_id`. The status
-    /// of the order is not known at the moment of placing because of the aforementioned
-    /// reasons.
-    ///
-    /// # Arguments
-    ///
-    /// * `order` - A reference to an `Order` instance containing the order details.
-    ///
-    /// # Returns
-    ///
-    /// A `Result` containing a `KiteApiResponse` with an `OrderReceipt` on success.
-    ///
-    pub async fn place_order(&self, order: &Order) -> Result<KiteApiResponse<OrderReceipt>> {
+    async fn place(
+        &self,
+        request: &PlaceOrderRequest,
+        permit: Option<DispatchPermit>,
+    ) -> Result<KiteApiResponse<OrderReceipt>> {
         self.client
-            .post(&format!("/orders/{}", order.variety), order, &self.backoff)
+            .send_form(
+                reqwest::Method::POST,
+                &format!("/orders/{}", request.variety),
+                request.validate(),
+                request.form_pairs(),
+                permit,
+            )
             .await
     }
 
-    /// Modifies an open or pending order.
-    ///
-    /// As long as on order is open or pending in the system, certain attributes of
-    /// it may be modified.
-    ///
-    /// # Arguments
-    ///
-    /// * `variety` - The variety of the order (e.g., "regular", "amo").
-    /// * `order_id` - The unique ID of the order to be modified.
-    /// * `order` - A reference to an `Order` instance containing the modified order details.
-    ///
-    /// # Returns
-    ///
-    /// A `Result` containing a `KiteApiResponse` with an `OrderReceipt` on success.
-    ///
+    /// Modify an open or pending order: `PUT /orders/{variety}/{order_id}`,
+    /// form-encoded, sending only the fields that are set.
     pub async fn modify_order(
         &self,
-        variety: &str,
-        order_id: &str,
-        order: &Order,
+        variety: OrderVariety,
+        order_id: &OrderId,
+        request: &ModifyOrderRequest,
+    ) -> Result<KiteApiResponse<OrderReceipt>> {
+        self.modify(variety, order_id, request, None).await
+    }
+
+    /// [`Self::modify_order`] with admitted capacity from
+    /// `HTTPClient::admit(PermitTarget::ModifyOrder { order_id })`.
+    pub async fn modify_order_with_permit(
+        &self,
+        variety: OrderVariety,
+        order_id: &OrderId,
+        request: &ModifyOrderRequest,
+        permit: DispatchPermit,
+    ) -> Result<KiteApiResponse<OrderReceipt>> {
+        self.modify(variety, order_id, request, Some(permit)).await
+    }
+
+    async fn modify(
+        &self,
+        variety: OrderVariety,
+        order_id: &OrderId,
+        request: &ModifyOrderRequest,
+        permit: Option<DispatchPermit>,
     ) -> Result<KiteApiResponse<OrderReceipt>> {
         self.client
-            .put(
-                &format!("/orders/{}/{}", variety, order_id),
-                order,
-                &self.backoff,
+            .send_form(
+                reqwest::Method::PUT,
+                &format!("/orders/{variety}/{order_id}"),
+                request.validate(variety),
+                request.form_pairs(),
+                permit,
             )
             .await
     }
 
-    /// Cancels an open or pending order.
+    /// Cancel an open or pending order: `DELETE /orders/{variety}/{order_id}`.
     ///
-    /// As long as on order is open or pending in the system, it can be cancelled.
-    ///
-    /// # Arguments
-    ///
-    /// * `variety` - The variety of the order (e.g., "regular", "amo").
-    /// * `order_id` - The unique ID of the order to be canceled.
-    ///
-    /// # Returns
-    ///
-    /// A `Result` containing a `KiteApiResponse` with an `OrderReceipt` on success.
-    ///
+    /// Only the `Authorization` header authenticates the request; neither
+    /// the API key nor the access token is placed in the URL
+    /// (`kite:orders.md:147-162`). The receipt acknowledges the request, not a
+    /// confirmed cancellation.
     pub async fn cancel_order(
         &self,
-        variety: &str,
-        order_id: &str,
+        variety: OrderVariety,
+        order_id: &OrderId,
+    ) -> Result<KiteApiResponse<OrderReceipt>> {
+        self.cancel(variety, order_id, None).await
+    }
+
+    /// [`Self::cancel_order`] with admitted capacity from
+    /// `HTTPClient::admit(PermitTarget::CancelOrder)`.
+    pub async fn cancel_order_with_permit(
+        &self,
+        variety: OrderVariety,
+        order_id: &OrderId,
+        permit: DispatchPermit,
+    ) -> Result<KiteApiResponse<OrderReceipt>> {
+        self.cancel(variety, order_id, Some(permit)).await
+    }
+
+    async fn cancel(
+        &self,
+        variety: OrderVariety,
+        order_id: &OrderId,
+        permit: Option<DispatchPermit>,
     ) -> Result<KiteApiResponse<OrderReceipt>> {
         self.client
-            .delete(
-                &format!("/orders/{}/{}", variety, order_id),
-                true,
-                &self.backoff,
+            .send_form(
+                reqwest::Method::DELETE,
+                &format!("/orders/{variety}/{order_id}"),
+                Ok(()),
+                Vec::new(),
+                permit,
             )
             .await
     }
 
-    /// Retrieves the list of all orders (open and executed) for the day.
+    // ===== [ Reads ] =====
+    //
+    // Each list has a strict method, which fails the whole response when any
+    // row does not decode, and a `*_with_rejections` method, which returns
+    // every row in broker order with rejected rows in place.
+
+    /// Every order of the day, open and executed: `GET /orders`.
     ///
-    /// The order history or the order book is transient as it only lives for a day
-    /// in the system. When you retrieve orders, you get all the orders for the day
-    /// including open, pending, and executed ones.
-    ///
-    /// # Returns
-    ///
-    /// A `Result` containing a `KiteApiResponse` with a vector of `Order` instances on success.
-    ///
+    /// Strict: if any order does not decode, the whole response is a
+    /// `Decode` error whose detail gives the rejected count and the first
+    /// index. [`Self::list_orders_with_rejections`] returns the other rows.
     pub async fn list_orders(&self) -> Result<KiteApiResponse<Vec<Order>>> {
-        self.client.get(&format!("/orders"), &self.backoff).await
+        strict(self.client.get_rows("/orders", RowPolicy::Strict).await?)
     }
 
-    /// Retrieves the history of a given order.
+    /// Every order of the day, row by row: `GET /orders`.
     ///
-    /// # Arguments
+    /// The response may be partial: rows that do not decode are
+    /// [`Row::Rejected`](crate::kite::connect::models::Row::Rejected) in
+    /// place, in broker order. Every row can be rejected, which leaves
+    /// [`Rows::items`] empty although the broker sent orders; check
+    /// [`Rows::is_complete`] or use [`Rows::into_complete`] to tell that
+    /// apart from an empty order book.
+    pub async fn list_orders_with_rejections(&self) -> Result<KiteApiResponse<Rows<Order>>> {
+        self.client.get_rows("/orders", RowPolicy::Tolerant).await
+    }
+
+    /// The history of one order: `GET /orders/{order_id}`.
     ///
-    /// * `order_id` - The unique ID of the order whose history is to be retrieved.
+    /// Strict, like [`Self::list_orders`].
+    pub async fn get_order_history(
+        &self,
+        order_id: &OrderId,
+    ) -> Result<KiteApiResponse<Vec<Order>>> {
+        strict(
+            self.client
+                .get_rows(&format!("/orders/{order_id}"), RowPolicy::Strict)
+                .await?,
+        )
+    }
+
+    /// The history of one order, row by row: `GET /orders/{order_id}`.
     ///
-    /// # Returns
-    ///
-    /// A `Result` containing a `KiteApiResponse` with a vector of `Order` instances on success.
-    ///
-    pub async fn get_order_history(&self, order_id: &str) -> Result<KiteApiResponse<Vec<Order>>> {
+    /// May be partial, like [`Self::list_orders_with_rejections`]: knowing
+    /// the order ID does not stop any other field of a row from failing.
+    pub async fn get_order_history_with_rejections(
+        &self,
+        order_id: &OrderId,
+    ) -> Result<KiteApiResponse<Rows<Order>>> {
         self.client
-            .get(&format!("/orders/{}", order_id), &self.backoff)
+            .get_rows(&format!("/orders/{order_id}"), RowPolicy::Tolerant)
             .await
     }
 
-    /// Retrieves the list of all executed trades for the day.
+    /// Every executed trade of the day: `GET /trades`.
     ///
-    /// # Returns
-    ///
-    /// A `Result` containing a `KiteApiResponse` with a vector of `Trade` instances on success.
-    ///
+    /// Strict, like [`Self::list_orders`].
     pub async fn list_trades(&self) -> Result<KiteApiResponse<Vec<Trade>>> {
-        self.client.get(&format!("/trades"), &self.backoff).await
+        strict(self.client.get_rows("/trades", RowPolicy::Strict).await?)
     }
 
-    /// Retrieves the trades generated by a particular order.
+    /// Every executed trade of the day, row by row: `GET /trades`.
     ///
-    /// # Arguments
+    /// May be partial, like [`Self::list_orders_with_rejections`].
+    pub async fn list_trades_with_rejections(&self) -> Result<KiteApiResponse<Rows<Trade>>> {
+        self.client.get_rows("/trades", RowPolicy::Tolerant).await
+    }
+
+    /// The trades of one order: `GET /orders/{order_id}/trades`.
     ///
-    /// * `order_id` - The unique ID of the order whose trades are to be retrieved.
+    /// Strict, like [`Self::list_orders`].
+    pub async fn get_order_trades(
+        &self,
+        order_id: &OrderId,
+    ) -> Result<KiteApiResponse<Vec<Trade>>> {
+        strict(
+            self.client
+                .get_rows(&format!("/orders/{order_id}/trades"), RowPolicy::Strict)
+                .await?,
+        )
+    }
+
+    /// The trades of one order, row by row: `GET /orders/{order_id}/trades`.
     ///
-    /// # Returns
-    ///
-    /// A `Result` containing a `KiteApiResponse` with a vector of `Trade` instances on success.
-    ///
-    pub async fn get_order_trades(&self, order_id: &str) -> Result<KiteApiResponse<Vec<Trade>>> {
+    /// May be partial, like [`Self::list_orders_with_rejections`].
+    pub async fn get_order_trades_with_rejections(
+        &self,
+        order_id: &OrderId,
+    ) -> Result<KiteApiResponse<Rows<Trade>>> {
         self.client
-            .get(&format!("/orders/{}/trades", order_id), &self.backoff)
+            .get_rows(&format!("/orders/{order_id}/trades"), RowPolicy::Tolerant)
             .await
     }
+}
+
+/// The rows of a strict response as a plain list. Strict decoding has already
+/// failed the operation if any row was rejected, so every row here decoded;
+/// the debug assertion guards that invariant against a future change.
+fn strict<T>(response: KiteApiResponse<Rows<T>>) -> Result<KiteApiResponse<Vec<T>>> {
+    Ok(KiteApiResponse {
+        status: response.status,
+        data: response.data.map(|rows| {
+            debug_assert!(
+                rows.is_complete(),
+                "strict decoding returned a rejected row"
+            );
+            rows.rows
+                .into_iter()
+                .filter_map(|row| match row {
+                    Row::Decoded(t) => Some(t),
+                    Row::Rejected(_) => None,
+                })
+                .collect()
+        }),
+        message: response.message,
+        error_type: response.error_type,
+    })
 }

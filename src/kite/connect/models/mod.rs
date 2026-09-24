@@ -4,22 +4,13 @@
 //! represent the various structures used in API requests and responses, making
 //! it easier to work with Kite Connect API in a type-safe manner.
 //!
-//! [`KiteApiResponse<T>`] is the wrapper struct that represents a response from
-//! Kite Connect API and is a good starting point to dig deeper. The generic type
-//! `T` is the specific data structure returned from an API endpoint. For example,
-//! the type `T` in the code below is [`UserSession`] representing the information
-//! returned by the API from the endpoint pointed at by the method `generate_session()`.
+//! [`KiteApiResponse<T>`] is the response envelope; its `data` holds the
+//! endpoint's type. For example, a successful `Session::exchange` yields
+//! `KiteApiResponse<UserSession>`, where [`UserSession`] holds the
+//! secret-wrapped tokens returned by the token-exchange endpoint.
 //!
-//! ```ignore
-//! // Login flow I: request token
-//! let request_token: String = format!("xxx");
-//!
-//! // Login flow II: user session
-//! let _kite_session: KiteApiResponse<UserSession> = manja_client
-//!    .session()
-//!    .generate_session(&request_token)
-//!    .await?;
-//! ```
+//! These models are compiled in every feature build; the resource APIs that
+//! return them need the `http` feature.
 //!
 use serde::{Deserialize, Serialize};
 
@@ -56,34 +47,73 @@ pub use user::{Available, Segment, SegmentKind, UserMargins, UserProfile, Utilis
 ///
 mod order;
 mod order_enums;
-pub use order::{Order, OrderReceipt, Trade};
+pub use order::{
+    ModifyOrderRequest, Order, OrderReceipt, PlaceOrderRequest, RequestError, SliceError,
+    SliceResult, Trade,
+};
 #[allow(unused_imports)]
 pub use order_enums::{
     OrderStatus, OrderType, OrderValidity, OrderVariety, ProductType, TransactionType,
 };
 
+/// Models for the `/mf/` API group: mutual fund orders, SIPs, holdings and
+/// instruments.
+///
+mod mutual_funds;
+pub use mutual_funds::{
+    DividendType, MfHolding, MfInstrument, MfOrder, MfOrderStatus, MfOrderVariety, MfPlan,
+    MfPurchaseType, MfSip, SchemeType, SipFrequency, SipStatus,
+};
+
+/// Models for historical candle data: `/instruments/historical/`.
+///
+mod historical;
+pub use historical::{Candle, CandleInterval, HistoricalData, HistoricalRequest};
+
+/// Row-by-row results of list responses, for the tolerant
+/// `*_with_rejections` methods.
+///
+mod rows;
+pub use rows::{Row, RowError, Rows};
+
+/// Models for the `/gtt/` API group: Good Till Triggered orders.
+///
+mod gtt;
+pub use gtt::{
+    GttCondition, GttOrder, GttOrderOutcome, GttOrderRequest, GttOrderResult, GttReceipt,
+    GttRequest, GttStatus, GttTrigger, GttType,
+};
+
 /// Models for the `/portfolio/` API group, managing holdings and positions.
 ///
 mod portfolio;
-pub use portfolio::{Auction, Holding, Position, PositionConversionRequest};
+pub use portfolio::{
+    Auction, Holding, HoldingMtf, HoldingsAuthorisation, HoldingsAuthorisationRequest, Position,
+    PositionConversionRequest, PositionType, Positions,
+};
 
 /// Models for the `/instruments/` and `/quote/` API group, providing market data
 /// and instrument information.
 ///
 mod market;
-pub(crate) use market::KiteQuote;
 #[allow(unused_imports)]
-pub use market::{FullQuote, Instrument, LTPQuote, OHLCQuote, QuoteMode};
+pub use market::{
+    Depth, DepthLevel, FullQuote, Instrument, InstrumentType, KiteQuote, LTPQuote, OHLCQuote,
+    QuoteMode, Quotes, OHLC,
+};
 
 /// Models for the `/margins/` and `/charges/` API group, dealing with margin
 /// requirements and charges.
 ///
 mod margins;
-#[allow(unused_imports)]
-pub(crate) use margins::{
+pub use margins::{
     BasketMargin, Charges, OrderCharges, OrderChargesRequest, OrderMargin, OrderMarginRequest, GST,
     PNL,
 };
+
+/// The partial order-update (postback) DTO, shared with the common protocol
+/// slice and the text decoder. It is the crate's only order-update type.
+pub use crate::kite::protocol::OrderUpdate;
 
 /// Enumerations for exchanges supported by Kite Connect API.
 mod exchange;

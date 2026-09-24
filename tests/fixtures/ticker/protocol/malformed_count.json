@@ -1,0 +1,4 @@
+{
+  "description": "Invalid packet count (0xFFFF)",
+  "expected_diagnostic": "InvalidPacketCount"
+}

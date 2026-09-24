@@ -1,0 +1,5 @@
+{
+  "description": "Heartbeat frame (1 byte)",
+  "expected_packets": 1,
+  "expected_type": "Heartbeat"
+}

@@ -83,8 +83,11 @@ impl TickerRequest {
     ///
     /// # Example
     ///
-    /// ```ignore
+    /// ```
+    /// use manja::kite::ticker::TickerRequest;
+    ///
     /// let request = TickerRequest::subscribe(vec![12345, 67890]);
+    /// assert_eq!(request.to_string(), r#"{"a":"subscribe","v":[12345,67890]}"#);
     /// ```
     ///
     pub fn subscribe(instrument_tokens: Vec<u32>) -> TickerRequest {
@@ -94,26 +97,30 @@ impl TickerRequest {
         )
     }
 
-    /// Creates a `TickerRequest` to subscribe to a list of instrument tokens with
-    /// a specified mode.
+    /// A `mode` request, despite its name: it sets the mode of tokens
+    /// that must already be subscribed and subscribes nothing. Its output is
+    /// identical to [`Self::set_mode`].
     ///
-    /// # Arguments
-    ///
-    /// * `instrument_tokens` - A vector of instrument tokens to subscribe to.
-    /// * `mode` - The mode for streaming data.
-    ///
-    /// # Returns
-    ///
-    /// A new `TickerRequest` instance for subscribing to the provided instrument
-    /// tokens with the specified mode.
-    ///
-    /// # Example
-    ///
-    /// ```ignore
-    /// let request = TickerRequest::subscribe_with_mode(vec![12345, 67890], Mode::Full);
-    /// ```
-    ///
+    /// To subscribe with a mode, send [`Self::subscribe`] and then
+    /// [`Self::set_mode`], or use the actor ticker's `subscribe`.
+    #[deprecated(
+        since = "0.2.0",
+        note = "builds a mode request, not a subscription; use `subscribe` then `set_mode`"
+    )]
     pub fn subscribe_with_mode(instrument_tokens: Vec<u32>, mode: Mode) -> TickerRequest {
+        TickerRequest::set_mode(instrument_tokens, mode)
+    }
+
+    /// A `mode` request: set `mode` for tokens already subscribed
+    /// (`kite:websocket.md:36-47`).
+    ///
+    /// ```
+    /// use manja::kite::ticker::{Mode, TickerRequest};
+    ///
+    /// let request = TickerRequest::set_mode(vec![408065], Mode::Full);
+    /// assert_eq!(request.to_string(), r#"{"a":"mode","v":["full",[408065]]}"#);
+    /// ```
+    pub fn set_mode(instrument_tokens: Vec<u32>, mode: Mode) -> TickerRequest {
         TickerRequest::new(
             RequestActions::Mode,
             RequestData::InstrumentTokensWithMode(mode, instrument_tokens),
@@ -132,8 +139,11 @@ impl TickerRequest {
     ///
     /// # Example
     ///
-    /// ```ignore
-    /// let request = TickerRequest::unsubscribe(vec![12345, 67890]);
+    /// ```
+    /// use manja::kite::ticker::TickerRequest;
+    ///
+    /// let request = TickerRequest::unsubscribe(vec![12345]);
+    /// assert_eq!(request.to_string(), r#"{"a":"unsubscribe","v":[12345]}"#);
     /// ```
     ///
     pub fn unsubscribe(instrument_tokens: Vec<u32>) -> TickerRequest {
@@ -144,28 +154,14 @@ impl TickerRequest {
     }
 }
 
-impl ToString for TickerRequest {
-    /// Converts the `TickerRequest` to a JSON string.
+impl std::fmt::Display for TickerRequest {
+    /// Writes the `TickerRequest` as its JSON wire form, so `to_string()`
+    /// yields the message to send.
     ///
-    /// This method serializes the `TickerRequest` into a JSON string representation.
-    ///
-    /// # Returns
-    ///
-    /// A `String` containing the JSON representation of the `TickerRequest`.
-    ///
-    /// # Panics
-    ///
-    /// This method will panic if serialization fails.
-    ///
-    /// # Example
-    ///
-    /// ```ignore
-    /// let request = TickerRequest::subscribe(vec![12345, 67890]);
-    /// let json = request.to_string();
-    /// println!("JSON: {}", json);
-    /// ```
-    ///
-    fn to_string(&self) -> String {
-        serde_json::to_string(self).expect("failed to serialize TickerInput to JSON")
+    /// Serialization of this plain data type cannot fail; if it ever did,
+    /// formatting returns `fmt::Error`.
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let json = serde_json::to_string(self).map_err(|_| std::fmt::Error)?;
+        f.write_str(&json)
     }
 }

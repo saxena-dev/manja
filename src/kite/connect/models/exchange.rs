@@ -1,24 +1,30 @@
 //! `Exchange` enum.
 //!
-//! This module defines the `Exchange` enum, which represents various exchange options available for trading.
-//! It includes implementations for converting from and to different types, as well as helper methods
-//! for determining exchange properties such as divisors and tradability.
+//! [`Exchange`] names the exchange venues and segments used in Kite requests
+//! and responses (`kite:orders.md:88`). Its wire
+//! strings are exact and case-sensitive.
 //!
-//! The `Exchange` enum supports serialization and deserialization using Serde, making it suitable
-//! for use in JSON or other data formats.
+//! Parsing is strict: an unrecognized string is an error from
+//! [`str::parse`] and from `Deserialize`, never a silent fallback. Response
+//! DTOs that must survive new venues wrap the value in
+//! [`Inbound`](crate::kite::protocol::Inbound).
+//!
+//! Price scaling is not a property of this type; see
+//! [`crate::kite::protocol::scale`], which also explains why the segment is
+//! never derived from an instrument token.
 //!
 use std::fmt;
+use std::str::FromStr;
 
-use serde::de::{self, Visitor};
-use serde::{Deserialize, Deserializer, Serialize};
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
-/// Represents the exchanges venues supported by Kite Connect API.
-///
-/// This enum represents various exchange options available for trading.
-/// Each variant corresponds to a specific exchange or market segment.
-///
-#[derive(Debug, Clone, Default, PartialEq, Serialize)]
+use crate::kite::protocol::{UnknownValue, WireEnum};
+
+/// The exchanges venues supported by Kite Connect API.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash)]
 pub enum Exchange {
+    /// No exchange: the empty string. Some calculation responses omit the
+    /// exchange; it is never a valid request value.
     #[default]
     NONE,
     /// National Stock Exchange
@@ -41,88 +47,10 @@ pub enum Exchange {
     INDICES,
 }
 
-impl Exchange {
-    /// Returns the divisor for the exchange.
-    ///
-    /// The divisor is used to normalize values based on the exchange.
-    /// For `CDS` and `BCD`, specific divisors are returned, while a default divisor
-    /// is used for other exchanges.
-    ///
-    /// # Returns
-    ///
-    /// A `f64` value representing the divisor.
-    ///
-    pub(crate) fn divisor(&self) -> f64 {
-        match self {
-            Self::CDS => 100_000_0.0,
-            Self::BCD => 100_0.0,
-            _ => 100.0,
-        }
-    }
-
-    /// Determines if the exchange is tradable.
-    ///
-    /// The `INDICES` exchange is not tradable, while all other exchanges are.
-    ///
-    /// # Returns
-    ///
-    /// A `bool` indicating if the exchange is tradable.
-    ///
-    pub(crate) fn is_tradable(&self) -> bool {
-        match self {
-            Self::NONE => false,
-            Self::INDICES => false,
-            _ => true,
-        }
-    }
-}
-
-impl From<usize> for Exchange {
-    /// Creates an `Exchange` from a `usize`.
-    ///
-    /// Maps integer values to specific exchanges. Values outside the predefined range
-    /// default to `NSE`.
-    ///
-    /// # Arguments
-    ///
-    /// * `value` - A `usize` representing the exchange.
-    ///
-    /// # Returns
-    ///
-    /// An `Exchange` variant corresponding to the input value.
-    ///
-    fn from(value: usize) -> Self {
-        match value {
-            9 => Self::INDICES,
-            8 => Self::MCXSX,
-            7 => Self::MCX,
-            6 => Self::BCD,
-            5 => Self::BFO,
-            4 => Self::BSE,
-            3 => Self::CDS,
-            2 => Self::NFO,
-            1 => Self::NSE,
-            _ => Self::NONE,
-        }
-    }
-}
-
-impl From<&str> for Exchange {
-    /// Creates an `Exchange` from a `&str`.
-    ///
-    /// Maps string representations of exchange names to specific exchanges. Unrecognized
-    /// strings default to `NSE`.
-    ///
-    /// # Arguments
-    ///
-    /// * `value` - An `&str` representing the exchange.
-    ///
-    /// # Returns
-    ///
-    /// An `Exchange` variant corresponding to the input string.
-    ///
-    fn from(value: &str) -> Self {
-        match value {
+impl WireEnum for Exchange {
+    fn from_wire(s: &str) -> Option<Self> {
+        Some(match s {
+            "" => Self::NONE,
             "NSE" => Self::NSE,
             "NFO" => Self::NFO,
             "CDS" => Self::CDS,
@@ -132,93 +60,115 @@ impl From<&str> for Exchange {
             "MCX" => Self::MCX,
             "MCXSX" => Self::MCXSX,
             "INDICES" => Self::INDICES,
-            "" => Self::NONE,
-            _ => Self::NONE,
+            _ => return None,
+        })
+    }
+
+    fn as_wire(&self) -> &'static str {
+        match self {
+            Self::NONE => "",
+            Self::NSE => "NSE",
+            Self::NFO => "NFO",
+            Self::CDS => "CDS",
+            Self::BSE => "BSE",
+            Self::BFO => "BFO",
+            Self::BCD => "BCD",
+            Self::MCX => "MCX",
+            Self::MCXSX => "MCXSX",
+            Self::INDICES => "INDICES",
         }
     }
 }
 
+impl Exchange {
+    /// Whether instruments of this exchange can be ordered: every venue
+    /// except `INDICES` and `NONE`.
+    pub(crate) fn is_tradable(&self) -> bool {
+        !matches!(self, Self::NONE | Self::INDICES)
+    }
+}
+
+/// An unrecognized exchange string.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct UnknownExchange(pub UnknownValue);
+
+impl fmt::Display for UnknownExchange {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "unknown exchange {:?}", self.0.raw())
+    }
+}
+
+impl std::error::Error for UnknownExchange {}
+
+impl FromStr for Exchange {
+    type Err = UnknownExchange;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        Self::from_wire(s).ok_or_else(|| UnknownExchange(UnknownValue::new(s)))
+    }
+}
+
 impl From<Exchange> for &str {
-    /// Converts an `Exchange` to a `&str`.
-    ///
-    /// Maps each `Exchange` variant to its string representation.
-    ///
-    /// # Arguments
-    ///
-    /// * `value` - An `Exchange` variant.
-    ///
-    /// # Returns
-    ///
-    /// An `&str` corresponding to the exchange.
-    ///
     fn from(value: Exchange) -> Self {
-        match value {
-            Exchange::NSE => "NSE",
-            Exchange::NFO => "NFO",
-            Exchange::CDS => "CDS",
-            Exchange::BSE => "BSE",
-            Exchange::BFO => "BFO",
-            Exchange::BCD => "BCD",
-            Exchange::MCX => "MCX",
-            Exchange::MCXSX => "MCXSX",
-            Exchange::INDICES => "INDICES",
-            Exchange::NONE => "",
-        }
+        value.as_wire()
     }
 }
 
 impl fmt::Display for Exchange {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let display_str = match self {
-            Exchange::NSE => "NSE",
-            Exchange::NFO => "NFO",
-            Exchange::CDS => "CDS",
-            Exchange::BSE => "BSE",
-            Exchange::BFO => "BFO",
-            Exchange::BCD => "BCD",
-            Exchange::MCX => "MCX",
-            Exchange::MCXSX => "MCXSX",
-            Exchange::INDICES => "INDICES",
-            Exchange::NONE => "",
-        };
-        write!(f, "{}", display_str)
+        f.write_str(self.as_wire())
+    }
+}
+
+impl Serialize for Exchange {
+    fn serialize<S: Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
+        s.serialize_str(self.as_wire())
     }
 }
 
 impl<'de> Deserialize<'de> for Exchange {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        struct ExchangeVisitor;
+    fn deserialize<D: Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        let s = String::deserialize(d)?;
+        s.parse().map_err(serde::de::Error::custom)
+    }
+}
 
-        impl<'de> Visitor<'de> for ExchangeVisitor {
-            type Value = Exchange;
+impl TryFrom<crate::kite::protocol::Inbound<Exchange>> for Exchange {
+    type Error = UnknownValue;
 
-            fn expecting(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-                formatter.write_str("a valid exchange string")
-            }
-
-            fn visit_str<E>(self, value: &str) -> Result<Exchange, E>
-            where
-                E: de::Error,
-            {
-                Ok(match value {
-                    "" => Exchange::NONE,
-                    "NSE" => Exchange::NSE,
-                    "NFO" => Exchange::NFO,
-                    "CDS" => Exchange::CDS,
-                    "BSE" => Exchange::BSE,
-                    "BFO" => Exchange::BFO,
-                    "BCD" => Exchange::BCD,
-                    "MCX" => Exchange::MCX,
-                    "MCXSX" => Exchange::MCXSX,
-                    "INDICES" => Exchange::INDICES,
-                    _ => Exchange::NONE,
-                })
-            }
+    fn try_from(v: crate::kite::protocol::Inbound<Exchange>) -> Result<Self, Self::Error> {
+        match v {
+            crate::kite::protocol::Inbound::Known(v) => Ok(v),
+            crate::kite::protocol::Inbound::Unknown(u) => Err(u),
         }
+    }
+}
 
-        deserializer.deserialize_str(ExchangeVisitor)
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::kite::protocol::Inbound;
+
+    #[test]
+    fn parsing_is_strict_and_exact() {
+        assert_eq!("NSE".parse::<Exchange>(), Ok(Exchange::NSE));
+        assert_eq!("".parse::<Exchange>(), Ok(Exchange::NONE));
+        let err = "nse".parse::<Exchange>().unwrap_err();
+        assert_eq!(err.0.raw(), "nse");
+        assert!(serde_json::from_str::<Exchange>("\"MF\"").is_err());
+    }
+
+    #[test]
+    fn inbound_preserves_new_venues() {
+        let e: Inbound<Exchange> = serde_json::from_str("\"MF\"").unwrap();
+        assert_eq!(e.as_wire(), "MF");
+        assert!(Exchange::try_from(e).is_err());
+    }
+
+    #[test]
+    fn tradability_excludes_indices() {
+        assert!(Exchange::NFO.is_tradable());
+        assert!(!Exchange::INDICES.is_tradable());
+        assert!(!Exchange::NONE.is_tradable());
     }
 }

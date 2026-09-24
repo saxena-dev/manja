@@ -1,0 +1,6 @@
+{
+  "description": "Unknown packet size (16 bytes)",
+  "expected_packets": 1,
+  "expected_type": "Unknown",
+  "packet_size": 16
+}

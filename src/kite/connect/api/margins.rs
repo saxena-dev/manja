@@ -1,229 +1,106 @@
-//! Margin calculation API group: `/margins/` and `/charges/`
+//! Margin and charges calculation API group: `/margins/` and `/charges/`.
 //!
-//! This module provides functionality to calculate margin requirements and charges
-//! such as `span`, `exposure`, `option premium`, `additional`, `bo`, `cash`, `var`
-//! and `pnl` values for a list of orders from the respective endpoints of Kite Connect API.
+//! Order margins, basket margins and the virtual contract note are JSON
+//! POST calculations (`kite:margins.md:1-13`). They
+//! change no order or position, so the scheduler classifies them as `Calc`
+//! and may retry them after 429, 502, 503, 504 or a transport fault, within
+//! the operation deadline, like reads.
 //!
-//! Refer to the official API [documentation](https://kite.trade/docs/connect/v3/market-quotes/).
+//! Every request is validated before admission: an empty list, an invalid
+//! order or a body over `B-HTTP-09` sends nothing. Responses are returned as
+//! the broker sent them; no entry is invented for an order the response
+//! omits.
 //!
-use crate::kite::connect::api::create_backoff_policy;
+//! The documented sandbox excludes every margin calculation endpoint
+//! (`kite:sandbox.md:294-300`), so these contracts are verified only
+//! against local fixtures.
+//! No test or example falls back to a sandbox or production host.
+//!
 use crate::kite::connect::{
     client::HTTPClient,
     models::{
         BasketMargin, KiteApiResponse, OrderCharges, OrderChargesRequest, OrderMargin,
-        OrderMarginRequest,
+        OrderMarginRequest, RequestError,
     },
 };
 use crate::kite::error::Result;
 
-use backoff::ExponentialBackoff;
+fn non_empty<T>(items: &[T]) -> std::result::Result<(), RequestError> {
+    if items.is_empty() {
+        Err(RequestError {
+            field: "orders",
+            reason: "at least one order is required",
+        })
+    } else {
+        Ok(())
+    }
+}
 
-/// Margin calculation APIs lets you calculate `span`, `exposure`, `option premium`,
-/// `additional`, `bo`, `cash`, `var`, `pnl` values for a list of orders.
-///
+/// Order and basket margin calculations.
 pub struct Margins<'c> {
     /// Reference to the HTTP client used for making API requests.
     pub client: &'c HTTPClient,
-    /// Backoff policy for retrying API requests.
-    backoff: ExponentialBackoff,
 }
 
 impl<'c> Margins<'c> {
-    /// Creates a new instance of `Margins` with default API rate limits.
-    ///
-    /// # Arguments
-    ///
-    /// * `client` - A reference to the `HTTPClient` used for making API requests.
-    ///
-    /// # Returns
-    ///
-    /// A new instance of `Margins`.
-    ///
+    /// Margin APIs on `client`.
     pub fn new(client: &'c HTTPClient) -> Self {
-        Self {
-            client,
-            // Default API rate limit: 10 req/sec
-            backoff: create_backoff_policy(10),
-        }
+        Self { client }
     }
 
-    /// Sets a custom backoff policy for the `Margins` instance.
-    ///
-    /// # Arguments
-    ///
-    /// * `backoff` - An `ExponentialBackoff` instance specifying the backoff policy.
-    ///
-    /// # Returns
-    ///
-    /// The `Margins` instance with the updated backoff policy.
-    ///
-    pub fn with_backoff(mut self, backoff: ExponentialBackoff) -> Self {
-        self.backoff = backoff;
-        self
-    }
-
-    // ===== [ KiteConnect API endpoints ] =====
-
-    /// Calculates margins for each order considering the existing positions
-    /// and open orders.
-    ///
+    /// Margins for each order, considering existing positions and open
+    /// orders: `POST /margins/orders` with a JSON array. The response is an
+    /// array with the broker's entries.
     pub async fn orders(
         &self,
-        request: OrderMarginRequest,
-    ) -> Result<KiteApiResponse<OrderMargin>> {
+        orders: &[OrderMarginRequest],
+    ) -> Result<KiteApiResponse<Vec<OrderMargin>>> {
+        let valid = non_empty(orders).and_then(|_| orders.iter().try_for_each(|o| o.validate()));
         self.client
-            .post(&"/margins/orders", request, &self.backoff)
+            .send_json(reqwest::Method::POST, "/margins/orders", valid, orders)
             .await
     }
 
-    /// Calculates margins for spread orders.
-    ///
-    /// # Example
-    ///
-    /// ```ignore
-    /// let order_reqs = vec![
-    ///     OrderMarginRequest {
-    ///         exchange: Exchange::NSE,
-    ///         tradingsymbol: format!("SBIN"),
-    ///         transaction_type: TransactionType::SELL,
-    ///         variety: OrderVariety::Regular,
-    ///         product: ProductType::MarginIntradaySquareoff,
-    ///         order_type: OrderType::Market,
-    ///         quantity: 100,
-    ///         price: 0.0,
-    ///         trigger_price: 0.0,
-    ///     },
-    ///     OrderMarginRequest {
-    ///         exchange: Exchange::NSE,
-    ///         tradingsymbol: format!("AXISBANK"),
-    ///         transaction_type: TransactionType::BUY,
-    ///         variety: OrderVariety::Regular,
-    ///         product: ProductType::MarginIntradaySquareoff,
-    ///         order_type: OrderType::Market,
-    ///         quantity: 100,
-    ///         price: 0.0,
-    ///         trigger_price: 0.0,
-    ///     },
-    /// ];
-    ///
-    /// let resp = manja_client.margins().basket(&order_reqs, true).await?;
-    /// info!("Basket margins:\n\n{:?}", resp);
-    /// ```
+    /// Margins for a basket of orders, including the spread benefit:
+    /// `POST /margins/basket?consider_positions={bool}` with a JSON array.
     pub async fn basket(
         &self,
-        requests: &[OrderMarginRequest],
+        orders: &[OrderMarginRequest],
         consider_positions: bool,
     ) -> Result<KiteApiResponse<BasketMargin>> {
+        let valid = non_empty(orders).and_then(|_| orders.iter().try_for_each(|o| o.validate()));
         self.client
-            .post(
-                &format!("/margins/basket?consider_positions={}", consider_positions),
-                requests,
-                &self.backoff,
+            .send_json(
+                reqwest::Method::POST,
+                &format!("/margins/basket?consider_positions={consider_positions}"),
+                valid,
+                orders,
             )
             .await
     }
 }
 
-/// A virtual contract provides detailed charges order-wise for brokerage,
-/// STT, stamp duty, exchange transaction charges, SEBI turnover charge, and GST.
-///
+/// Order-wise charges: the virtual contract note.
 pub struct Charges<'c> {
     /// Reference to the HTTP client used for making API requests.
     pub client: &'c HTTPClient,
-    /// Backoff policy for retrying API requests.
-    backoff: ExponentialBackoff,
 }
 
 impl<'c> Charges<'c> {
-    /// Creates a new instance of `Charges` with default API rate limits.
-    ///
-    /// # Arguments
-    ///
-    /// * `client` - A reference to the `HTTPClient` used for making API requests.
-    ///
-    /// # Returns
-    ///
-    /// A new instance of `Charges`.
-    ///
+    /// Charges APIs on `client`.
     pub fn new(client: &'c HTTPClient) -> Self {
-        Self {
-            client,
-            // Default API rate limit: 10 req/sec
-            backoff: create_backoff_policy(10),
-        }
+        Self { client }
     }
 
-    /// Sets a custom backoff policy for the `Charges` instance.
-    ///
-    /// # Arguments
-    ///
-    /// * `backoff` - An `ExponentialBackoff` instance specifying the backoff policy.
-    ///
-    /// # Returns
-    ///
-    /// The `Charges` instance with the updated backoff policy.
-    ///
-    pub fn with_backoff(mut self, backoff: ExponentialBackoff) -> Self {
-        self.backoff = backoff;
-        self
-    }
-
-    // ===== [ KiteConnect API endpoints ] =====
-
-    /// Calculates order-wise charges for orderbook.
-    ///
-    /// # Example
-    ///
-    /// ```ignore
-    /// let order_charges_requests = vec![
-    ///     OrderChargesRequest {
-    ///         order_id: String::from("111111111"),
-    ///         exchange: Exchange::NSE,
-    ///         tradingsymbol: String::from("SBIN"),
-    ///         transaction_type: TransactionType::BUY,
-    ///         variety: OrderVariety::Regular,
-    ///         product: ProductType::CashAndCarry,
-    ///         order_type: OrderType::Market,
-    ///         quantity: 1,
-    ///         average_price: 560.0,
-    ///     },
-    ///     OrderChargesRequest {
-    ///         order_id: String::from("2222222222"),
-    ///         exchange: Exchange::MCX,
-    ///         tradingsymbol: String::from("GOLDPETAL24AUGFUT"),
-    ///         transaction_type: TransactionType::SELL,
-    ///         variety: OrderVariety::Regular,
-    ///         product: ProductType::Normal,
-    ///         order_type: OrderType::Limit,
-    ///         quantity: 1,
-    ///         average_price: 5862.0,
-    ///     },
-    ///     OrderChargesRequest {
-    ///         order_id: String::from("3333333333"),
-    ///         exchange: Exchange::NFO,
-    ///         tradingsymbol: String::from("ADANIPORTS24JUL1460CE"),
-    ///         transaction_type: TransactionType::BUY,
-    ///         variety: OrderVariety::Regular,
-    ///         product: ProductType::Normal,
-    ///         order_type: OrderType::Limit,
-    ///         quantity: 100,
-    ///         average_price: 1.5,
-    ///     },
-    /// ];
-    ///
-    /// let resp = manja_client
-    ///     .charges()
-    ///     .orders(&order_charges_requests)
-    ///     .await?;
-    /// info!("Virtual contract note:\n\n{:?}", resp);
-    /// ```
-    ///
+    /// Brokerage, STT, stamp duty, exchange, SEBI and GST charges per order:
+    /// `POST /charges/orders` with a JSON array.
     pub async fn orders(
         &self,
-        requests: &[OrderChargesRequest],
+        orders: &[OrderChargesRequest],
     ) -> Result<KiteApiResponse<Vec<OrderCharges>>> {
+        let valid = non_empty(orders).and_then(|_| orders.iter().try_for_each(|o| o.validate()));
         self.client
-            .post(&"/charges/orders", requests, &self.backoff)
+            .send_json(reqwest::Method::POST, "/charges/orders", valid, orders)
             .await
     }
 }

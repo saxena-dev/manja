@@ -1,0 +1,4 @@
+{
+  "description": "Truncated frame (ends mid-packet)",
+  "expected_diagnostic": "TruncatedPacket"
+}

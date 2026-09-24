@@ -1,0 +1,16 @@
+{
+  "description": "Single Index Quote packet (28 bytes) - synthetic",
+  "expected_packets": 1,
+  "expected_type": "IndexQuote",
+  "packet": {
+    "kind": "index_quote",
+    "raw_len": 28,
+    "instrument_token": 256265,
+    "last_traded_price": 2245000,
+    "high_price": 2250000,
+    "low_price": 2235000,
+    "open_price": 2240000,
+    "close_price": 2242000,
+    "change": 3000
+  }
+}
