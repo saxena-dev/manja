@@ -177,9 +177,51 @@ pub mod serde_opt_datetime {
     }
 }
 
+/// Serde helpers for an optional broker date field, `yyyy-mm-dd`: `null`,
+/// an absent field (with `#[serde(default)]`) or an empty string is `None`;
+/// any other string must parse. The official mutual fund holdings send an
+/// empty `last_price_date`.
+pub mod serde_opt_date {
+    use super::*;
+
+    /// Serialize `None` as `null`, otherwise as `yyyy-mm-dd`.
+    pub fn serialize<S: Serializer>(d: &Option<NaiveDate>, s: S) -> Result<S::Ok, S::Error> {
+        match d {
+            Some(d) => s.serialize_str(&d.format(DATE_FORMAT).to_string()),
+            None => s.serialize_none(),
+        }
+    }
+
+    /// Deserialize `null` or `""` as `None`; any other string must be a date.
+    pub fn deserialize<'de, D: Deserializer<'de>>(d: D) -> Result<Option<NaiveDate>, D::Error> {
+        match Option::<String>::deserialize(d)? {
+            Some(s) if !s.is_empty() => parse_broker_date(&s)
+                .map(Some)
+                .map_err(serde::de::Error::custom),
+            _ => Ok(None),
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn optional_dates_accept_null_empty_and_the_documented_form() {
+        #[derive(Debug, Deserialize, Serialize)]
+        struct D {
+            #[serde(with = "serde_opt_date", default)]
+            on: Option<NaiveDate>,
+        }
+        let d: D = serde_json::from_str(r#"{"on": "2021-06-29"}"#).unwrap();
+        assert_eq!(d.on, NaiveDate::from_ymd_opt(2021, 6, 29));
+        assert_eq!(serde_json::to_string(&d).unwrap(), r#"{"on":"2021-06-29"}"#);
+        for none in [r#"{"on": null}"#, r#"{"on": ""}"#, "{}"] {
+            assert_eq!(serde_json::from_str::<D>(none).unwrap().on, None, "{none}");
+        }
+        assert!(serde_json::from_str::<D>(r#"{"on": "29-06-2021"}"#).is_err());
+    }
 
     #[derive(Debug, Deserialize, Serialize)]
     struct Row {

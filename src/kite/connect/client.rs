@@ -18,7 +18,10 @@
 //!
 //! - success requires a 2xx status **and** a JSON envelope with
 //!   `status = "success"` and a `data` payload that matches the endpoint's
-//!   type (`kite:response-structure.md:15`);
+//!   type (`kite:response-structure.md:15`). The one exception is the
+//!   mutual fund SIP list, documented without a `status`
+//!   (`kite:mutual-funds.md:219-221`): there an absent `status` is accepted,
+//!   while any `status` other than `success` is still not;
 //! - a non-2xx status or `status = "error"` is never `Ok`, whether or not
 //!   `error_type` is present or known (`kite:response-structure.md:28`);
 //! - HTML, malformed or truncated JSON, a missing payload and a body larger
@@ -67,7 +70,7 @@ use tracing::{Instrument as _, Span};
 use crate::kite::{
     connect::{
         admission::{Admission, RateClass},
-        api::{Charges, Gtt, Margins, Market, Orders, Portfolio, Session, User},
+        api::{Charges, Gtt, Margins, Market, MutualFunds, Orders, Portfolio, Session, User},
         config::Config,
         credentials::{AccessToken, ApiKey, Credentials},
         models::{KiteApiResponse, UserSession},
@@ -493,6 +496,11 @@ impl HTTPClient {
     /// The GTT resource: Good Till Triggered orders.
     pub fn gtt(&self) -> Gtt<'_> {
         Gtt::new(self)
+    }
+
+    /// The mutual fund resource: orders, SIPs, holdings and instruments.
+    pub fn mutual_funds(&self) -> MutualFunds<'_> {
+        MutualFunds::new(self)
     }
 
     /// The market resource: quotes and the instrument master.
@@ -1055,6 +1063,11 @@ pub(crate) fn endpoint_template(method: Method, path: &str) -> Endpoint {
         ["margins", "basket"] => Endpoint::MarginsBasket,
         ["charges", "orders"] => Endpoint::ChargesOrders,
         ["session", "token"] => Endpoint::SessionToken,
+        ["mf", "orders"] => Endpoint::MfOrders,
+        ["mf", "orders", _] => Endpoint::MfOrdersId,
+        ["mf", "sips"] => Endpoint::MfSips,
+        ["mf", "holdings"] => Endpoint::MfHoldings,
+        ["mf", "instruments"] => Endpoint::MfInstruments,
         ["gtt", "triggers"] => Endpoint::GttTriggers,
         ["gtt", "triggers", _] => Endpoint::GttTriggersId,
         _ => Endpoint::Unknown,
@@ -1117,9 +1130,15 @@ pub(crate) fn classify_json<T: DeserializeOwned>(
     let Some(obj) = value.as_object() else {
         return Err(decode("the success body is not a JSON object".into()));
     };
-    match obj.get("status").and_then(Value::as_str) {
-        Some("success") => {}
-        Some("error") => return Err(error_response(status, &value, method, endpoint)),
+    match (obj.get("status"), endpoint) {
+        (Some(s), _) if s.as_str() == Some("success") => {}
+        (Some(s), _) if s.as_str() == Some("error") => {
+            return Err(error_response(status, &value, method, endpoint))
+        }
+        // The documented SIP list, like its official sample, is `{"data":
+        // [...]}` with no status (`kite:mutual-funds.md:219-221`). Only that
+        // endpoint may omit the status, and only by omitting the key.
+        (None, Endpoint::MfSips) => {}
         _ => return Err(decode("the envelope lacks status = \"success\"".into())),
     }
     let data = match obj.get("data") {
@@ -1207,6 +1226,20 @@ mod tests {
     }
 
     #[test]
+    fn only_the_sip_list_may_omit_the_envelope_status() {
+        let bare = br#"{"data": []}"#;
+        assert!(classify_json::<Vec<Value>>(200, bare, Method::Get, Endpoint::MfSips).is_ok());
+        let e =
+            classify_json::<Vec<Value>>(200, bare, Method::Get, Endpoint::MfHoldings).unwrap_err();
+        assert_eq!(e.kind(), HttpErrorKind::Decode);
+        let failed =
+            br#"{"status": "error", "message": "m", "error_type": "InputException", "data": null}"#;
+        assert!(classify_json::<Vec<Value>>(200, failed, Method::Get, Endpoint::MfSips).is_err());
+        let odd = br#"{"status": "pending", "data": []}"#;
+        assert!(classify_json::<Vec<Value>>(200, odd, Method::Get, Endpoint::MfSips).is_err());
+    }
+
+    #[test]
     fn endpoint_templates_hide_dynamic_segments() {
         use Method::*;
         let cases = [
@@ -1234,6 +1267,8 @@ mod tests {
             (Delete, "/session/token", Endpoint::SessionToken),
             (Post, "/gtt/triggers", Endpoint::GttTriggers),
             (Delete, "/gtt/triggers/123", Endpoint::GttTriggersId),
+            (Get, "/mf/orders/2b6ad4b7-c84e", Endpoint::MfOrdersId),
+            (Get, "/mf/sips/", Endpoint::MfSips),
             (Get, "/alerts", Endpoint::Unknown),
         ];
         for (m, path, expected) in cases {

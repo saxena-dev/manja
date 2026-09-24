@@ -17,7 +17,7 @@ An asynchronous Rust client library for [Zerodha](https://zerodha.com/)'s
 
 | Feature | What it adds | Default |
 |---|---|---|
-| `http` | `HTTPClient` and its resources: session, user, orders, GTT, portfolio, market, margins and charges | yes |
+| `http` | `HTTPClient` and its resources: session, user, orders, GTT, portfolio, market, mutual funds, margins and charges | yes |
 | `ticker` | the supervised single-owner WebSocket ticker, plus the deprecated legacy client | yes |
 | `decoder` | pure, bounded decoding of binary and text ticker messages, and a provenance adapter | yes |
 
@@ -166,12 +166,15 @@ with no collector at all.
 - **Market**: `GET /instruments`, `GET /instruments/:exchange`, `GET /quote`,
   `GET /quote/ohlc`, `GET /quote/ltp`
 - **Historical data**: `GET /instruments/historical/:instrument_token/:interval`
+- **Mutual funds** (read-only): `GET /mf/orders`, `GET /mf/orders/:order_id`,
+  `GET /mf/sips`, `GET /mf/holdings`, `GET /mf/instruments`
 - **Margins and charges**: `POST /margins/orders`, `POST /margins/basket`,
   `POST /charges/orders`
 - **WebSocket**: binary market data (LTP, quote, full and index packets), text order
   updates, errors and messages
 
-Not supported: mutual funds and holdings authorisation.
+Not supported: placing or changing mutual fund orders and SIPs (undocumented), and
+holdings authorisation.
 
 ## Migrating from 0.1
 

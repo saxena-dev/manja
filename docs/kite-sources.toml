@@ -56,6 +56,14 @@ bytes = 18205
 lines = 278
 
 [[page]]
+name = "mutual-funds.md"
+url = "https://kite.trade/docs/connect/v3/mutual-funds/index.md"
+accessed = "2026-09-23T20:38:25Z"
+sha256 = "f86546d3dcb8bd30ec4a343cbd555a7308638bc1f5de37d80d89d7fe376e5281"
+bytes = 22614
+lines = 463
+
+[[page]]
 name = "orders.md"
 url = "https://kite.trade/docs/connect/v3/orders/index.md"
 accessed = "2026-09-23T14:42:26Z"

@@ -2,7 +2,7 @@
 //!
 //! This module organizes the various API groups for Kite Connect API. It includes
 //! submodules for managing sessions, user data, orders, GTT orders, portfolio,
-//! market data, and margins. Each submodule corresponds to a specific set of
+//! market data, mutual funds, and margins. Each submodule corresponds to a specific set of
 //! endpoints in Kite Connect API, making it easier to interact with different
 //! aspects of the trading platform.
 //!
@@ -19,6 +19,11 @@ pub use user::User;
 // and status checks.
 mod orders;
 pub use orders::Orders;
+
+// Manages the `/mf/` API group: mutual fund orders, SIPs, holdings and
+// instruments.
+mod mutual_funds;
+pub use mutual_funds::MutualFunds;
 
 // Manages the `/gtt/` API group: Good Till Triggered orders.
 mod gtt;

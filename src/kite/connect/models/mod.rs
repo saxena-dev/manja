@@ -58,6 +58,17 @@ pub use order_enums::{
     OrderStatus, OrderType, OrderValidity, OrderVariety, ProductType, TransactionType,
 };
 
+/// Models for the `/mf/` API group: mutual fund orders, SIPs, holdings and
+/// instruments.
+///
+mod mutual_funds;
+#[cfg(feature = "http")]
+pub(crate) use mutual_funds::check_mf_order_id;
+pub use mutual_funds::{
+    DividendType, MfHolding, MfInstrument, MfOrder, MfOrderStatus, MfOrderVariety, MfPlan,
+    MfPurchaseType, MfSip, SchemeType, SipFrequency, SipStatus,
+};
+
 /// Models for historical candle data: `/instruments/historical/`.
 ///
 mod historical;

@@ -104,6 +104,10 @@ name = "http_session"
 required-features = ["http"]
 
 [[test]]
+name = "http_mutual_funds"
+required-features = ["http"]
+
+[[test]]
 name = "http_historical"
 required-features = ["http"]
 

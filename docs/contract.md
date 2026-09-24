@@ -52,14 +52,18 @@ on the minimum supported Rust version, 1.95.0, and on 1.98.0.
 | GTT | `GET /gtt/triggers`, `GET /gtt/triggers/{id}` | read |
 | Market | `GET /instruments`, `GET /instruments/{exchange}` (CSV), `GET /quote`, `GET /quote/ohlc`, `GET /quote/ltp` | read |
 | Historical data | `GET /instruments/historical/{instrument_token}/{interval}` (§2.13) | read |
+| Mutual funds | `GET /mf/orders`, `GET /mf/orders/{order_id}`, `GET /mf/sips`, `GET /mf/holdings`, `GET /mf/instruments` (CSV) (§2.14) | read |
 | Margins and charges | `POST /margins/orders`, `POST /margins/basket`, `POST /charges/orders` | calculation |
 | Session | `POST /session/token` (exchange), `DELETE /session/token` (invalidation) | session |
 
-Not supported: alerts, mutual funds, holdings summary and
+Not supported: alerts, placing or changing mutual fund orders and SIPs, holdings summary and
 authorisation, the full profile, the trigger range, and receiving postbacks over HTTP.
 
 Every JSON endpoint is decoded into its documented response type, and success requires
-a 2xx status plus a `status: "success"` envelope (`kite:response-structure.md:15-28`).
+a 2xx status plus a `status: "success"` envelope (`kite:response-structure.md:15-28`). The
+mutual fund SIP list is documented without a `status` (`kite:mutual-funds.md:219-221`),
+so for that endpoint alone an absent `status` is accepted; any `status` other than
+`success` is still an error.
 Order placement, modification and conversion, and GTT placement and modification, take
 dedicated request types and are form-encoded (`kite:response-structure.md:2`); margin and charge calculations are JSON
 (`kite:margins.md:13`). Quote requests above the documented key limits (500 for
@@ -289,6 +293,28 @@ and, when set, `continuous=1` and `oi=1` (`kite:historical.md:5-23`).
 | Continuous data | `continuous` asks for day candles across expired futures contracts, for NFO and MCX futures (`kite:historical.md:35-39`); the SDK only forwards the flag |
 | Retries and quota | A read: retried like every read, and admitted in its own `Historical` quota class at 3 requests per second (§3.6) |
 
+### 2.14 Mutual funds
+
+`HTTPClient::mutual_funds()` returns a `MutualFunds` resource for funds on Zerodha's Coin
+platform (`kite:mutual-funds.md`). Every operation is a read, retried like every read and
+admitted in the `Standard` quota class (§3.6).
+
+| Operation | Contract |
+|---|---|
+| `list_orders()` | `GET /mf/orders`: orders placed in the last 7 days (`kite:mutual-funds.md:17-19`), as `MfOrder`s |
+| `get_order(order_id)` | `GET /mf/orders/{order_id}`: one order, whatever its age (`kite:mutual-funds.md:171-173`). The documented IDs are UUIDs, so an ID must be 1 to 64 ASCII letters, digits or hyphens; anything else is a `Validation` error and nothing is sent |
+| `list_sips()` | `GET /mf/sips`: active and paused SIPs (`kite:mutual-funds.md:209-211`), as `MfSip`s. `instalments` and `pending_instalments` are `-1` for a SIP active until cancelled (`MfSip::is_open_ended`) |
+| `list_holdings()` | `GET /mf/holdings`: allotted units (`kite:mutual-funds.md:362-364`), as `MfHolding`s. An empty `last_price_date`, as in the official sample, is `None` |
+| `get_instruments()`, `get_instruments_csv()` | `GET /mf/instruments`: the CSV list of funds (`kite:mutual-funds.md:426-463`), parsed into `MfInstrument`s or returned raw, under the CSV body bound (`B-HTTP-08`). The `0` or `1` flags become booleans; any other value is a `Decode` error naming the row |
+
+The documentation states that order placement cannot be done through the API
+(`kite:mutual-funds.md:3`) and documents no endpoint that places, changes or cancels a
+mutual fund order or SIP, so none is offered. Status, variety, purchase type, frequency,
+dividend, scheme and plan strings are `Inbound` values whose known set is what the
+documentation names in its tables or examples; the official instrument list also carries
+scheme types it does not name, such as `liquid`, which are preserved as unknown.
+Timestamps are IST, and dates are `yyyy-mm-dd`.
+
 ---
 
 ## 3. Runtime bounds
@@ -376,7 +402,7 @@ derived with `with_credentials`, draws from the same windows. `QuotaProfile::kit
 | `Historical` | `/instruments/historical/{instrument_token}/{interval}` | 3 per second (`kite:exceptions.md:50`) |
 | `OrderPlacement` | `POST /orders/{variety}` | 10 per second, 400 per minute, 5 000 per IST day |
 | `OrderModification` | `PUT /orders/{variety}/{order_id}` | 10 per second, 25 modifications per order per IST day |
-| `Standard` | every other endpoint, GTT included | 10 per second |
+| `Standard` | every other endpoint, GTT and mutual funds included | 10 per second |
 
 An endpoint without a known class is admitted at the profile's smallest rate. A
 different profile starts from `kite_v3()` and changes one setting at a time, each
@@ -410,6 +436,7 @@ Additions within version 1:
 |---|---|
 | `endpoint` values `/gtt/triggers` and `/gtt/triggers/{id}` (§2.12) | the domain grows from 22 to 24 values; the series bounds of the metrics labelled by `endpoint` grow with it (§4.4) |
 | `endpoint` value `/instruments/historical/{instrument_token}/{interval}` (§2.13) | the domain grows to 25 values, with the §4.4 bounds |
+| `endpoint` values `/mf/orders`, `/mf/orders/{order_id}`, `/mf/sips`, `/mf/holdings` and `/mf/instruments` (§2.14) | the domain grows to 30 values, with the §4.4 bounds |
 | `DecodeDiagnosticKind::InvalidField` (§4.5) | one more diagnostic kind |
 
 ### 4.2 Spans
@@ -436,7 +463,7 @@ or query parameters to Kite requests.
 | Key | Values |
 |---|---|
 | `method` | `GET`, `POST`, `PUT`, `DELETE` |
-| `endpoint` | the 24 endpoint templates of §2.1, and `unknown` |
+| `endpoint` | the 29 endpoint templates of §2.1, and `unknown` |
 | `quota_class` | `read`, `calc`, `mut`, `sess` |
 | `result` (HTTP operation) | `ok`, `http_status`, `broker_error`, `auth_rejected`, `transport_error`, `timeout`, `deadline`, `admission_rejected`, `cancelled`, `decode_error`, `validation` |
 | `result` (HTTP attempt) | `ok`, `http_status`, `broker_error`, `auth_rejected`, `transport_error`, `timeout`, `cancelled`, `decode_error` |
@@ -462,14 +489,14 @@ are never labels.
 
 | Instrument | Type, unit | Labels | Series bound |
 |---|---|---|---|
-| `manja_http_operations_total` | counter, operations | `method`, `endpoint`, `quota_class`, `result` | 4 400 |
-| `manja_http_operation_duration_seconds` | histogram, s | `method`, `endpoint`, `quota_class`, `result` | 4 400 |
-| `manja_http_attempts_total` | counter, attempts | `method`, `endpoint`, `result` | 800 |
-| `manja_http_attempt_duration_seconds` | histogram, s | `method`, `endpoint`, `result` | 800 |
+| `manja_http_operations_total` | counter, operations | `method`, `endpoint`, `quota_class`, `result` | 5 280 |
+| `manja_http_operation_duration_seconds` | histogram, s | `method`, `endpoint`, `quota_class`, `result` | 5 280 |
+| `manja_http_attempts_total` | counter, attempts | `method`, `endpoint`, `result` | 960 |
+| `manja_http_attempt_duration_seconds` | histogram, s | `method`, `endpoint`, `result` | 960 |
 | `manja_http_in_flight` | gauge, attempts | `quota_class` | 4 |
 | `manja_http_admission_waiters` | gauge, waiters | `quota_class` | 4 |
 | `manja_http_admission_wait_seconds` | histogram, s | `quota_class`, `admission_result` | 16 |
-| `manja_http_retries_total` | counter, retries | `method`, `endpoint`, `error_class` | 400 |
+| `manja_http_retries_total` | counter, retries | `method`, `endpoint`, `error_class` | 480 |
 | `manja_auth_rejections_total` | counter, rejections | `transport` | 2 |
 | `manja_ticker_connection_attempts_total` | counter, attempts | `result` | 6 |
 | `manja_ticker_connect_duration_seconds` | histogram, s | `result` | 6 |
@@ -541,6 +568,7 @@ These choices are not dictated by the Kite documentation alone.
 | Quota enforcement | Every documented window is enforced locally by default (§3.6) | Exceeding them is a documented broker error (`kite:exceptions.md:39`) |
 | Oversized quote requests | Rejected before sending, never split or truncated | A split would return several snapshots taken at different times as one result |
 | Endpoint support | Holdings auctions and the order charges calculation stay supported | Both are documented read or calculation endpoints with official fixtures |
+| Mutual funds | Read-only: orders, SIPs, holdings and the instrument list | The documentation states that order placement cannot be done through the API (`kite:mutual-funds.md:3`) and lists only these reads (`kite:mutual-funds.md:5-11`). The official mocks still carry order and SIP placement, modification and cancellation responses, but no request for them is documented, so implementing them would mean inventing the request |
 | GTT orders | Only LIMIT orders, each for the condition's instrument; a modification sends the complete trigger | The documentation lists `LIMIT` as the only order type and shows each order repeating the condition's exchange and tradingsymbol (`kite:gtt.md:56-64`); it recommends fetching the trigger and sending it back modified (`kite:gtt.md:390-393`) |
 | Default features | `http`, `ticker` and `decoder` | Keeps every 0.1 import path available |
 | Minimum Rust version | 1.95.0 | The oldest toolchain tested |

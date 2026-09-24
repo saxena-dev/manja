@@ -2,14 +2,14 @@ obs_schema_version 1
 histogram_buckets_seconds [0.001, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0, 10.0, 30.0, 60.0, 120.0]
 max_label_value_bytes 64
 
-metric manja_http_operations_total counter unit=operations labels=[method,endpoint,quota_class,result] series_bound=4400
-metric manja_http_operation_duration_seconds histogram unit=seconds labels=[method,endpoint,quota_class,result] series_bound=4400
-metric manja_http_attempts_total counter unit=attempts labels=[method,endpoint,result] series_bound=800
-metric manja_http_attempt_duration_seconds histogram unit=seconds labels=[method,endpoint,result] series_bound=800
+metric manja_http_operations_total counter unit=operations labels=[method,endpoint,quota_class,result] series_bound=5280
+metric manja_http_operation_duration_seconds histogram unit=seconds labels=[method,endpoint,quota_class,result] series_bound=5280
+metric manja_http_attempts_total counter unit=attempts labels=[method,endpoint,result] series_bound=960
+metric manja_http_attempt_duration_seconds histogram unit=seconds labels=[method,endpoint,result] series_bound=960
 metric manja_http_in_flight gauge unit=attempts labels=[quota_class] series_bound=4
 metric manja_http_admission_waiters gauge unit=waiters labels=[quota_class] series_bound=4
 metric manja_http_admission_wait_seconds histogram unit=seconds labels=[quota_class,admission_result] series_bound=16
-metric manja_http_retries_total counter unit=retries labels=[method,endpoint,error_class] series_bound=400
+metric manja_http_retries_total counter unit=retries labels=[method,endpoint,error_class] series_bound=480
 metric manja_auth_rejections_total counter unit=rejections labels=[transport] series_bound=2
 metric manja_ticker_connection_attempts_total counter unit=attempts labels=[result] series_bound=6
 metric manja_ticker_connect_duration_seconds histogram unit=seconds labels=[result] series_bound=6
@@ -37,7 +37,7 @@ span manja.decode.batch level=TRACE fields=[source_key,decoder_version,payload_k
 span manja.ticker.shutdown level=DEBUG fields=[reason,elapsed_ms,pending_deliveries,result]
 
 domain method [GET,POST,PUT,DELETE]
-domain endpoint [/user/profile,/user/margins,/user/margins/{segment},/orders,/orders/{variety},/orders/{variety}/{order_id},/orders/{order_id},/orders/{order_id}/trades,/trades,/portfolio/holdings,/portfolio/holdings/auctions,/portfolio/positions,/instruments,/instruments/{exchange},/instruments/historical/{instrument_token}/{interval},/quote,/quote/ohlc,/quote/ltp,/margins/orders,/margins/basket,/charges/orders,/session/token,/gtt/triggers,/gtt/triggers/{id},unknown]
+domain endpoint [/user/profile,/user/margins,/user/margins/{segment},/orders,/orders/{variety},/orders/{variety}/{order_id},/orders/{order_id},/orders/{order_id}/trades,/trades,/portfolio/holdings,/portfolio/holdings/auctions,/portfolio/positions,/instruments,/instruments/{exchange},/instruments/historical/{instrument_token}/{interval},/quote,/quote/ohlc,/quote/ltp,/margins/orders,/margins/basket,/charges/orders,/session/token,/mf/orders,/mf/orders/{order_id},/mf/sips,/mf/holdings,/mf/instruments,/gtt/triggers,/gtt/triggers/{id},unknown]
 domain quota_class [read,calc,mut,sess]
 domain result.http_operation [ok,http_status,broker_error,auth_rejected,transport_error,timeout,deadline,admission_rejected,cancelled,decode_error,validation]
 domain result.http_attempt [ok,http_status,broker_error,auth_rejected,transport_error,timeout,cancelled,decode_error]

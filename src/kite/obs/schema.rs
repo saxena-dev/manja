@@ -149,6 +149,16 @@ domain!(
         ChargesOrders => "/charges/orders",
         /// `/session/token`
         SessionToken => "/session/token",
+        /// `/mf/orders`
+        MfOrders => "/mf/orders",
+        /// `/mf/orders/{order_id}`
+        MfOrdersId => "/mf/orders/{order_id}",
+        /// `/mf/sips`
+        MfSips => "/mf/sips",
+        /// `/mf/holdings`
+        MfHoldings => "/mf/holdings",
+        /// `/mf/instruments`
+        MfInstruments => "/mf/instruments",
         /// `/gtt/triggers`
         GttTriggers => "/gtt/triggers",
         /// `/gtt/triggers/{id}`
@@ -677,14 +687,14 @@ mod tests {
     fn series_bounds_match_the_contract_table() {
         use Instrument as I;
         let expected = [
-            (I::HttpOperationsTotal, 4400),
-            (I::HttpOperationDuration, 4400),
-            (I::HttpAttemptsTotal, 800),
-            (I::HttpAttemptDuration, 800),
+            (I::HttpOperationsTotal, 5280),
+            (I::HttpOperationDuration, 5280),
+            (I::HttpAttemptsTotal, 960),
+            (I::HttpAttemptDuration, 960),
             (I::HttpInFlight, 4),
             (I::HttpAdmissionWaiters, 4),
             (I::HttpAdmissionWait, 16),
-            (I::HttpRetriesTotal, 400),
+            (I::HttpRetriesTotal, 480),
             (I::AuthRejectionsTotal, 2),
             (I::TickerConnectionAttemptsTotal, 6),
             (I::TickerConnectDuration, 6),
@@ -713,7 +723,7 @@ mod tests {
         assert!(Endpoint::ALL
             .iter()
             .all(|e| e.as_str().len() <= MAX_LABEL_VALUE_BYTES));
-        assert_eq!(Endpoint::ALL.len(), 25);
+        assert_eq!(Endpoint::ALL.len(), 30);
         assert!(Instrument::ALL
             .iter()
             .all(|i| i.label_keys().len() <= MAX_LABELS));

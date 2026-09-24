@@ -9,18 +9,22 @@
 use manja::kite::connect::admission::{
     Admission, AdmissionError, AdmissionGrant, AdmissionLimits, QuotaProfile, RateClass, Window,
 };
-use manja::kite::connect::api::{Charges, Gtt, Margins, Market, Orders, Portfolio, Session, User};
+use manja::kite::connect::api::{
+    Charges, Gtt, Margins, Market, MutualFunds, Orders, Portfolio, Session, User,
+};
 use manja::kite::connect::client::{HTTPClient, HttpClientBuilder, HttpDiagnostics, HttpFailure};
 use manja::kite::connect::config::{Config, HttpLimits};
 use manja::kite::connect::credentials::{
     AccessToken, ApiKey, ApiSecret, CredentialError, Credentials, RequestToken,
 };
 use manja::kite::connect::models::{
-    Candle, CandleInterval, Exchange, FullQuote, GttCondition, GttOrder, GttOrderOutcome,
-    GttOrderRequest, GttOrderResult, GttReceipt, GttRequest, GttStatus, GttTrigger, GttType,
-    HistoricalData, HistoricalRequest, Holding, Instrument, KiteApiResponse, LTPQuote,
-    ModifyOrderRequest, OHLCQuote, Order, OrderReceipt, PlaceOrderRequest, Position,
-    PositionConversionRequest, Positions, QuoteMode, Quotes, RequestError, Trade, UserSession,
+    Candle, CandleInterval, DividendType, Exchange, FullQuote, GttCondition, GttOrder,
+    GttOrderOutcome, GttOrderRequest, GttOrderResult, GttReceipt, GttRequest, GttStatus,
+    GttTrigger, GttType, HistoricalData, HistoricalRequest, Holding, Instrument, KiteApiResponse,
+    LTPQuote, MfHolding, MfInstrument, MfOrder, MfOrderStatus, MfOrderVariety, MfPlan,
+    MfPurchaseType, MfSip, ModifyOrderRequest, OHLCQuote, Order, OrderReceipt, PlaceOrderRequest,
+    Position, PositionConversionRequest, Positions, QuoteMode, Quotes, RequestError, SchemeType,
+    SipFrequency, SipStatus, Trade, UserSession,
 };
 use manja::kite::connect::scheduler::{DispatchPermit, PermitTarget, SchedulerLimits};
 use manja::kite::decoder::adapter::{Adapter, AdapterError, Decoded, DecodedEvent, Versions};
@@ -59,6 +63,7 @@ fn resources(c: &HTTPClient, key: ApiKey) {
     let _: Margins<'_> = c.margins();
     let _: Charges<'_> = c.charges();
     let _: Gtt<'_> = c.gtt();
+    let _: MutualFunds<'_> = c.mutual_funds();
     let _: Session<'_> = c.session(key);
 }
 
@@ -100,6 +105,13 @@ async fn signatures(c: &HTTPClient, h: &TickerHandle) {
     let _: Result<KiteApiResponse<HistoricalData>, ManjaError> =
         c.market().get_historical(&history).await;
     let _: fn(&HistoricalData) -> &Vec<Candle> = |d| &d.candles;
+    let mf = c.mutual_funds();
+    let _: Result<KiteApiResponse<Vec<MfOrder>>, ManjaError> = mf.list_orders().await;
+    let _: Result<KiteApiResponse<MfOrder>, ManjaError> = mf.get_order("1").await;
+    let _: Result<KiteApiResponse<Vec<MfSip>>, ManjaError> = mf.list_sips().await;
+    let _: Result<KiteApiResponse<Vec<MfHolding>>, ManjaError> = mf.list_holdings().await;
+    let _: Result<Vec<MfInstrument>, ManjaError> = mf.get_instruments().await;
+    let _: Result<String, ManjaError> = mf.get_instruments_csv().await;
     let _: Result<DispatchPermit, ManjaError> = c.admit(PermitTarget::PlaceOrder).await;
     let _: HttpDiagnostics = c.diagnostics();
     let _: Result<Revision, CommandError> =
