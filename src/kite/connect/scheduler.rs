@@ -311,6 +311,12 @@ pub enum PermitTarget {
     CancelOrder,
     /// `PUT /portfolio/positions`.
     ConvertPosition,
+    /// `POST /gtt/triggers`.
+    PlaceGtt,
+    /// `PUT /gtt/triggers/{id}`.
+    ModifyGtt,
+    /// `DELETE /gtt/triggers/{id}`.
+    DeleteGtt,
 }
 
 impl PermitTarget {
@@ -320,6 +326,9 @@ impl PermitTarget {
             Self::ModifyOrder { .. } => (Method::Put, Endpoint::OrdersVarietyId),
             Self::CancelOrder => (Method::Delete, Endpoint::OrdersVarietyId),
             Self::ConvertPosition => (Method::Put, Endpoint::Positions),
+            Self::PlaceGtt => (Method::Post, Endpoint::GttTriggers),
+            Self::ModifyGtt => (Method::Put, Endpoint::GttTriggersId),
+            Self::DeleteGtt => (Method::Delete, Endpoint::GttTriggersId),
         }
     }
 

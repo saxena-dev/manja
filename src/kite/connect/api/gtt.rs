@@ -10,11 +10,17 @@
 //! after dispatch does not show whether the broker acted: the error's stage
 //! says so, and [`Gtt::get_trigger`] reports the trigger's state.
 //!
+//! Each mutation has a `*_with_permit` variant that dispatches with a
+//! [`DispatchPermit`] obtained from `HTTPClient::admit`, as the order
+//! mutations do. A GTT permit names the operation, not the trigger: GTT
+//! mutations share the standard quota class, with no per-trigger limit.
+//!
 //! The documented sandbox does not offer GTT (`kite:sandbox.md:298`).
 //!
 use crate::kite::connect::{
     client::HTTPClient,
     models::{GttReceipt, GttRequest, GttTrigger, KiteApiResponse},
+    scheduler::DispatchPermit,
 };
 use crate::kite::error::Result;
 
@@ -37,13 +43,31 @@ impl<'c> Gtt<'c> {
     /// The request is validated first; an invalid one is a `Validation`
     /// error and nothing is sent.
     pub async fn place_trigger(&self, request: &GttRequest) -> Result<KiteApiResponse<GttReceipt>> {
+        self.place(request, None).await
+    }
+
+    /// [`Self::place_trigger`] with admitted capacity from
+    /// `HTTPClient::admit(PermitTarget::PlaceGtt)`.
+    pub async fn place_trigger_with_permit(
+        &self,
+        request: &GttRequest,
+        permit: DispatchPermit,
+    ) -> Result<KiteApiResponse<GttReceipt>> {
+        self.place(request, Some(permit)).await
+    }
+
+    async fn place(
+        &self,
+        request: &GttRequest,
+        permit: Option<DispatchPermit>,
+    ) -> Result<KiteApiResponse<GttReceipt>> {
         self.client
             .send_form(
                 reqwest::Method::POST,
                 "/gtt/triggers",
                 request.validate(),
                 request.form_pairs(),
-                None,
+                permit,
             )
             .await
     }
@@ -55,26 +79,64 @@ impl<'c> Gtt<'c> {
         trigger_id: u64,
         request: &GttRequest,
     ) -> Result<KiteApiResponse<GttReceipt>> {
+        self.modify(trigger_id, request, None).await
+    }
+
+    /// [`Self::modify_trigger`] with admitted capacity from
+    /// `HTTPClient::admit(PermitTarget::ModifyGtt)`.
+    pub async fn modify_trigger_with_permit(
+        &self,
+        trigger_id: u64,
+        request: &GttRequest,
+        permit: DispatchPermit,
+    ) -> Result<KiteApiResponse<GttReceipt>> {
+        self.modify(trigger_id, request, Some(permit)).await
+    }
+
+    async fn modify(
+        &self,
+        trigger_id: u64,
+        request: &GttRequest,
+        permit: Option<DispatchPermit>,
+    ) -> Result<KiteApiResponse<GttReceipt>> {
         self.client
             .send_form(
                 reqwest::Method::PUT,
                 &format!("/gtt/triggers/{trigger_id}"),
                 request.validate(),
                 request.form_pairs(),
-                None,
+                permit,
             )
             .await
     }
 
     /// Delete an active GTT: `DELETE /gtt/triggers/{trigger_id}`.
     pub async fn delete_trigger(&self, trigger_id: u64) -> Result<KiteApiResponse<GttReceipt>> {
+        self.delete(trigger_id, None).await
+    }
+
+    /// [`Self::delete_trigger`] with admitted capacity from
+    /// `HTTPClient::admit(PermitTarget::DeleteGtt)`.
+    pub async fn delete_trigger_with_permit(
+        &self,
+        trigger_id: u64,
+        permit: DispatchPermit,
+    ) -> Result<KiteApiResponse<GttReceipt>> {
+        self.delete(trigger_id, Some(permit)).await
+    }
+
+    async fn delete(
+        &self,
+        trigger_id: u64,
+        permit: Option<DispatchPermit>,
+    ) -> Result<KiteApiResponse<GttReceipt>> {
         self.client
             .send_form(
                 reqwest::Method::DELETE,
                 &format!("/gtt/triggers/{trigger_id}"),
                 Ok(()),
                 Vec::new(),
-                None,
+                permit,
             )
             .await
     }

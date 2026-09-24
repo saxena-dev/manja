@@ -100,8 +100,8 @@ session operations make **exactly one attempt**: a lost response is reported, ne
 retried or assumed.
 Admission enforces the documented quotas (quote 1/s; historical candles 3/s; orders
 10/s, 400/min, 5000/day; 25 modifications per order; others 10/s). A `DispatchPermit` from
-`HTTPClient::admit` reserves capacity for one specific order operation, expires after one
-second, and is consumed by use.
+`HTTPClient::admit` reserves capacity for one specific order, position or GTT mutation,
+expires after one second, and is consumed by use.
 
 **Units and values.** Order and quote models use the broker's JSON numbers. Ticker
 prices are raw `int32` integers; convert with the segment you supply (currencies ÷ 10⁷,

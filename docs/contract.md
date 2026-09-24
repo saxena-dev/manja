@@ -293,6 +293,14 @@ are in `GttTrigger::orders`, where each fired order carries a `GttOrderResult`. 
 types and statuses (`kite:gtt.md:359-371`) are `Inbound` values, so an undocumented one
 is preserved. Every GTT endpoint is in the `Standard` quota class (§3.6).
 
+Each mutation has a `*_with_permit` form, `place_trigger_with_permit`,
+`modify_trigger_with_permit` and `delete_trigger_with_permit`, that dispatches with a
+`DispatchPermit` from `HTTPClient::admit(PermitTarget::PlaceGtt)`, `ModifyGtt` or
+`DeleteGtt`. The request is still validated first. A GTT
+permit names the operation but not the trigger, because no per-trigger limit is
+documented; an expired permit, one for another operation or one from another client's
+admission scope starts no transport (`B-HTTP-12`).
+
 ### 2.13 Historical candles
 
 `Market::get_historical(&HistoricalRequest)` reads the candles of one instrument and

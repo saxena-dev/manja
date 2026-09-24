@@ -11,6 +11,7 @@
 
 mod support;
 
+use std::sync::Arc;
 use std::time::Duration;
 
 use chrono::{FixedOffset, TimeZone};
@@ -20,12 +21,13 @@ use manja::kite::connect::config::{Config, HttpLimits};
 use manja::kite::connect::credentials::Credentials;
 use manja::kite::connect::models::{
     Exchange, GttOrderRequest, GttRequest, GttStatus, GttType, OrderType, OrderValidity,
-    ProductType, TransactionType,
+    OrderVariety, ProductType, TransactionType,
 };
-use manja::kite::connect::scheduler::SchedulerLimits;
+use manja::kite::connect::scheduler::{PermitTarget, SchedulerLimits};
 use manja::kite::error::{HttpErrorKind, ManjaError, TransportStage};
 use manja::kite::obs::schema::{Endpoint, Method};
-use manja::kite::protocol::{Inbound, InstrumentToken, Quantity};
+use manja::kite::obs::{InMemoryRecorder, Instrument, Observability};
+use manja::kite::protocol::{Inbound, InstrumentToken, OrderId, Quantity};
 
 use support::fixtures;
 use support::http::{HttpHarness, RecordedRequest, Reply};
@@ -400,6 +402,117 @@ async fn reads_retry_a_transient_failure() {
         .unwrap();
     assert_eq!(triggers.len(), 2);
     assert_eq!(h.requests().len(), 2);
+}
+
+#[tokio::test]
+async fn permits_separate_admission_from_dispatch_for_every_gtt_mutation() {
+    let h = HttpHarness::start(
+        [
+            "gtt_place_order.json",
+            "gtt_modify_order.json",
+            "gtt_delete_order.json",
+        ]
+        .into_iter()
+        .map(|f| Reply::json(fixtures::json_body(f).unwrap()))
+        .collect(),
+    )
+    .await;
+    let rec = Arc::new(InMemoryRecorder::new());
+    let c = HTTPClient::with_observability(
+        Config::new(h.base_url()),
+        Observability::with_recorder(rec.clone()),
+    )
+    .unwrap()
+    .with_credentials(Credentials::new("test_api_key", "test_access_token").unwrap());
+    let permit = c.admit(PermitTarget::PlaceGtt).await.unwrap();
+    // The caller's own checks run here; nothing has been sent.
+    assert!(h.requests().is_empty());
+    c.gtt()
+        .place_trigger_with_permit(&single(), permit)
+        .await
+        .unwrap();
+    let permit = c.admit(PermitTarget::ModifyGtt).await.unwrap();
+    c.gtt()
+        .modify_trigger_with_permit(123, &single(), permit)
+        .await
+        .unwrap();
+    let permit = c.admit(PermitTarget::DeleteGtt).await.unwrap();
+    c.gtt()
+        .delete_trigger_with_permit(123, permit)
+        .await
+        .unwrap();
+    let sent: Vec<(String, String)> = h
+        .requests()
+        .into_iter()
+        .map(|r| (r.method, r.target))
+        .collect();
+    assert_eq!(
+        sent,
+        [
+            ("POST", "/gtt/triggers"),
+            ("PUT", "/gtt/triggers/123"),
+            ("DELETE", "/gtt/triggers/123"),
+        ]
+        .map(|(m, t)| (m.to_string(), t.to_string()))
+    );
+    // Each call spent its permit: three admissions, none repeated at dispatch.
+    let (granted, _) = rec.histogram(Instrument::HttpAdmissionWait, &["mut", "granted"]);
+    assert_eq!(granted, 3);
+}
+
+#[tokio::test]
+async fn a_mismatched_expired_or_foreign_gtt_permit_cannot_start_transport() {
+    let h = HttpHarness::start(vec![]).await;
+    let scheduler = SchedulerLimits::default()
+        .with_permit_validity(Duration::from_millis(20))
+        .unwrap();
+    let c = HTTPClient::with_config(
+        Config::new(h.base_url()).with_limits(HttpLimits::default().with_scheduler(scheduler)),
+    )
+    .unwrap()
+    .with_credentials(Credentials::new("test_api_key", "test_access_token").unwrap());
+    let kind = |e: ManjaError| e.as_http().unwrap().kind();
+
+    // Another operation's permit, including the order and GTT counterparts
+    // and the other GTT mutation on the same endpoint.
+    let p = c.admit(PermitTarget::PlaceOrder).await.unwrap();
+    let e = c.gtt().place_trigger_with_permit(&single(), p).await;
+    assert_eq!(kind(e.unwrap_err()), HttpErrorKind::Admission);
+    let p = c.admit(PermitTarget::DeleteGtt).await.unwrap();
+    let e = c.gtt().modify_trigger_with_permit(1, &single(), p).await;
+    assert_eq!(kind(e.unwrap_err()), HttpErrorKind::Admission);
+    let p = c.admit(PermitTarget::ModifyGtt).await.unwrap();
+    let e = c.gtt().delete_trigger_with_permit(1, p).await;
+    assert_eq!(kind(e.unwrap_err()), HttpErrorKind::Admission);
+    let p = c.admit(PermitTarget::DeleteGtt).await.unwrap();
+    let e = c
+        .orders()
+        .cancel_order_with_permit(OrderVariety::Regular, &OrderId::new("1").unwrap(), p)
+        .await;
+    assert_eq!(kind(e.unwrap_err()), HttpErrorKind::Admission);
+
+    // An expired permit.
+    let p = c.admit(PermitTarget::PlaceGtt).await.unwrap();
+    tokio::time::sleep(Duration::from_millis(40)).await;
+    let e = c.gtt().place_trigger_with_permit(&single(), p).await;
+    assert_eq!(kind(e.unwrap_err()), HttpErrorKind::Deadline);
+
+    // A permit from another client's admission scope.
+    let p = client(&h.base_url())
+        .admit(PermitTarget::DeleteGtt)
+        .await
+        .unwrap();
+    let e = c.gtt().delete_trigger_with_permit(1, p).await;
+    assert_eq!(kind(e.unwrap_err()), HttpErrorKind::Admission);
+
+    // A valid permit does not let an invalid request through.
+    let mut invalid = single();
+    invalid.trigger_values.push(800.0);
+    let p = c.admit(PermitTarget::PlaceGtt).await.unwrap();
+    let e = c.gtt().place_trigger_with_permit(&invalid, p).await;
+    assert!(is_validation(&e.unwrap_err()));
+
+    assert!(h.requests().is_empty(), "no permit started a transport");
 }
 
 #[test]

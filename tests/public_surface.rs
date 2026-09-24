@@ -123,6 +123,18 @@ async fn signatures(c: &HTTPClient, h: &TickerHandle) {
     let _: Result<KiteApiResponse<GttReceipt>, ManjaError> = c.gtt().place_trigger(&gtt).await;
     let _: Result<KiteApiResponse<GttReceipt>, ManjaError> = c.gtt().modify_trigger(1, &gtt).await;
     let _: Result<KiteApiResponse<GttReceipt>, ManjaError> = c.gtt().delete_trigger(1).await;
+    if let Ok(p) = c.admit(PermitTarget::PlaceGtt).await {
+        let _: Result<KiteApiResponse<GttReceipt>, ManjaError> =
+            c.gtt().place_trigger_with_permit(&gtt, p).await;
+    }
+    if let Ok(p) = c.admit(PermitTarget::ModifyGtt).await {
+        let _: Result<KiteApiResponse<GttReceipt>, ManjaError> =
+            c.gtt().modify_trigger_with_permit(1, &gtt, p).await;
+    }
+    if let Ok(p) = c.admit(PermitTarget::DeleteGtt).await {
+        let _: Result<KiteApiResponse<GttReceipt>, ManjaError> =
+            c.gtt().delete_trigger_with_permit(1, p).await;
+    }
     let _: Result<KiteApiResponse<Vec<GttTrigger>>, ManjaError> = c.gtt().list_triggers().await;
     let _: Result<KiteApiResponse<GttTrigger>, ManjaError> = c.gtt().get_trigger(1).await;
     let _: Result<KiteApiResponse<Quotes<LTPQuote>>, ManjaError> =
