@@ -1,0 +1,32 @@
+name: Feature request
+description: Suggest an improvement, or a Kite Connect endpoint manja doesn't cover yet.
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for the suggestion. Describing the problem you want to solve, not only the
+        solution, helps most: there may be a way manja already supports, or a design that
+        fits better.
+  - type: textarea
+    id: problem
+    attributes:
+      label: The problem
+      description: What you're trying to do, and what gets in the way today.
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: What you'd like
+      description: How you'd like it to work. A sketch of the API you'd call is welcome.
+  - type: input
+    id: kite-docs
+    attributes:
+      label: Kite Connect documentation
+      description: For a new endpoint, a link to where Kite documents it.
+      placeholder: "https://kite.trade/docs/connect/v3/..."
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives you've considered

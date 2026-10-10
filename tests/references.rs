@@ -27,7 +27,13 @@ fn scanned() -> Vec<String> {
     ] {
         walk(&root, &root.join(top), &mut out);
     }
-    for file in ["README.md", "Cargo.toml"] {
+    for file in [
+        "README.md",
+        "CHANGELOG.md",
+        "CONTRIBUTING.md",
+        "SECURITY.md",
+        "Cargo.toml",
+    ] {
         out.push(file.to_string());
     }
     out.push("tests/fixtures/ticker/MANIFEST.toml".to_string());

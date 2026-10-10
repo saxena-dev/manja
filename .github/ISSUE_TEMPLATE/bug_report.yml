@@ -1,0 +1,67 @@
+name: Bug report
+description: Something in manja doesn't behave as documented.
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for taking the time to report this. **Don't include credentials or account
+        data:** API keys, access tokens, API secrets and request tokens don't belong here,
+        even expired ones. manja's credential types redact themselves, but an error can
+        include Kite's own message, which may mention amounts or order IDs, so review what
+        you paste.
+
+        For a question about Kite Connect itself, rather than manja, TradingQnA is the
+        better place: https://tradingqna.com/
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened
+      description: What you did, what you expected, and what happened instead.
+    validations:
+      required: true
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: How to reproduce
+      description: |
+        The smallest code that shows the problem, if you can, in a ```rust block. A
+        response body or ticker message that triggers it helps too, with account details
+        removed.
+  - type: textarea
+    id: error
+    attributes:
+      label: Error or output
+      description: |
+        The error as printed, or with `{:?}`. For an `HttpError`, its kind and stage are
+        the most useful parts.
+      render: text
+  - type: input
+    id: version
+    attributes:
+      label: manja version
+      placeholder: "0.2.0"
+    validations:
+      required: true
+  - type: input
+    id: features
+    attributes:
+      label: Features enabled
+      placeholder: "default, or for example http,ticker"
+  - type: input
+    id: rust
+    attributes:
+      label: Rust version
+      description: The output of `rustc --version`.
+      placeholder: "rustc 1.88.0"
+  - type: input
+    id: os
+    attributes:
+      label: Operating system
+  - type: checkboxes
+    id: redacted
+    attributes:
+      label: Before submitting
+      options:
+        - label: I have removed API keys, access tokens, secrets and personal account data.
+          required: true

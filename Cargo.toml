@@ -17,6 +17,7 @@ exclude = [
     "examples/*",
     "benches/*",
     "/*.md",
+    "!CHANGELOG.md",
     ".*",
     ".temp/*",
     "kiteconnect-mocks",
