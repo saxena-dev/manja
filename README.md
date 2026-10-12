@@ -115,8 +115,10 @@ async fn log_in(request_token: &str, api_secret: &str) -> Result<(), Box<dyn std
 The API secret is only borrowed for that one call, to compute the checksum Kite asks
 for. The exchange is never retried automatically.
 
-An access token lasts until 6 AM the next day, unless it is invalidated sooner, so plan
-for the user to log in again each trading day.
+An access token lasts until the next 6 AM IST after it was issued, unless it is
+invalidated sooner, so plan for the user to log in again each trading day.
+`manja::kite::protocol::session_expires_at` gives that instant for a token issued at a
+given time, so you need not hard-code the rule.
 
 ### 2. Call the HTTP API
 

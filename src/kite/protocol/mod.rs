@@ -24,7 +24,8 @@ pub mod scale;
 pub mod units;
 
 pub use datetime::{
-    BrokerTimestamp, DateTimeError, IST_OFFSET_SECONDS, parse_broker_date, parse_broker_datetime,
+    BrokerTimestamp, DateTimeError, IST_OFFSET_SECONDS, SESSION_EXPIRY_IST, parse_broker_date,
+    parse_broker_datetime, session_expires_at,
 };
 pub use enums::{Inbound, UnknownValue, WireEnum};
 pub use ids::{InstrumentToken, MfOrderId, OrderId, OrderIdError};

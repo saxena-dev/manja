@@ -107,7 +107,7 @@ IDs are stable. Tests cite the rows they cover, singly or as a range such as
 | Target | Features | Checks |
 |---|---|---|
 | `support` | `http`, `ticker` | the loopback harnesses and every fault they can inject |
-| `protocol_common` | none | the always-available protocol types |
+| `protocol_common` | none | the always-available protocol types. The session expiry rule is covered by unit tests in `kite::protocol::datetime`: issued 05:59:59 IST expires the same day at 06:00, issued 06:00:00 IST the next day, a UTC input (01:00Z, 06:30 IST) the next day at 06:00 IST, sub-second inputs either side of 06:00, and for every input the result carries offset +05:30, falls at `SESSION_EXPIRY_IST`, and is strictly after the input by at most one day (`contract.md` §2.2) |
 | `envelope_capture` | none | raw-observation envelopes over the capture keep bytes and receive times |
 | `fixture_manifest` | none | the vendored corpus against `MANIFEST.toml` |
 | `obs_schema` | none | the observability catalogue against `tests/obs_schema/catalogue.v1.txt` |

@@ -42,7 +42,8 @@ use manja::kite::obs::{
     BridgeRecorder, InMemoryRecorder, Instrument as MetricInstrument, MetricRecorder, Observability,
 };
 use manja::kite::protocol::{
-    Inbound, InstrumentToken, MfOrderId, OrderId, OrderIdError, OrderUpdate, Quantity, ScaledPrice,
+    Inbound, InstrumentToken, MfOrderId, OrderId, OrderIdError, OrderUpdate, Quantity,
+    SESSION_EXPIRY_IST, ScaledPrice, session_expires_at,
 };
 use manja::kite::ticker::actor::lifecycle::ReconnectLimits;
 use manja::kite::ticker::actor::owner::{
@@ -232,6 +233,14 @@ async fn signatures(c: &HTTPClient, h: &TickerHandle) {
     let _: Result<(), TickerError> = h.shutdown().await;
 }
 
+// The session expiry rule is a protocol constant and a pure function, with no
+// feature gate.
+fn session_expiry() {
+    let _: chrono::NaiveTime = SESSION_EXPIRY_IST;
+    let issued: chrono::DateTime<chrono::FixedOffset> = "2026-10-12T01:00:00Z".parse().unwrap();
+    let _: chrono::DateTime<chrono::FixedOffset> = session_expires_at(issued);
+}
+
 fn ticker_parts() -> Result<(TickerHandle, TickerEvents, TaskGuard), TickerSpawnError> {
     TickerBuilder::new(Credentials::new("k", "t").unwrap())
         .limits(TickerLimits::default().with_reconnect(ReconnectLimits::default()))
@@ -254,6 +263,7 @@ fn the_public_surface_is_reachable_and_constructible_offline() {
     .unwrap();
     resources(&client, ApiKey::new("k").unwrap());
     old_call_shapes(client.clone());
+    session_expiry();
     // Outside a runtime, a ticker cannot start: an explicit error.
     assert_eq!(ticker_parts().unwrap_err(), TickerSpawnError::NoRuntime);
     assert_eq!(
