@@ -610,7 +610,7 @@ async fn scripted(obs: Observability) -> (Vec<String>, usize) {
                 .cancel_order(OrderVariety::Regular, &OrderId::new(ORDER_ID).unwrap())
                 .await
                 .map_err(|e| {
-                    let e = e.as_http().unwrap();
+                    let e = e;
                     (e.kind(), e.http_status(), e.stage(), e.attempt())
                 })
                 .map(|_| ())
@@ -781,7 +781,7 @@ async fn a_refused_mutation_records_refused_and_the_cause() {
     );
     c.orders().place_order(&order).await.unwrap();
     let err = c.orders().place_order(&order).await.unwrap_err();
-    assert!(err.as_http().unwrap().retry_after().is_some());
+    assert!(err.retry_after().is_some());
     assert_eq!(h.requests().len(), 1);
 
     let ops = cap.named(OP);
@@ -801,4 +801,83 @@ async fn a_refused_mutation_records_refused_and_the_cause() {
             .0,
         1
     );
+}
+
+// ---- a mutation's span carries its correlation and wire hash -------------
+
+#[tokio::test]
+async fn the_operation_span_records_a_mutations_correlation_and_wire_hash() {
+    use manja::kite::connect::models::{
+        Exchange, OrderType, PlaceOrderRequest, ProductType, TransactionType,
+    };
+    use manja::kite::protocol::Quantity;
+    let cap = Capture::default();
+    let _g = cap.install();
+    let (rec, obs) = recording();
+    let h = HttpHarness::start(vec![
+        Reply::json(fixtures::json_body("order_response.json").unwrap()),
+        Reply::json(fixtures::json_body("orders.json").unwrap()),
+    ])
+    .await;
+    let c = client(&h.base_url(), &obs);
+    let order = PlaceOrderRequest::new(
+        OrderVariety::Regular,
+        Exchange::NSE,
+        "INFY",
+        TransactionType::BUY,
+        OrderType::Market,
+        Quantity::new(1).unwrap(),
+        ProductType::CashAndCarry,
+    );
+    let wire = order.wire().unwrap();
+    let token = "attempt 7f3a";
+    let tagged = c.with_correlation(token).unwrap();
+    // A correlated placement: the token and the hash are on the future
+    // before it is polled and on the span once it ends.
+    let dispatched = tagged.orders().place_order(&order);
+    assert_eq!(dispatched.correlation(), Some(token));
+    assert_eq!(dispatched.wire_sha256(), Some(wire.sha256()));
+    assert!(dispatched.refusal().is_none());
+    dispatched.await.unwrap();
+    // A read through the same handle records the token on its span too,
+    // and no hash: it has no wire form.
+    tagged.orders().list_orders().await.unwrap();
+    // A placement refused before transport (the client is closing) has no
+    // correlation and still records the hash of the form it did not send.
+    c.close(Duration::ZERO).await.unwrap();
+    let refused = c.orders().place_order(&order);
+    assert!(refused.refusal().is_some());
+    assert_eq!(refused.wire_sha256(), Some(wire.sha256()));
+    assert_eq!(h.requests().len(), 2);
+
+    let ops = cap.named(OP);
+    assert_eq!(ops.len(), 3);
+    assert_eq!(ops[0].field("endpoint"), Some("/orders/{variety}"));
+    assert_eq!(ops[0].field("correlation"), Some(token));
+    assert_eq!(
+        ops[0].field("wire_sha256"),
+        Some(wire.sha256_hex().as_str())
+    );
+    assert_eq!(ops[0].field("result"), Some("ok"));
+    assert_eq!(ops[1].field("endpoint"), Some("/orders"));
+    assert_eq!(ops[1].field("correlation"), Some(token));
+    assert_eq!(ops[1].field("wire_sha256"), None);
+    assert_eq!(ops[2].field("correlation"), None);
+    assert_eq!(
+        ops[2].field("wire_sha256"),
+        Some(wire.sha256_hex().as_str())
+    );
+    assert_eq!(ops[2].field("result"), Some("admission_rejected"));
+    assert_eq!(ops[2].field("stage"), Some("not_started"));
+    // Neither reaches a metric label or the admission and attempt spans.
+    for s in cap.named(ADMISSION).into_iter().chain(cap.named(ATTEMPT)) {
+        assert_eq!(s.field("correlation"), None);
+        assert_eq!(s.field("wire_sha256"), None);
+    }
+    for (labels, _) in rec.dump() {
+        for v in labels.values() {
+            let v = v.to_string();
+            assert!(!v.contains(token) && !v.contains(&wire.sha256_hex()), "{v}");
+        }
+    }
 }

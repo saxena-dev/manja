@@ -537,6 +537,18 @@ pub(crate) struct OpObs<'a> {
     pub(crate) waiting: &'a AtomicUsize,
 }
 
+impl OpSpec<'_> {
+    /// The retry class of the operation.
+    pub(crate) fn class(&self) -> RetryClass {
+        RetryClass::of(self.method, self.endpoint)
+    }
+
+    /// The quota class label of the operation.
+    pub(crate) fn quota(&self) -> QuotaClass {
+        self.class().quota_class()
+    }
+}
+
 // A small, seedable PRNG for jitter (SplitMix64); jitter needs spread, not
 // cryptographic strength.
 struct SplitMix64(u64);
@@ -667,51 +679,21 @@ impl Scheduler {
                 return Err(deadline_error(method, endpoint, n).with_retry(retry_info(n - 1)));
             }
             let attempt_timeout = self.limits.attempt_timeout.min(deadline_at - now);
-            let dispatched = Arc::new(AtomicBool::new(false));
-            let finisher = AttemptFinisher {
-                obs: ctx.obs,
-                method,
-                endpoint,
-                slot: Arc::new(Mutex::new(None)),
-            };
-            let attempt_ctx = AttemptCtx {
-                number: n,
-                token: DispatchToken {
-                    grant: Some(grant),
-                    dispatched: dispatched.clone(),
-                    obs: AttemptObs {
-                        obs: ctx.obs.clone(),
-                        parent: ctx.span.clone(),
-                        operation_id: ctx.operation_id,
+            let result = self
+                .one_attempt(
+                    OneAttempt {
                         number: n,
+                        grant,
                         method,
                         endpoint,
                         quota,
                         retry_of,
+                        timeout: attempt_timeout,
                     },
-                    slot: finisher.slot.clone(),
-                },
-            };
-            let result = match tokio::time::timeout(attempt_timeout, attempt(attempt_ctx)).await {
-                Ok(r) => r,
-                Err(_) => {
-                    let stage = if dispatched.load(Ordering::Acquire) {
-                        TransportStage::Started
-                    } else {
-                        TransportStage::NotStarted
-                    };
-                    Err(
-                        HttpError::new(HttpErrorKind::Transport, method, endpoint, stage)
-                            .with_attempt(n)
-                            .with_timeout()
-                            .with_detail("the attempt timeout elapsed"),
-                    )
-                }
-            };
-            match &result {
-                Ok(_) => finisher.finish(HttpAttemptResult::Ok, TransportStage::ResponseReceived),
-                Err(e) => finisher.finish(attempt_result(e), e.stage()),
-            }
+                    ctx,
+                    &mut attempt,
+                )
+                .await;
             let err = match result {
                 Ok(v) => return Ok(v),
                 Err(e) => e.with_retry(retry_info(n)),
@@ -730,6 +712,124 @@ impl Scheduler {
         }
         unreachable!("the loop returns on its last attempt")
     }
+
+    /// Run exactly one attempt with admitted capacity `grant`, under the
+    /// attempt timeout, with the attempt span, in-flight gauge and attempt
+    /// counters that every attempt gets. Shared by the retry loop and by
+    /// a mutation's single detached attempt.
+    pub(crate) async fn one_attempt<T, F, Fut>(
+        &self,
+        one: OneAttempt,
+        ctx: &OpObs<'_>,
+        attempt: &mut F,
+    ) -> Result<T, HttpError>
+    where
+        F: FnMut(AttemptCtx) -> Fut,
+        Fut: std::future::Future<Output = Result<T, HttpError>>,
+    {
+        let OneAttempt {
+            number: n,
+            grant,
+            method,
+            endpoint,
+            quota,
+            retry_of,
+            timeout,
+        } = one;
+        let dispatched = Arc::new(AtomicBool::new(false));
+        let finisher = AttemptFinisher {
+            obs: ctx.obs,
+            method,
+            endpoint,
+            slot: Arc::new(Mutex::new(None)),
+        };
+        let attempt_ctx = AttemptCtx {
+            number: n,
+            token: DispatchToken {
+                grant: Some(grant),
+                dispatched: dispatched.clone(),
+                obs: AttemptObs {
+                    obs: ctx.obs.clone(),
+                    parent: ctx.span.clone(),
+                    operation_id: ctx.operation_id,
+                    number: n,
+                    method,
+                    endpoint,
+                    quota,
+                    retry_of,
+                },
+                slot: finisher.slot.clone(),
+            },
+        };
+        let result = match tokio::time::timeout(timeout, attempt(attempt_ctx)).await {
+            Ok(r) => r,
+            Err(_) => {
+                let stage = if dispatched.load(Ordering::Acquire) {
+                    TransportStage::Started
+                } else {
+                    TransportStage::NotStarted
+                };
+                Err(
+                    HttpError::new(HttpErrorKind::Transport, method, endpoint, stage)
+                        .with_attempt(n)
+                        .with_timeout()
+                        .with_detail("the attempt timeout elapsed"),
+                )
+            }
+        };
+        match &result {
+            Ok(_) => finisher.finish(HttpAttemptResult::Ok, TransportStage::ResponseReceived),
+            Err(e) => finisher.finish(attempt_result(e), e.stage()),
+        }
+        result
+    }
+
+    /// Admit a mutation or session operation now, under its admission span,
+    /// or refuse it: the synchronous admission a dispatch performs before
+    /// spawning its attempt. Never waits.
+    pub(crate) fn admit_now(
+        &self,
+        admission: &Admission,
+        spec: &OpSpec<'_>,
+        ctx: &OpObs<'_>,
+    ) -> Result<AdmissionGrant, HttpError> {
+        let (method, endpoint) = (spec.method, spec.endpoint);
+        let rate = RateClass::of(method, endpoint);
+        let quota = RetryClass::of(method, endpoint).quota_class();
+        let mut watch = AdmissionWatch::start(
+            ctx.obs,
+            quota,
+            Some(ctx.span),
+            Some(ctx.operation_id),
+            Some(ctx.waiting),
+        );
+        let result = {
+            let _entered = watch.span.clone().entered();
+            admission.try_acquire(spec.priority, rate, spec.order_id)
+        };
+        watch.finish(match &result {
+            Ok(_) => AdmissionResult::Granted,
+            Err(_) => AdmissionResult::Refused,
+        });
+        result.map_err(|e| admission_error(e, method, endpoint, 1, false))
+    }
+
+    /// The timeout of a mutation's single attempt: the attempt timeout,
+    /// cut short by the operation deadline of its class.
+    pub(crate) fn single_attempt_timeout(&self, class: RetryClass) -> Duration {
+        self.limits.attempt_timeout.min(self.limits.deadline(class))
+    }
+}
+
+/// What one attempt needs beyond the attempt closure itself.
+pub(crate) struct OneAttempt {
+    pub(crate) number: u32,
+    pub(crate) grant: AdmissionGrant,
+    pub(crate) method: Method,
+    pub(crate) endpoint: Endpoint,
+    pub(crate) quota: QuotaClass,
+    pub(crate) retry_of: Option<RetryCause>,
+    pub(crate) timeout: Duration,
 }
 
 fn deadline_error(method: Method, endpoint: Endpoint, attempt: u32) -> HttpError {

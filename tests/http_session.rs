@@ -17,8 +17,10 @@ use manja::kite::connect::config::{Config, HttpLimits};
 use manja::kite::connect::credentials::{
     AccessToken, ApiKey, ApiSecret, Credentials, RequestToken,
 };
+use manja::kite::connect::dispatch::ReceiptIds;
 use manja::kite::connect::scheduler::SchedulerLimits;
-use manja::kite::error::{HttpErrorKind, TransportStage};
+use manja::kite::error::{HttpError, HttpErrorKind, TransportStage};
+use manja::kite::obs::schema::{Endpoint, HttpOperationResult};
 
 use support::fixtures;
 use support::http::{HttpHarness, RecordedRequest, Reply};
@@ -45,7 +47,7 @@ fn only(h: &HttpHarness) -> RecordedRequest {
     r
 }
 
-async fn exchange(c: &HTTPClient) -> manja::kite::error::Result<()> {
+async fn exchange(c: &HTTPClient) -> Result<(), HttpError> {
     c.session(key())
         .exchange(
             &RequestToken::new(REQUEST_TOKEN).unwrap(),
@@ -211,7 +213,7 @@ async fn every_fault_is_one_attempt_with_stage_evidence() {
         let h = HttpHarness::start(replies).await;
         let c = unauthenticated_with(&h.base_url(), short.clone());
         let err = exchange(&c).await.unwrap_err();
-        let e = err.as_http().unwrap();
+        let e = &err;
         assert_eq!((e.kind(), e.stage()), (kind, stage), "{e}");
         assert_eq!(h.requests().len(), 1, "one attempt: {e}");
         for rendered in [err.to_string(), format!("{err:?}")] {
@@ -223,17 +225,45 @@ async fn every_fault_is_one_attempt_with_stage_evidence() {
 }
 
 #[tokio::test]
-async fn cancellation_after_dispatch_claims_nothing() {
-    let h = HttpHarness::start(vec![Reply::Stall]).await;
+async fn dropping_the_exchange_future_abandons_nothing() {
+    // The server answers after 300 ms; the caller gives up after 100 ms.
+    // The exchange was dispatched, so its attempt runs to completion and
+    // its outcome lands in the orphan ring; nothing is recorded as cancelled.
+    let h = HttpHarness::start(vec![Reply::Delayed {
+        after: Duration::from_millis(300),
+        body: fixtures::json_body("generate_session.json")
+            .unwrap()
+            .into_bytes(),
+    }])
+    .await;
     let c = unauthenticated(&h.base_url());
-    let cancelled = tokio::time::timeout(Duration::from_millis(100), exchange(&c)).await;
-    assert!(cancelled.is_err());
+    let dropped = tokio::time::timeout(Duration::from_millis(100), exchange(&c)).await;
+    assert!(dropped.is_err());
     assert_eq!(h.requests().len(), 1);
-    let last = c.diagnostics().last_failures.last().cloned().unwrap();
-    assert_eq!(
-        (last.kind, last.stage),
-        (HttpErrorKind::Cancelled, TransportStage::Started)
+    assert_eq!(c.diagnostics().dispatches_in_flight, 1);
+    c.close(Duration::from_secs(5)).await.unwrap();
+    let d = c.diagnostics();
+    assert!(
+        d.last_failures.is_empty(),
+        "nothing failed: {:?}",
+        d.last_failures
     );
+    assert_eq!(d.dispatches_in_flight, 0);
+    assert_eq!(d.orphaned_outcome_count, 1);
+    let [outcome] = d.orphaned_outcomes.as_slice() else {
+        panic!("one orphaned outcome: {:?}", d.orphaned_outcomes);
+    };
+    assert_eq!(outcome.endpoint, Endpoint::SessionToken);
+    assert_eq!(outcome.result, HttpOperationResult::Ok);
+    assert_eq!(outcome.http_status, Some(200));
+    assert_eq!(outcome.stage, TransportStage::ResponseReceived);
+    assert_eq!(outcome.receipt, ReceiptIds::default());
+    // The outcome record carries no token: it holds the stage, the result
+    // and the hash, never a body.
+    let rendered = format!("{outcome:?}");
+    for s in [SECRET, REQUEST_TOKEN, CHECKSUM, "XXXXXX"] {
+        assert!(!rendered.contains(s), "{rendered}");
+    }
 }
 
 #[tokio::test]

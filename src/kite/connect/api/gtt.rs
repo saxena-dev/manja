@@ -14,6 +14,7 @@
 //!
 use crate::kite::connect::{
     client::HTTPClient,
+    dispatch::{Dispatched, ReceiptIds},
     models::{GttReceipt, GttRequest, GttTrigger, Response},
     wire::WireForm,
 };
@@ -71,29 +72,30 @@ impl<'c> Gtt<'c> {
     /// The request is validated first; an invalid one is a `Validation`
     /// error and nothing is sent. The bytes sent are exactly those of
     /// [`GttRequest::wire`].
-    pub async fn place_trigger(&self, request: &GttRequest) -> Result<Response<GttReceipt>> {
-        self.client.send_wire(request.wire(), true).await
+    pub fn place_trigger(&self, request: &GttRequest) -> Dispatched<GttReceipt> {
+        self.client
+            .dispatch(request.wire(), true, ReceiptIds::of_trigger)
     }
 
     /// Replace an active GTT: `PUT /gtt/triggers/{trigger_id}`, form-encoded
     /// with the complete new trigger (`kite:gtt.md:373-393`). The bytes sent
     /// are exactly those of [`GttRequest::wire_modification`].
-    pub async fn modify_trigger(
-        &self,
-        trigger_id: u64,
-        request: &GttRequest,
-    ) -> Result<Response<GttReceipt>> {
-        self.client
-            .send_wire(request.wire_modification(trigger_id), true)
-            .await
+    pub fn modify_trigger(&self, trigger_id: u64, request: &GttRequest) -> Dispatched<GttReceipt> {
+        self.client.dispatch(
+            request.wire_modification(trigger_id),
+            true,
+            ReceiptIds::of_trigger,
+        )
     }
 
     /// Delete an active GTT: `DELETE /gtt/triggers/{trigger_id}`. The request
     /// is [`WireForm::delete_trigger`].
-    pub async fn delete_trigger(&self, trigger_id: u64) -> Result<Response<GttReceipt>> {
-        self.client
-            .send_wire(Ok(WireForm::delete_trigger(trigger_id)), true)
-            .await
+    pub fn delete_trigger(&self, trigger_id: u64) -> Dispatched<GttReceipt> {
+        self.client.dispatch(
+            Ok(WireForm::delete_trigger(trigger_id)),
+            true,
+            ReceiptIds::of_trigger,
+        )
     }
 
     // ===== [ Reads ] =====

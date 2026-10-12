@@ -18,6 +18,9 @@ use manja::kite::connect::config::{Config, HttpLimits};
 use manja::kite::connect::credentials::{
     AccessToken, ApiKey, ApiSecret, CredentialError, Credentials, RequestToken,
 };
+use manja::kite::connect::dispatch::{
+    CloseError, Dispatched, Outcome, OutcomeStream, OutcomeStreamError, ReceiptIds,
+};
 use manja::kite::connect::models::{
     Candle, CandleInterval, DividendType, Exchange, FullQuote, GttCondition, GttOrder,
     GttOrderOutcome, GttOrderRequest, GttOrderResult, GttReceipt, GttRequest, GttStatus,
@@ -38,6 +41,7 @@ use manja::kite::envelope::{
     GapFacts, LifecycleEvent, LifecycleKind, Payload, RawObservation, SourceIdentity, SourceKey,
 };
 use manja::kite::error::{BrokerError, HttpError, HttpErrorKind, ManjaError, TransportStage};
+use manja::kite::obs::schema::{Endpoint, HttpOperationResult, Method};
 use manja::kite::obs::{
     BridgeRecorder, InMemoryRecorder, Instrument as MetricInstrument, MetricRecorder, Observability,
 };
@@ -93,10 +97,9 @@ async fn signatures(c: &HTTPClient, h: &TickerHandle) {
     let id: OrderId = "151220000000000".parse().unwrap();
     let _: Result<Response<Vec<Order>>, ManjaError> = c.orders().get_order_history(&id).await;
     let _: Result<Response<Vec<Trade>>, ManjaError> = c.orders().get_order_trades(&id).await;
-    let _: Result<Response<OrderReceipt>, ManjaError> = c
+    let _: Dispatched<OrderReceipt> = c
         .orders()
-        .cancel_order(manja::kite::connect::models::OrderVariety::Regular, &id)
-        .await;
+        .cancel_order(manja::kite::connect::models::OrderVariety::Regular, &id);
     let _: Result<OrderId, OrderIdError> = OrderId::new("1");
     let _: Result<Response<Rows<Order>>, ManjaError> =
         c.orders().list_orders_with_rejections().await;
@@ -127,9 +130,9 @@ async fn signatures(c: &HTTPClient, h: &TickerHandle) {
     );
     let _: Result<(), RequestError> = gtt.validate();
     let _: fn(&GttTrigger) -> Result<GttRequest, RequestError> = GttRequest::from_trigger;
-    let _: Result<Response<GttReceipt>, ManjaError> = c.gtt().place_trigger(&gtt).await;
-    let _: Result<Response<GttReceipt>, ManjaError> = c.gtt().modify_trigger(1, &gtt).await;
-    let _: Result<Response<GttReceipt>, ManjaError> = c.gtt().delete_trigger(1).await;
+    let _: Dispatched<GttReceipt> = c.gtt().place_trigger(&gtt);
+    let _: Dispatched<GttReceipt> = c.gtt().modify_trigger(1, &gtt);
+    let _: Dispatched<GttReceipt> = c.gtt().delete_trigger(1);
     let _: Result<Response<Vec<GttTrigger>>, ManjaError> = c.gtt().list_triggers().await;
     let _: Result<Response<GttTrigger>, ManjaError> = c.gtt().get_trigger(1).await;
     let _: Result<Response<Quotes<LTPQuote>>, ManjaError> =
@@ -139,10 +142,9 @@ async fn signatures(c: &HTTPClient, h: &TickerHandle) {
     let history = HistoricalRequest::new(InstrumentToken::new(5633), CandleInterval::Day, at, at);
     let _: Result<Response<HistoricalData>, ManjaError> = c.market().get_historical(&history).await;
     let _: fn(&HistoricalData) -> &Vec<Candle> = |d| &d.candles;
-    let _: Result<Response<HoldingsAuthorisation>, ManjaError> = c
+    let _: Dispatched<HoldingsAuthorisation> = c
         .portfolio()
-        .authorise_holdings(&HoldingsAuthorisationRequest::all())
-        .await;
+        .authorise_holdings(&HoldingsAuthorisationRequest::all());
     let _: fn(&HoldingsAuthorisation, &ApiKey) -> String = HoldingsAuthorisation::portal_url;
     let _: fn(&HttpError) -> bool = HttpError::requires_holdings_authorisation;
     let mf = c.mutual_funds();
@@ -248,6 +250,64 @@ async fn signatures(c: &HTTPClient, h: &TickerHandle) {
     let _: fn(&HttpError) -> Option<IngressStamp> = HttpError::received_at;
     let _: HttpClientBuilder =
         HTTPClient::builder(Config::default()).identity(SourceIdentity::generate());
+    // Dispatch: a mutation is a plain function returning a future the
+    // client runs to completion; its outcome reaches the stream or the ring.
+    let dispatched: Dispatched<OrderReceipt> = c.orders().place_order(&place);
+    let _: (
+        u64,
+        Option<&HttpError>,
+        Option<[u8; 32]>,
+        Option<&str>,
+        bool,
+    ) = (
+        dispatched.operation_id(),
+        dispatched.refusal(),
+        dispatched.wire_sha256(),
+        dispatched.correlation(),
+        dispatched.is_in_flight(),
+    );
+    let _ = format!("{dispatched:?}");
+    let _: Result<Response<OrderReceipt>, HttpError> = dispatched.await;
+    let _: Result<HTTPClient, ManjaError> = c.with_correlation("attempt-1");
+    let _: Result<(), CloseError> = c.close(std::time::Duration::ZERO).await;
+    let _: fn(&CloseError) -> usize = |e| e.in_flight;
+    let _: usize = manja::kite::connect::dispatch::ORPHANED_OUTCOMES;
+    let _: usize = manja::kite::connect::dispatch::MAX_CORRELATION_BYTES;
+    let _: ReceiptIds = ReceiptIds::none(&());
+    let _: (Option<OrderId>, Option<u64>) = (ReceiptIds::none(&()).order_id, None);
+    let _: fn(&OrderReceipt) -> ReceiptIds = ReceiptIds::of_order;
+    let _: fn(&GttReceipt) -> ReceiptIds = ReceiptIds::of_trigger;
+    let built: Result<(HTTPClient, OutcomeStream), ManjaError> = HTTPClient::builder(
+        Config::default().with_limits(HttpLimits::default().with_outcome_capacity(16).unwrap()),
+    )
+    .build_with_outcomes();
+    if let Ok((client, mut stream)) = built {
+        let _: usize = client.diagnostics().dispatches_in_flight;
+        let _: Vec<Outcome> = client.diagnostics().orphaned_outcomes;
+        let _: (u64, u64) = (
+            client.diagnostics().orphaned_outcome_count,
+            client.diagnostics().outcome_stream_dropped,
+        );
+        let _: (usize, bool) = (stream.len(), stream.is_empty());
+        if let Some(Ok(o)) = stream.recv().await {
+            let _: (u64, Option<String>, Method, Endpoint, [u8; 32]) = (
+                o.operation_id,
+                o.correlation,
+                o.method,
+                o.endpoint,
+                o.wire_sha256,
+            );
+            let _: (TransportStage, HttpOperationResult, Option<HttpErrorKind>) =
+                (o.stage, o.result, o.error);
+            let _: (Option<u16>, u32, ReceiptIds, SourceIdentity) =
+                (o.http_status, o.attempt, o.receipt, o.source);
+            let _: (Option<IngressStamp>, Option<IngressStamp>) = (o.sent_at, o.received_at);
+        }
+        let _ = matches!(
+            OutcomeStreamError::Overflow { dropped: 1 },
+            OutcomeStreamError::Overflow { .. }
+        );
+    }
     // Headroom is a plain, copyable snapshot; both readers take the checked ID.
     let room: Headroom = c.admission().headroom(RateClass::OrderPlacement);
     let copy = room;

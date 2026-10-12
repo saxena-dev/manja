@@ -89,10 +89,13 @@
 //!
 //! - **Success means success.** A call succeeds only when Kite answers with a
 //!   2xx status, a `success` envelope and data of the expected shape.
-//! - **Mutations are sent once.** Every call that can change your account
-//!   (orders, position conversions, GTT changes, holdings authorisation and
-//!   the session calls) makes exactly one attempt. Reads and margin and
-//!   charge calculations retry transient failures on their own.
+//! - **Mutations are sent once, and their outcome is never lost.** Every
+//!   call that can change your account (orders, position conversions, GTT
+//!   changes, holdings authorisation and the session calls) makes exactly
+//!   one attempt, on a task the client owns: dropping or timing out the
+//!   returned future abandons nothing, and the outcome reaches the client's
+//!   outcome stream or its diagnostics. Reads and margin and charge
+//!   calculations retry transient failures on their own.
 //! - **Rate limits are enforced locally**, at the rates Kite documents. A
 //!   read waits briefly for capacity (`B-HTTP-06`, 5 seconds by default); an
 //!   order call never waits and is admitted at once or refused with a hint.

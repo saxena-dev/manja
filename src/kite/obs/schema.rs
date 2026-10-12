@@ -595,6 +595,8 @@ pub const SPANS: &[SpanSpec] = &[
             "result",
             "stage",
             "admission_cause",
+            "correlation",
+            "wire_sha256",
         ],
     },
     SpanSpec {

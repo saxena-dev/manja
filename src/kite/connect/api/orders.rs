@@ -18,6 +18,7 @@
 //!
 use crate::kite::connect::{
     client::{HTTPClient, RowPolicy},
+    dispatch::{Dispatched, ReceiptIds},
     models::{
         ModifyOrderRequest, Order, OrderReceipt, OrderVariety, PlaceOrderRequest, Response, Row,
         Rows, Trade,
@@ -72,22 +73,22 @@ impl<'c> Orders<'c> {
     /// The request is validated first; an invalid one is a `Validation`
     /// error and nothing is sent. The bytes sent are exactly those of
     /// [`PlaceOrderRequest::wire`].
-    pub async fn place_order(&self, request: &PlaceOrderRequest) -> Result<Response<OrderReceipt>> {
-        self.client.send_wire(request.wire(), true).await
+    pub fn place_order(&self, request: &PlaceOrderRequest) -> Dispatched<OrderReceipt> {
+        self.client
+            .dispatch(request.wire(), true, ReceiptIds::of_order)
     }
 
     /// Modify an open or pending order: `PUT /orders/{variety}/{order_id}`,
     /// form-encoded, sending only the fields that are set. The bytes sent
     /// are exactly those of [`ModifyOrderRequest::wire`].
-    pub async fn modify_order(
+    pub fn modify_order(
         &self,
         variety: OrderVariety,
         order_id: &OrderId,
         request: &ModifyOrderRequest,
-    ) -> Result<Response<OrderReceipt>> {
+    ) -> Dispatched<OrderReceipt> {
         self.client
-            .send_wire(request.wire(variety, order_id), true)
-            .await
+            .dispatch(request.wire(variety, order_id), true, ReceiptIds::of_order)
     }
 
     /// Cancel an open or pending order: `DELETE /orders/{variety}/{order_id}`.
@@ -96,14 +97,16 @@ impl<'c> Orders<'c> {
     /// the API key nor the access token is placed in the URL
     /// (`kite:orders.md:147-162`). The receipt acknowledges the request, not a
     /// confirmed cancellation. The request is [`WireForm::cancel_order`].
-    pub async fn cancel_order(
+    pub fn cancel_order(
         &self,
         variety: OrderVariety,
         order_id: &OrderId,
-    ) -> Result<Response<OrderReceipt>> {
-        self.client
-            .send_wire(Ok(WireForm::cancel_order(variety, order_id)), true)
-            .await
+    ) -> Dispatched<OrderReceipt> {
+        self.client.dispatch(
+            Ok(WireForm::cancel_order(variety, order_id)),
+            true,
+            ReceiptIds::of_order,
+        )
     }
 
     // ===== [ Reads ] =====

@@ -12,6 +12,7 @@
 
 use crate::kite::connect::{
     client::HTTPClient,
+    dispatch::{Dispatched, ReceiptIds},
     models::{
         Auction, Holding, HoldingsAuthorisation, HoldingsAuthorisationRequest,
         PositionConversionRequest, Positions, Response,
@@ -99,11 +100,8 @@ impl<'c> Portfolio<'c> {
     /// The request is validated first; an invalid one sends nothing. The
     /// `true` result is the broker's response. The bytes sent are exactly
     /// those of [`PositionConversionRequest::wire`].
-    pub async fn convert_position(
-        &self,
-        request: &PositionConversionRequest,
-    ) -> Result<Response<bool>> {
-        self.client.send_wire(request.wire(), true).await
+    pub fn convert_position(&self, request: &PositionConversionRequest) -> Dispatched<bool> {
+        self.client.dispatch(request.wire(), true, ReceiptIds::none)
     }
 
     /// Retrieve the list of auctions that are currently being held.
@@ -129,10 +127,10 @@ impl<'c> Portfolio<'c> {
     /// retry anything. An ISIN that is not 12 ASCII uppercase letters or
     /// digits is a `Validation` error, and nothing is sent. The bytes sent
     /// are exactly those of [`HoldingsAuthorisationRequest::wire`].
-    pub async fn authorise_holdings(
+    pub fn authorise_holdings(
         &self,
         request: &HoldingsAuthorisationRequest,
-    ) -> Result<Response<HoldingsAuthorisation>> {
-        self.client.send_wire(request.wire(), true).await
+    ) -> Dispatched<HoldingsAuthorisation> {
+        self.client.dispatch(request.wire(), true, ReceiptIds::none)
     }
 }

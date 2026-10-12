@@ -20,7 +20,7 @@ use manja::kite::connect::models::{
     PositionConversionRequest, PositionType, ProductType, SliceResult, TransactionType,
 };
 use manja::kite::connect::scheduler::SchedulerLimits;
-use manja::kite::error::{HttpErrorKind, ManjaError, TransportStage};
+use manja::kite::error::{HttpError, HttpErrorKind, TransportStage};
 use manja::kite::protocol::{OrderId, Quantity};
 
 use support::fixtures;
@@ -79,8 +79,7 @@ fn id(s: &str) -> OrderId {
     OrderId::new(s).unwrap()
 }
 
-fn is_validation(e: &ManjaError) -> bool {
-    let h = e.as_http().unwrap();
+fn is_validation(h: &HttpError) -> bool {
     h.kind() == HttpErrorKind::Validation && h.stage() == TransportStage::NotStarted
 }
 
@@ -327,7 +326,7 @@ async fn a_lost_placement_response_is_not_resubmitted() {
         .place_order(&limit_buy())
         .await
         .unwrap_err();
-    let e = err.as_http().unwrap();
+    let e = err;
     assert_eq!(e.stage(), TransportStage::Started, "the broker may have it");
     assert!(e.may_have_reached_broker());
     assert_eq!(h.requests().len(), 1, "exactly one attempt");
@@ -346,7 +345,7 @@ async fn a_malformed_acknowledgement_is_evidence_not_success() {
         .place_order(&limit_buy())
         .await
         .unwrap_err();
-    let e = err.as_http().unwrap();
+    let e = err;
     assert_eq!(e.kind(), HttpErrorKind::Decode);
     assert_eq!(e.http_status(), Some(200));
     assert_eq!(h.requests().len(), 1);
@@ -376,7 +375,7 @@ async fn a_refused_placement_sends_nothing_and_carries_a_hint() {
     c.orders().place_order(&limit_buy()).await.unwrap();
     let before = h.requests().len();
     let err = c.orders().place_order(&limit_buy()).await.unwrap_err();
-    let e = err.as_http().unwrap();
+    let e = err;
     assert_eq!(e.kind(), HttpErrorKind::Admission);
     assert_eq!(e.stage(), TransportStage::NotStarted);
     assert!(e.retry_after().is_some());
@@ -466,7 +465,7 @@ async fn a_sliced_placement_reports_every_slice_including_failures() {
         .place_order(&request)
         .await
         .unwrap_err();
-    assert_eq!(err.as_http().unwrap().kind(), HttpErrorKind::Decode);
+    assert_eq!(err.kind(), HttpErrorKind::Decode);
 }
 
 #[tokio::test]
@@ -507,7 +506,7 @@ async fn a_response_order_id_that_could_change_a_path_is_a_decode_error() {
         .place_order(&limit_buy())
         .await
         .unwrap_err();
-    assert_eq!(err.as_http().unwrap().kind(), HttpErrorKind::Decode);
+    assert_eq!(err.kind(), HttpErrorKind::Decode);
 }
 
 // ---- wire forms: the bytes sent are the bytes wire() renders -----------
@@ -743,7 +742,7 @@ async fn a_dropped_connection_after_dispatch_is_stamped_sent_but_not_received() 
     let h = HttpHarness::start(vec![Reply::DropAfterRequest]).await;
     let c = client(&h.base_url());
     let err = c.orders().place_order(&market_buy()).await.unwrap_err();
-    let e = err.as_http().unwrap();
+    let e = err;
     assert_eq!(e.stage(), TransportStage::Started);
     assert!(e.may_have_reached_broker());
     let sent = e.sent_at().expect("the request left the process");
@@ -767,7 +766,7 @@ async fn a_dropped_connection_after_dispatch_is_stamped_sent_but_not_received() 
         .place_order(&market_buy())
         .await
         .unwrap_err();
-    let e = err.as_http().unwrap();
+    let e = err;
     assert_eq!(e.stage(), TransportStage::ResponseReceived);
     let (sent, received) = (e.sent_at().unwrap(), e.received_at().unwrap());
     assert!(received.wall >= sent.wall);

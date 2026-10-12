@@ -179,7 +179,7 @@ async fn buy(client: &HTTPClient) -> Result<(), Box<dyn std::error::Error>> {
 
     match client.orders().place_order(&order).await {
         Ok(receipt) => println!("accepted as {}", receipt.data.order_id),
-        Err(err) if err.as_http().is_some_and(|e| e.may_have_reached_broker()) => {
+        Err(err) if err.may_have_reached_broker() => {
             // The request left the process, so the order may exist. Check the
             // order book before deciding to place it again.
             let book = client.orders().list_orders().await?.data;
@@ -198,6 +198,12 @@ A receipt means Kite accepted the order, not that it filled. Follow its progress
 An order call never waits for rate-limit capacity: it is sent at once or refused with an
 `Admission` error that says how long until the next slot (`retry_after`), so a check you
 make just before calling it is still current when the bytes leave.
+
+An order call is also not an `async fn`: it returns a `Dispatched` future, and the attempt
+runs on a task the client owns from the moment the call returns. Dropping the future, or
+timing it out, does not cancel an order that is already on its way; the attempt completes
+and its outcome is delivered to the client's outcome stream (`build_with_outcomes`) or
+kept in the diagnostics, so a receipt Kite sent is never thrown away.
 
 ### 4. Stream live market data
 

@@ -20,7 +20,7 @@ documentation pages listed, with access time and SHA-256, in
 
 | Feature | Modules | Adds dependencies |
 |---|---|---|
-| `http` | `kite::connect::{api, client, config, admission, scheduler}` | `reqwest`, `tokio` (timers and synchronization), `csv`, `hex`, `sha2` |
+| `http` | `kite::connect::{api, client, config, admission, scheduler, wire, dispatch}` | `reqwest`, `tokio` (timers, synchronization and the runtime handle a dispatched mutation's attempt is spawned on, §2.17), `csv`, `hex`, `sha2` |
 | `ticker` | `kite::ticker`, including `kite::ticker::actor` | `tokio` (also TCP and runtime handle), `tokio-tungstenite`, `futures-util` |
 | `decoder` | `kite::decoder` | none |
 
@@ -135,14 +135,14 @@ like every observability label domain (§4.1), is `#[non_exhaustive]`; the stabl
 |---|---|
 | `Validation` | the request failed local validation; nothing was sent |
 | `Configuration` | the client or request could not be built; nothing was sent |
-| `Admission` | admission capacity was unavailable before transport started. A mutation or session operation never waits for it: with a window full it is refused at once and the error carries `retry_after()`, the time until the lane's next slot; with the daily ceiling spent it carries `resets_at()`, the next 00:00 IST; the 25-per-order modification limit (`kite:exceptions.md:58`) has no recovery that day. `admission_cause()` names the cause (`window_full`, `daily_ceiling`, `modification_ceiling`, `no_standard_capacity`, `waiters_full`, `wait_expired`), for a read's exhausted wait too, including the `Deadline` error a read gets when the operation deadline expires during its admission wait. The SDK never waits a hint out; the caller decides |
+| `Admission` | admission capacity was unavailable before transport started. A mutation or session operation never waits for it: with a window full it is refused at once and the error carries `retry_after()`, the time until the lane's next slot; with the daily ceiling spent it carries `resets_at()`, the next 00:00 IST; the 25-per-order modification limit (`kite:exceptions.md:58`) has no recovery that day. `admission_cause()` names the cause (`window_full`, `daily_ceiling`, `modification_ceiling`, `no_standard_capacity`, `waiters_full`, `wait_expired`), for a read's exhausted wait too, including the `Deadline` error a read gets when the operation deadline expires during its admission wait. The SDK never waits a hint out; the caller decides. A mutation dispatched after `close` began, or when every `B-HTTP-10` in-flight slot is taken, is refused with this kind too, before admission, with no cause and no hint: nothing was sent, and the detail names the reason (§2.17) |
 | `Deadline` | the operation deadline expired |
 | `Transport` | the transport failed or timed out |
 | `HttpStatus` | a non-success status without a broker error envelope |
 | `Broker` | the broker returned an error envelope (`kite:exceptions.md:18-28`) |
 | `AuthRejected` | the broker rejected the credentials: `TokenException` or HTTP 403 (`kite:exceptions.md:20,35`) |
 | `Decode` | a response was received but was oversized, malformed or lacked the success envelope |
-| `Cancelled` | an operation whose future was dropped; recorded in `HTTPClient::diagnostics`, never returned by a call |
+| `Cancelled` | a read or calculation whose future was dropped; recorded in `HTTPClient::diagnostics`, never returned by a call. Not produced for a mutation or session operation by anything the caller does with the future: their attempt runs to completion (§2.17). The one exception is the runtime itself shutting down with the attempt in flight: the attempt task is dropped with it, a `Cancelled` entry with the attempt's stage is recorded, and the `Dispatched` future, if awaited, resolves with a `Transport` error at stage `Started` saying the attempt task ended without delivering an outcome |
 
 Every error an operation produces also carries the client's `source()` identity and the
 operation's `operation_id()` (§2.18), whatever its kind and stage. `sent_at()` is `Some`
@@ -207,7 +207,7 @@ raw stream and opens no second socket.
 | Completion | A command completes with `Ok(Revision)` once the owner has validated it and updated the desired state. That is acceptance, not broker acknowledgement. Lifecycle events then report the revision as `CommandsSent`, `Superseded` or `SendFailed` |
 | Wire order | Subscriptions are sent before their mode changes, because a `mode` request applies to tokens already subscribed (`kite:websocket.md:30-47`). Tokens are sent in ascending order, and modes in the fixed order LTP, quote, full |
 | Command cancellation | Dropping a command future after the owner accepted it does not withdraw the command |
-| HTTP cancellation | Dropping an HTTP future before transport starts cancels local work; dropping it later does not cancel anything at the broker |
+| HTTP cancellation | Dropping a read or calculation future before transport starts cancels local work; dropping it later does not cancel anything at the broker. A mutation or session operation cannot be cancelled by dropping its future: the call dispatched the attempt to a task the client owns, which finishes and reports whatever the caller does (§2.17) |
 | End of stream | `None` only after a successful `shutdown()`. Any other end yields one `Err` first, then `None`. Reconnects are lifecycle events, never an end of stream |
 | Termination | Dropping the primary receiver or the last `TickerHandle` stops the owner. `shutdown()` closes intake and the socket and delivers pending events within `B-TK-12` |
 
@@ -436,6 +436,34 @@ holdings and GTT lists, stay strict. The order ID in an
 `OrderChargesRequest` is not an `OrderId`: the documentation allows any string there
 (`kite:margins.md:395`), and it travels in the JSON body, never in a path.
 
+### 2.17 Dispatch
+
+Every mutation and session operation (the `mutation` and `session` rows of §2.1) is a
+plain function returning `Dispatched<T>` (`kite::connect::dispatch`), a future whose
+output is `Result<Response<T>, HttpError>`. The call itself, before the future is polled,
+validates the request and renders its wire form (§2.1), checks the body bound
+(`B-HTTP-09`), takes an in-flight slot (`B-HTTP-10`), admits the operation now or
+refuses it (§2.4, §3.6) and, once admitted, hands the single attempt to a task the client
+owns on the current Tokio runtime. From that point the attempt runs to completion whatever
+the caller does with the future: dropping it, timing it out or selecting away from it
+abandons nothing, and `HttpErrorKind::Cancelled` is never produced for a mutation by the
+caller's handling of the future. Only the runtime shutting down with the attempt in flight
+drops the attempt task, which is recorded as `Cancelled` with its stage (§2.4). Reads
+and calculations are unchanged: `async fn`, retried within their deadline, cancelled by
+drop (§2.6).
+
+| Item | Contract |
+|---|---|
+| Before polling | `operation_id()`; `refusal()`, the error when the call was refused before transport, else `None`; `wire_sha256()`, the hash of the form that was sent or would have been (`None` only when the request failed validation and has no form); `correlation()`; `is_in_flight()`. `Dispatched` is `Send`, so it can be moved to another task or held in a `select!` |
+| Refusal | A call refused before transport (a `Validation`, `Configuration` or `Admission` error, stage `NotStarted`) spawns nothing, emits no outcome record and resolves at once with the refusal when awaited; `refusal()` exposes the same error before the await. A dispatch made outside a Tokio runtime is a `Configuration` refusal; one made after `close` began is an `Admission` refusal; one that finds every `B-HTTP-10` slot taken is an `Admission` refusal, never a wait |
+| Outcome | The result of an admitted attempt is delivered once to the `Dispatched` future if it is still alive, and always, as an `Outcome` record, to the client's outcome stream when one was registered at build time (`HttpClientBuilder::build_with_outcomes`, capacity `B-HTTP-13`). Without a stream, the outcome of a dropped future goes to the orphaned outcome ring in `HttpDiagnostics` (`B-HTTP-14`) and `orphaned_outcome_count` grows by one, whether the future was dropped before the attempt completed or afterwards with the outcome delivered to it but never polled out; only an outcome the caller took by awaiting the future goes nowhere else |
+| Outcome record | `operation_id`, `correlation`, `method`, `endpoint` (the template), `wire_sha256`, `stage`, `result` (the `result.http_operation` domain, §4.3), `error` (the kind, when the attempt failed), `http_status`, `attempt` (always 1), `receipt` (the `order_id` or `trigger_id` the receipt carried, when the response decoded; otherwise none), `source`, `sent_at` and `received_at` (§2.18). It carries no request or response body, no URL and no header |
+| Stream | `OutcomeStream::recv()` yields `Some(Ok(outcome))` in completion order; `len()` and `is_empty()` read what is buffered. When the consumer falls behind by `B-HTTP-13` outcomes, or drops the stream, the client keeps every attempt running, counts each outcome it could not deliver in `HttpDiagnostics::outcome_stream_dropped` and keeps it in the ring (`B-HTTP-14`); once the buffered outcomes are drained, `recv()` yields one `Some(Err(OutcomeStreamError::Overflow { dropped }))` and then `None`. Nothing is dropped silently |
+| Correlation | `HTTPClient::with_correlation(token)` returns a client sharing the original's transport, admission scope, credentials and lane whose every call records `token` in the `correlation` field of its operation span (§4.2), and whose every mutation carries it in the outcome record and on `Dispatched::correlation()`; it is never a metric label. A token is 1 to `MAX_CORRELATION_BYTES` (64) bytes of printable ASCII, space included; anything else is a `Validation` error from `with_correlation` itself, returned as a plain value: no call was made, so no operation span, metric or diagnostics entry records it. A client without a mark carries none |
+| Wire hash on the span | The operation span records `wire_sha256` (hex) as soon as the form is rendered, so a dispatch refused after that point is recorded with the hash of the form it did not send (§4.2) |
+| Close | `HTTPClient::close(deadline)` marks the shared transport closing, so every later mutation dispatch from any clone is refused, and waits for the attempts in flight to complete and deliver; past the deadline it returns `CloseError { in_flight }` naming how many still run, and those continue on the runtime and still deliver. Dropping the last clone without `close` lets the attempts in flight finish and deliver to the stream |
+| Diagnostics | `HttpDiagnostics` reports `dispatches_in_flight`, the ring `orphaned_outcomes` (≤ `B-HTTP-14`, oldest evicted first), `orphaned_outcome_count` and `outcome_stream_dropped` (§4.5) |
+
 ### 2.18 Responses
 
 Every JSON endpoint returns `Response<T> { data: T, meta: ResponseMeta }`
@@ -501,9 +529,11 @@ cannot be changed.
 | `B-HTTP-07` | Admission waiters per budget scope | 256 | 1 to 4 096 | when full, an `Admission` error |
 | `B-HTTP-08` | Response body: JSON / instrument CSV | 4 MiB / 64 MiB | 64 KiB to 64 MiB / 1 MiB to 256 MiB | when exceeded, a `Decode` error with the status kept |
 | `B-HTTP-09` | Request body | 1 MiB | 1 KiB to 8 MiB | when exceeded, a `Validation` error before admission |
-| `B-HTTP-10` | In-flight attempts per transport | 32 | 1 to 256 | |
+| `B-HTTP-10` | In-flight attempts per transport | 32 | 1 to 256 | counts a mutation's detached attempt from the call that dispatched it; a mutation that finds no slot is refused with an `Admission` error, never queued, while a read waits for one (§2.17) |
 | `B-HTTP-11` | Session operation deadline | 15 s | 1 s to 60 s | one attempt (`B-HTTP-04`) |
 | `B-HTTP-12` | Retired in 0.3.0 with the dispatch permit (it bounded a permit's validity); the ID is never reused | | | |
+| `B-HTTP-13` | Outcome stream capacity: outcome records buffered for the consumer registered at build time | 1 024 | 16 to 65 536 | when full, the stream ends with `Overflow` once drained; every attempt still completes and every undelivered outcome is counted and kept in the ring (§2.17) |
+| `B-HTTP-14` | Orphaned outcome ring: outcome records kept in `HttpDiagnostics` for mutations whose future was dropped with no stream registered, and for outcomes the stream could not take | 16 | fixed | oldest evicted first; `orphaned_outcome_count` and `outcome_stream_dropped` count every record whether or not it is still in the ring (§2.17) |
 | `B-HTTP-15` | Control reserve per quota class, in requests per second: the part of the class rate only `Control` traffic may use | 2 for `Standard`, 0 for `Quote`, `Historical`, `OrderPlacement`, `OrderModification` and `Unclassified` | 0 to 5 | For a window of period `p` it reserves `reserve × p` slots, rounded up; ceilings have no reserve. A reserve at or above a window's rate leaves the class no `Standard` capacity: every `Standard` request in it is refused at once with an `Admission` error naming this bound, and never waits. 0 makes the lanes equal |
 
 Retries apply to 429, 502 to 504, transport faults and attempt timeouts, and only in
@@ -638,12 +668,13 @@ Additions within version 1:
 | `DecodeDiagnosticKind::InvalidField` (§4.5) | one more diagnostic kind |
 | `priority` field on `manja.http.operation` and the `priority` domain `standard`, `control` (§2.1, §4.2, §4.3) | a span field and a domain; no metric gains a label, so no series bound changes |
 | `admission_cause` field on `manja.http.operation`, the `admission_cause` domain, and the `admission_result` value `refused` (§2.4, §4.2, §4.3) | a span field, a domain and one more value of an existing label domain: the `manja_http_admission_wait_seconds` series bound grows from 16 to 20 (§4.4) |
+| `correlation` and `wire_sha256` fields on `manja.http.operation` (§2.17, §4.2) | two span fields: `correlation` is set on every call made through a `with_correlation` client and `wire_sha256` on every mutation with a wire form; neither is a metric label, so no series bound changes |
 
 ### 4.2 Spans
 
 | Span | Level | Fields |
 |---|---|---|
-| `manja.http.operation` | DEBUG | `operation_id`, `method`, `endpoint`, `quota_class`, `priority`, `deadline_ms`, `result`, `stage`, `admission_cause` |
+| `manja.http.operation` | DEBUG | `operation_id`, `method`, `endpoint`, `quota_class`, `priority`, `deadline_ms`, `result`, `stage`, `admission_cause`, `correlation`, `wire_sha256` |
 | `manja.http.admission` | DEBUG | `operation_id`, `quota_class`, `wait_ms`, `admission_result` |
 | `manja.http.attempt` | DEBUG | `operation_id`, `attempt`, `method`, `endpoint`, `http_status`, `error_class`, `stage` |
 | `manja.ticker.connection` | DEBUG | `feed_id`, `connection_epoch`, `reason`, `result` |
@@ -727,7 +758,7 @@ the buckets 0.001, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10, 30, 
 
 | Diagnostic | Fields |
 |---|---|
-| `HttpDiagnostics` | active attempts, admission waiters in total and per quota class, recent failures (≤ `B-DIAG-01`) each with endpoint, method, status, error class, stage, broker error type, a redacted message (≤ `B-DIAG-02`) and a monotonic timestamp, and a snapshot revision |
+| `HttpDiagnostics` | active attempts, admission waiters in total and per quota class, recent failures (≤ `B-DIAG-01`) each with endpoint, method, status, error class, stage, broker error type, a redacted message (≤ `B-DIAG-02`) and a monotonic timestamp, the mutation dispatches in flight, the orphaned outcome ring (≤ `B-HTTP-14`) with the counts of orphaned outcomes and of outcomes the stream could not take (§2.17), and a snapshot revision |
 | `TickerStatus` | as §2.7 |
 | Decoder adapter diagnostic | source key, decoder version, packet index if any, a bounded detail (≤ `B-DIAG-02`), and a `DecodeDiagnosticKind`: `truncated`, `count_mismatch`, `trailing_bytes`, `unknown_length`, `oversized`, `invalid_text`, `unknown_text_type`, or `invalid_field` (a field value its type cannot hold, such as a negative quantity) |
 
@@ -771,6 +802,7 @@ These choices are not dictated by the Kite documentation alone.
 | Quota enforcement | Every documented window is enforced locally by default (§3.6) | Exceeding them is a documented broker error (`kite:exceptions.md:39`) |
 | No dispatch permits | The permit API of 0.2 (`admit`, `DispatchPermit`, `PermitTarget`, the `*_with_permit` methods and `B-HTTP-12`) is removed; the mutation call is the admission boundary (§3.6) | A permit was a timed race whose validity bound had to outlast the caller's own checks, which is the caller's policy in the SDK's configuration; it held a window slot for a request that might never be sent, exactly the slot a cancellation needs under load; and it doubled the mutation surface. A call that is admitted now or refused with a hint gives the same affirmative not-sent evidence with no token |
 | No wait for mutations | A mutation or session operation is admitted now or refused with a hint; only reads and calculations wait under `B-HTTP-06` (§2.4, §3.2, §3.6) | A wait between a caller's decision and the socket write makes that decision stale by construction, and a caller whose dispatch gate is serialised with other work cannot afford a call that sleeps. An immediate refusal is affirmative evidence that nothing was sent, and with the exact hint the caller can schedule better than a blind wait. Reads lose nothing by waiting, so they keep the bound |
+| Detached mutations | A mutation or session operation is a plain function returning `Dispatched<T>`; its one attempt runs on a task the client owns and its outcome is delivered to the future if alive and always to the outcome stream, or to the orphan ring when no stream is registered; a refusal spawns nothing and emits no record; `Cancelled` is never produced for a mutation (§2.17, §3.2) | Once the bytes have left there is nothing to cancel, so a future that can be dropped promises a capability that does not exist, and a receipt the broker sent and the SDK read must not be lost to a `select!`, a timeout or a panic in the caller. A bounded stream that ends with an error rather than dropping silently is the ticker's pattern in this crate; diagnostics alone are evicted and would have to be polled; a callback would run caller code on the SDK's task, which §4.7 declines to defend against. The cost is one task spawn and one channel per mutation, at most ten a second by broker rule; reads, the volume path, pay nothing |
 | Headroom | Admission capacity is readable as an advisory, local-view snapshot per class and lane, plus the modifications an order has left; a spent daily ceiling zeroes both lanes and announces no next slot, and a lane the reserve covers announces none either (§3.6) | A caller that can only learn capacity by being refused pays a refusal for every full window. A snapshot that agrees with the next decision lets it order its own work, and saying "advisory, local view" keeps the account-wide limit, which includes manual orders, where it belongs: with the caller. A reserving read would be the dispatch permit by another name |
 | Session expiry | The 6 AM expiry is taken as IST, and a token expires at the next 06:00 IST strictly after its issue time: an issue at exactly 06:00:00 expires the next day, an issue before 06:00 expires that same morning (§2.2) | Kite's one sentence (`kite:user.md:115`) names no zone and says "the next day"; every documented Kite time is IST, and a caller that injects the issue time needs one boundary rule with no gap, so the next boundary after the instant is the reading the function implements |
 | Ingress stamps | A response's `sent_at` is taken at dispatch, the last instant before the bytes leave the process, and `received_at` when the response head arrives, not when the body is complete; errors are stamped the same way, so a cut-off body still carries `received_at` (§2.18, §2.4) | A lost response is bounded by when the bytes left, and a response exists from the moment its head arrives, which is also when the error stage becomes `ResponseReceived`; stamping at the body's end would make a slow body look like a late response |

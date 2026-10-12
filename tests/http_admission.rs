@@ -374,7 +374,7 @@ async fn a_mark_overrides_the_default_in_both_directions() {
         .cancel_order(OrderVariety::Regular, &id)
         .await
         .unwrap_err();
-    assert_eq!(err.as_http().unwrap().kind(), HttpErrorKind::Admission);
+    assert_eq!(err.kind(), HttpErrorKind::Admission);
     assert_eq!(harness.requests().len(), 1);
     // ... while the unmarked cancel takes the control lane.
     client
@@ -669,7 +669,7 @@ async fn a_saturated_placement_window_refuses_at_once_with_an_accurate_hint() {
         .unwrap_err();
     assert_eq!(before.elapsed(), Duration::ZERO, "no timer was awaited");
     tokio::time::resume();
-    let e = err.as_http().unwrap();
+    let e = err;
     assert_eq!(e.kind(), HttpErrorKind::Admission);
     assert_eq!(e.stage(), TransportStage::NotStarted);
     assert!(!e.may_have_reached_broker());
@@ -784,7 +784,7 @@ async fn a_daily_ceiling_refusal_carries_when_it_resets() {
         .unwrap_err();
     assert_eq!(before.elapsed(), Duration::ZERO, "no timer was awaited");
     tokio::time::resume();
-    let e = err.as_http().unwrap();
+    let e = err;
     assert_eq!(e.kind(), HttpErrorKind::Admission);
     assert_eq!(e.stage(), TransportStage::NotStarted);
     assert_eq!(e.admission_cause(), Some(AdmissionCause::DailyCeiling));
@@ -844,7 +844,7 @@ async fn the_twenty_sixth_modification_of_an_order_is_a_modification_ceiling() {
         .modify_order(OrderVariety::Regular, &order, &request)
         .await
         .unwrap_err();
-    let e = err.as_http().unwrap();
+    let e = err;
     assert_eq!(e.kind(), HttpErrorKind::Admission);
     assert_eq!(
         e.admission_cause(),

@@ -7,6 +7,7 @@
 //! connection. A connection with no reply left is closed without a response.
 
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
@@ -36,6 +37,9 @@ pub enum Reply {
     /// Stalled peer: read the request, then hold the connection open silently
     /// until the harness is dropped.
     Stall,
+    /// A slow peer: read the request, wait `after`, then send a `200 OK`
+    /// JSON response with `body` unchanged.
+    Delayed { after: Duration, body: Vec<u8> },
 }
 
 impl Reply {
@@ -159,6 +163,12 @@ async fn serve(
         }
         Some(Reply::Stall) => {
             std::future::pending::<()>().await;
+        }
+        Some(Reply::Delayed { after, body }) => {
+            tokio::time::sleep(after).await;
+            let head = response_head(200, "application/json", body.len());
+            let _ = stream.write_all(head.as_bytes()).await;
+            let _ = stream.write_all(&body).await;
         }
     }
     let _ = stream.shutdown().await;

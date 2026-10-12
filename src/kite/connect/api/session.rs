@@ -31,10 +31,10 @@
 use crate::kite::connect::{
     client::HTTPClient,
     credentials::{AccessToken, ApiKey, ApiSecret, RequestToken},
-    models::{Response, UserSession},
+    dispatch::{Dispatched, ReceiptIds},
+    models::UserSession,
     wire::WireForm,
 };
-use crate::kite::error::Result;
 
 /// Turning a login into a session, and ending one. Borrowed from a client
 /// with [`HTTPClient::session`](crate::kite::connect::client::HTTPClient::session),
@@ -92,13 +92,13 @@ impl<'c> Session<'c> {
     /// The API secret is borrowed for the checksum only. The request is
     /// [`WireForm::session_exchange`], sent without an `Authorization`
     /// header.
-    pub async fn exchange(
+    pub fn exchange(
         &self,
         request_token: &RequestToken,
         api_secret: &ApiSecret,
-    ) -> Result<Response<UserSession>> {
+    ) -> Dispatched<UserSession> {
         let wire = WireForm::session_exchange(&self.api_key, request_token, api_secret);
-        self.client.send_wire(Ok(wire), false).await
+        self.client.dispatch(Ok(wire), false, ReceiptIds::none)
     }
 
     /// Invalidate the session of `access_token` for this API key: one
@@ -112,8 +112,8 @@ impl<'c> Session<'c> {
     /// s.invalidate(&t, &x).await;
     /// # }
     /// ```
-    pub async fn invalidate(&self, access_token: &AccessToken) -> Result<Response<bool>> {
+    pub fn invalidate(&self, access_token: &AccessToken) -> Dispatched<bool> {
         let wire = WireForm::session_invalidation(&self.api_key, access_token);
-        self.client.send_wire(Ok(wire), false).await
+        self.client.dispatch(Ok(wire), false, ReceiptIds::none)
     }
 }

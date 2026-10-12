@@ -108,7 +108,7 @@ async fn a_malformed_isin_sends_nothing() {
             .authorise_holdings(&request)
             .await
             .unwrap_err();
-        let e = err.as_http().unwrap();
+        let e = err;
         assert_eq!(e.kind(), HttpErrorKind::Validation, "{bad:?}");
         assert_eq!(e.stage(), TransportStage::NotStarted);
         assert_eq!(e.endpoint(), Endpoint::HoldingsAuthorise);
@@ -128,7 +128,7 @@ async fn a_lost_response_is_not_resubmitted() {
         .authorise_holdings(&two_isins())
         .await
         .unwrap_err();
-    assert_eq!(err.as_http().unwrap().stage(), TransportStage::Started);
+    assert_eq!(err.stage(), TransportStage::Started);
     assert_eq!(h.requests().len(), 1, "exactly one attempt");
 }
 
@@ -160,7 +160,7 @@ async fn a_sell_order_refused_with_428_asks_for_authorisation() {
         .place_order(&sell)
         .await
         .unwrap_err();
-    let e = err.as_http().unwrap();
+    let e = err;
     assert_eq!(e.http_status(), Some(428));
     assert!(e.requires_holdings_authorisation());
     assert_eq!(h.requests().len(), 1, "a placement is never retried");
@@ -185,7 +185,7 @@ async fn a_429_is_not_retried() {
         .authorise_holdings(&two_isins())
         .await
         .unwrap_err();
-    assert_eq!(err.as_http().unwrap().http_status(), Some(429));
+    assert_eq!(err.http_status(), Some(429));
     assert_eq!(h.requests().len(), 1, "a mutation makes one attempt");
 }
 

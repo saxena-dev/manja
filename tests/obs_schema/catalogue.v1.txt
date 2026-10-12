@@ -28,7 +28,7 @@ metric manja_decode_duration_seconds histogram unit=seconds labels=[source_mode,
 metric manja_ticker_shutdown_duration_seconds histogram unit=seconds labels=[result] series_bound=4
 metric manja_telemetry_dropped_records_total counter unit=records labels=[] series_bound=1
 
-span manja.http.operation level=DEBUG fields=[operation_id,method,endpoint,quota_class,priority,deadline_ms,result,stage,admission_cause]
+span manja.http.operation level=DEBUG fields=[operation_id,method,endpoint,quota_class,priority,deadline_ms,result,stage,admission_cause,correlation,wire_sha256]
 span manja.http.admission level=DEBUG fields=[operation_id,quota_class,wait_ms,admission_result]
 span manja.http.attempt level=DEBUG fields=[operation_id,attempt,method,endpoint,http_status,error_class,stage]
 span manja.ticker.connection level=DEBUG fields=[feed_id,connection_epoch,reason,result]

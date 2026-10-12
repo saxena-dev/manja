@@ -32,6 +32,7 @@ use manja::kite::connect::admission::{
 use manja::kite::connect::client::HTTPClient;
 use manja::kite::connect::config::{Config, HttpLimits};
 use manja::kite::connect::credentials::Credentials;
+use manja::kite::connect::dispatch::OutcomeStream;
 use manja::kite::connect::scheduler::SchedulerLimits;
 use manja::kite::decoder::adapter::Adapter;
 use manja::kite::decoder::framing::{FramingLimits, Message as Framed, frame};
@@ -233,15 +234,20 @@ where
 
 // ---- workloads --------------------------------------------------------
 
-fn client(base: &str, obs: Observability) -> HTTPClient {
+fn bench_config(base: &str) -> Config {
     let limits = HttpLimits::default().with_scheduler(
         SchedulerLimits::default()
             .with_backoff(Duration::from_millis(10), Duration::from_millis(10))
             .unwrap()
             .with_jitter_seed(7),
     );
-    // A high standard-class quota: this measures instrumentation overhead,
-    // not the documented 10 per second admission wait.
+    Config::new(base).with_limits(limits)
+}
+
+/// A high quota in every class but placement, whose documented rate the
+/// profile refuses to raise: this measures instrumentation overhead, not
+/// the documented admission wait.
+fn bench_profile() -> QuotaProfile {
     let fast = Window::new(1_000_000, Duration::from_secs(1));
     let mut profile = QuotaProfile::kite_v3().with_version("bench");
     for class in [
@@ -252,11 +258,24 @@ fn client(base: &str, obs: Observability) -> HTTPClient {
     ] {
         profile = profile.with_windows(class, vec![fast]).unwrap();
     }
-    HTTPClient::builder(Config::new(base).with_limits(limits))
-        .admission(Admission::new(profile, AdmissionLimits::default()))
+    profile
+}
+
+fn client(base: &str, obs: Observability) -> HTTPClient {
+    HTTPClient::builder(bench_config(base))
+        .admission(Admission::new(bench_profile(), AdmissionLimits::default()))
         .observability(obs)
         .credentials(Credentials::new("k", "t").unwrap())
         .build()
+        .unwrap()
+}
+
+fn client_with_outcomes(base: &str, obs: Observability) -> (HTTPClient, OutcomeStream) {
+    HTTPClient::builder(bench_config(base))
+        .admission(Admission::new(bench_profile(), AdmissionLimits::default()))
+        .observability(obs)
+        .credentials(Credentials::new("k", "t").unwrap())
+        .build_with_outcomes()
         .unwrap()
 }
 
@@ -281,6 +300,42 @@ async fn http_concurrent(obs: Observability, n: usize) -> Vec<u64> {
     for r in futures_util::future::join_all(calls).await {
         r.unwrap();
     }
+    vec![]
+}
+
+/// `n` order modifications, each a detached dispatch awaited in turn; the
+/// outcome stream is drained afterwards so every record is accounted for.
+async fn http_dispatch(obs: Observability, n: usize) -> Vec<u64> {
+    use manja::kite::connect::models::{ModifyOrderRequest, OrderVariety};
+    let receipt = support::fixtures::json_body("order_modify.json").unwrap();
+    let h = support::http::HttpHarness::start(
+        (0..n)
+            .map(|_| support::http::Reply::json(receipt.clone()))
+            .collect(),
+    )
+    .await;
+    let (c, mut outcomes) = client_with_outcomes(&h.base_url(), obs);
+    let request = ModifyOrderRequest {
+        quantity: Some(manja::kite::protocol::Quantity::new(1).unwrap()),
+        ..ModifyOrderRequest::default()
+    };
+    for i in 0..n {
+        // A fresh order ID per call keeps the per-order modification ceiling out of the measurement.
+        let id =
+            manja::kite::protocol::OrderId::new(format!("{}", 151_220_000_000_000u64 + i as u64))
+                .unwrap();
+        c.orders()
+            .modify_order(OrderVariety::Regular, &id, &request)
+            .await
+            .unwrap();
+    }
+    drop(c);
+    let mut delivered = 0;
+    while let Some(item) = outcomes.recv().await {
+        item.unwrap();
+        delivered += 1;
+    }
+    assert_eq!(delivered, n, "every dispatch delivered its outcome");
     vec![]
 }
 
@@ -439,6 +494,11 @@ const MAX_EXTRA_ALLOCS_PER_OP: f64 = 1.0;
 const MAX_TICKER_P999_NS: u64 = 1_000_000;
 /// Peak retained heap of a ticker case.
 const MAX_TICKER_PEAK_KIB: usize = 16 * 1024;
+/// Median time per dispatched mutation (`http dispatch PUT`, `disabled`),
+/// in nanoseconds: the task spawn, the oneshot and the outcome record over
+/// a sequential GET. Set by the owner once measured on the recorded host;
+/// `None` reports the figure without judging it.
+const MAX_DISPATCH_MEDIAN_NS: Option<f64> = None;
 
 fn main() {
     // `cargo test --all-targets` runs this binary without `--bench`: check
@@ -484,6 +544,7 @@ fn main() {
             );
             rows.push(measure("http 64-way GET", mode, 64, |_, o| http_concurrent(o, 64)).await);
             rows.push(measure("http 429 then ok", mode, 1, |_, o| http_retry(o)).await);
+            rows.push(measure("http dispatch PUT", mode, 100, |_, o| http_dispatch(o, 100)).await);
             for (inst, msgs) in [(1usize, 2000usize), (100, 500), (3000, 20)] {
                 let total = msgs + msgs / 10;
                 rows.push(
@@ -567,6 +628,15 @@ fn main() {
                     r.allocs
                 ));
             }
+        }
+        if r.case == "http dispatch PUT"
+            && r.mode == Mode4::Disabled
+            && MAX_DISPATCH_MEDIAN_NS.is_some_and(|max| r.median_ns > max)
+        {
+            failures.push(format!(
+                "{}: {:.0} ns/op over the dispatch budget",
+                r.case, r.median_ns
+            ));
         }
         if r.case.starts_with("ticker") {
             if r.lat.is_some_and(|(_, _, p999)| p999 > MAX_TICKER_P999_NS) {

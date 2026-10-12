@@ -24,7 +24,7 @@ use manja::kite::connect::models::{
     ProductType, TransactionType,
 };
 use manja::kite::connect::scheduler::SchedulerLimits;
-use manja::kite::error::{HttpErrorKind, ManjaError, TransportStage};
+use manja::kite::error::{HttpError, HttpErrorKind, TransportStage};
 use manja::kite::obs::schema::{Endpoint, Method};
 use manja::kite::obs::{InMemoryRecorder, Instrument, Observability};
 use manja::kite::protocol::{Inbound, InstrumentToken, Quantity};
@@ -95,8 +95,7 @@ fn single() -> GttRequest {
     GttRequest::single(Exchange::NSE, "INFY", 702.0, 798.0, buy(702.5))
 }
 
-fn is_validation(e: &ManjaError) -> bool {
-    let h = e.as_http().unwrap();
+fn is_validation(h: &HttpError) -> bool {
     h.kind() == HttpErrorKind::Validation && h.stage() == TransportStage::NotStarted
 }
 
@@ -351,7 +350,7 @@ async fn a_lost_placement_response_is_not_resubmitted() {
         .place_trigger(&single())
         .await
         .unwrap_err();
-    let e = err.as_http().unwrap();
+    let e = err;
     assert_eq!(e.stage(), TransportStage::Started, "the broker may have it");
     assert_eq!(h.requests().len(), 1, "exactly one attempt");
 }
@@ -373,7 +372,7 @@ async fn deletion_after_a_429_is_not_retried() {
         .delete_trigger(123)
         .await
         .unwrap_err();
-    assert!(err.as_http().is_some());
+    assert_eq!(err.stage(), TransportStage::ResponseReceived);
     assert_eq!(h.requests().len(), 1, "a mutation makes one attempt");
 }
 

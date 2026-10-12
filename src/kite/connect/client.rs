@@ -59,7 +59,7 @@
 //! templates and closed outcome values only.
 //!
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, Weak};
 use std::time::{Duration, Instant};
 
 use reqwest::header::{AUTHORIZATION, HeaderValue};
@@ -73,8 +73,12 @@ use crate::kite::{
         api::{Charges, Gtt, Margins, Market, MutualFunds, Orders, Portfolio, Session, User},
         config::Config,
         credentials::{AccessToken, ApiKey, Credentials},
+        dispatch::{
+            CloseError, Delivery, Dispatched, MAX_CORRELATION_BYTES, ORPHANED_OUTCOMES, OrphanSink,
+            Outcome, OutcomeStream, ReceiptIds, StreamShared, operation_result,
+        },
         models::{IngressStamp, Response, ResponseMeta, Row, RowError, Rows, UserSession},
-        scheduler::{AttemptCtx, OpObs, OpSpec, RetryClass, Scheduler},
+        scheduler::{AttemptCtx, OneAttempt, OpObs, OpSpec, RetryClass, Scheduler},
         wire::WireForm,
     },
     envelope::{MonotonicElapsed, ReceiveTime, SourceIdentity},
@@ -102,6 +106,70 @@ struct Transport {
     /// The client's source identity, shared by every handle on this
     /// transport and carried on every response and error.
     identity: SourceIdentity,
+    /// Where dispatched mutations deliver their outcomes.
+    outcomes: Mutex<OutcomeSink>,
+    /// Dispatched attempts not yet delivered.
+    dispatches: AtomicUsize,
+    /// Woken when a dispatch delivers, for `close`.
+    drained: tokio::sync::Notify,
+    /// Set by `close`: no new dispatch is admitted.
+    closing: AtomicBool,
+}
+
+/// The outcome sink of a transport: the stream's sender while the stream
+/// is open, and the orphan ring and counters otherwise.
+struct OutcomeSink {
+    sender: Option<tokio::sync::mpsc::Sender<Outcome>>,
+    /// A stream was registered at build time (it may have overflowed since).
+    registered: bool,
+    shared: Arc<StreamShared>,
+    /// The orphan ring (`B-HTTP-14`).
+    ring: FailureHistory<Outcome>,
+    /// Outcomes whose future was dropped, with no stream to take them.
+    orphaned: u64,
+}
+
+impl OutcomeSink {
+    /// An outcome that reached its `Dispatched` future, which was then
+    /// dropped without being polled. A registered stream already has it;
+    /// without one it is an orphan like any other.
+    fn orphan_after_delivery(&mut self, outcome: Outcome) {
+        if !self.registered {
+            self.orphaned += 1;
+            self.ring.push(outcome);
+        }
+    }
+
+    fn deliver(&mut self, outcome: Outcome, orphaned: bool) {
+        use tokio::sync::mpsc::error::TrySendError;
+        if let Some(sender) = &self.sender {
+            if let Err(TrySendError::Full(outcome) | TrySendError::Closed(outcome)) =
+                sender.try_send(outcome)
+            {
+                // The consumer fell behind or went away: close the stream
+                // so it ends after draining, and keep counting.
+                self.sender = None;
+                self.shared.overflowed.store(true, Ordering::Release);
+                self.shared.dropped.fetch_add(1, Ordering::AcqRel);
+                self.ring.push(outcome);
+            }
+        } else if self.registered {
+            self.shared.dropped.fetch_add(1, Ordering::AcqRel);
+            self.ring.push(outcome);
+        } else if orphaned {
+            self.orphaned += 1;
+            self.ring.push(outcome);
+        }
+    }
+}
+
+impl OrphanSink for Transport {
+    fn orphaned_after_delivery(&self, outcome: Outcome) {
+        self.outcomes
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .orphan_after_delivery(outcome);
+    }
 }
 
 impl Transport {
@@ -166,6 +234,17 @@ pub struct HttpDiagnostics {
     /// Incremented on every recorded failure, so a stale snapshot is
     /// detectable.
     pub snapshot_revision: u64,
+    /// Dispatched mutations whose attempt has not yet delivered.
+    pub dispatches_in_flight: usize,
+    /// The orphan ring (`B-HTTP-14`): the most recent outcomes that reached
+    /// no stream, oldest first.
+    pub orphaned_outcomes: Vec<Outcome>,
+    /// Outcomes whose `Dispatched` was dropped before delivery while no
+    /// stream was registered, since the client was built.
+    pub orphaned_outcome_count: u64,
+    /// Outcomes not delivered to the registered stream because it had
+    /// overflowed (`B-HTTP-13`), since the client was built.
+    pub outcome_stream_dropped: u64,
 }
 
 /// An asynchronous Kite Connect HTTP client.
@@ -222,6 +301,10 @@ pub struct HTTPClient {
     credentials: Option<Credentials>,
     /// The caller's lane mark; `None` means each operation's default.
     priority: Option<Priority>,
+    /// The caller's correlation token, recorded on the operation span of
+    /// every call this handle makes and carried by the outcome record of
+    /// every mutation it dispatches.
+    correlation: Option<String>,
 }
 
 impl std::fmt::Debug for HTTPClient {
@@ -230,6 +313,7 @@ impl std::fmt::Debug for HTTPClient {
             .field("config", &self.transport.config)
             .field("credentials", &self.credentials)
             .field("priority", &self.priority)
+            .field("correlation", &self.correlation)
             .finish()
     }
 }
@@ -282,24 +366,56 @@ impl HttpClientBuilder {
     }
 
     /// Build the client. Fails with a configuration error if the HTTP
-    /// transport cannot be built.
+    /// transport cannot be built. Without an outcome stream, outcomes of
+    /// dropped dispatches go to the orphan ring in the diagnostics.
     pub fn build(self) -> Result<HTTPClient> {
+        self.build_inner(None).map(|(client, _)| client)
+    }
+
+    /// Build the client with its outcome stream registered: every
+    /// dispatched mutation's outcome is delivered to the stream exactly
+    /// once, buffered up to `B-HTTP-13` (`HttpLimits::outcome_capacity`).
+    pub fn build_with_outcomes(self) -> Result<(HTTPClient, OutcomeStream)> {
+        let capacity = self.config.limits().outcome_capacity();
+        let (sender, receiver) = tokio::sync::mpsc::channel(capacity);
+        let shared = Arc::new(StreamShared::default());
+        let stream = OutcomeStream::new(receiver, shared.clone());
+        self.build_inner(Some((sender, shared)))
+            .map(|(client, _)| (client, stream))
+    }
+
+    fn build_inner(
+        self,
+        stream: Option<(tokio::sync::mpsc::Sender<Outcome>, Arc<StreamShared>)>,
+    ) -> Result<(HTTPClient, ())> {
+        let (sender, shared, registered) = match stream {
+            Some((sender, shared)) => (Some(sender), shared, true),
+            None => (None, Arc::new(StreamShared::default()), false),
+        };
+        let sink = OutcomeSink {
+            sender,
+            registered,
+            shared,
+            ring: FailureHistory::new(ORPHANED_OUTCOMES),
+            orphaned: 0,
+        };
         let mut client = HTTPClient::build_transport(
             self.config,
             self.admission.unwrap_or_default(),
             self.observability.unwrap_or_default(),
             self.identity.unwrap_or_else(SourceIdentity::generate),
+            sink,
         )?;
         client.credentials = self.credentials;
-        Ok(client)
+        Ok((client, ()))
     }
 }
 
 // One polled logical operation: its span, its completion count and
 // duration, and its entry in the transport diagnostics. Dropped before
 // finishing, the operation was cancelled.
-struct OpGuard<'a> {
-    transport: &'a Transport,
+struct OpGuard {
+    transport: Arc<Transport>,
     method: Method,
     endpoint: Endpoint,
     quota: QuotaClass,
@@ -313,7 +429,7 @@ struct OpGuard<'a> {
     done: bool,
 }
 
-impl OpGuard<'_> {
+impl OpGuard {
     fn finish<T>(
         mut self,
         result: std::result::Result<T, HttpError>,
@@ -368,7 +484,7 @@ impl OpGuard<'_> {
     }
 }
 
-impl Drop for OpGuard<'_> {
+impl Drop for OpGuard {
     fn drop(&mut self) {
         if self.done {
             return;
@@ -392,22 +508,6 @@ impl Drop for OpGuard<'_> {
             attempt: 0,
             at: self.transport.origin.elapsed(),
         });
-    }
-}
-
-/// The normalized result of a finished operation.
-fn operation_result(e: &HttpError) -> HttpOperationResult {
-    match e.kind() {
-        HttpErrorKind::Validation | HttpErrorKind::Configuration => HttpOperationResult::Validation,
-        HttpErrorKind::Admission => HttpOperationResult::AdmissionRejected,
-        HttpErrorKind::Deadline => HttpOperationResult::Deadline,
-        HttpErrorKind::HttpStatus => HttpOperationResult::HttpStatus,
-        HttpErrorKind::Broker => HttpOperationResult::BrokerError,
-        HttpErrorKind::AuthRejected => HttpOperationResult::AuthRejected,
-        HttpErrorKind::Decode => HttpOperationResult::DecodeError,
-        HttpErrorKind::Cancelled => HttpOperationResult::Cancelled,
-        _ if e.is_timeout() => HttpOperationResult::Timeout,
-        _ => HttpOperationResult::TransportError,
     }
 }
 
@@ -451,6 +551,7 @@ impl HTTPClient {
         admission: Admission,
         obs: Observability,
         identity: SourceIdentity,
+        outcomes: OutcomeSink,
     ) -> Result<Self> {
         // Attempt timeouts are enforced by the scheduler, not the transport.
         let http = reqwest::ClientBuilder::new().build().map_err(|e| {
@@ -477,10 +578,72 @@ impl HTTPClient {
                 obs,
                 waiting: Default::default(),
                 identity,
+                outcomes: Mutex::new(outcomes),
+                dispatches: AtomicUsize::new(0),
+                drained: tokio::sync::Notify::new(),
+                closing: AtomicBool::new(false),
             }),
             credentials: None,
             priority: None,
+            correlation: None,
         })
+    }
+
+    /// A client sharing this client's transport, admission scope,
+    /// credentials and lane whose every call carries `token` as its
+    /// correlation: on the operation span of every call, and for a
+    /// mutation also on the outcome record and on
+    /// `Dispatched::correlation()`; never as a metric label.
+    /// The token is at most 64 bytes of printable ASCII; anything else is
+    /// a `Validation` error here, before any call, and no operation is
+    /// recorded for it. The original client is
+    /// unchanged. Make one handle per attempt, so each attempt has its
+    /// own token end to end.
+    pub fn with_correlation(&self, token: impl Into<String>) -> Result<Self> {
+        let token = token.into();
+        let valid = !token.is_empty()
+            && token.len() <= MAX_CORRELATION_BYTES
+            && token.bytes().all(|b| b.is_ascii_graphic() || b == b' ');
+        if !valid {
+            // No call was made, so no operation is recorded: the error is
+            // returned as a plain value, like a limit or credential error.
+            return Err(HttpError::new(
+                HttpErrorKind::Validation,
+                Method::Post,
+                Endpoint::Unknown,
+                Stage::NotStarted,
+            )
+            .with_detail("a correlation token is 1 to 64 bytes of printable ASCII")
+            .into());
+        }
+        Ok(Self {
+            correlation: Some(token),
+            ..self.clone()
+        })
+    }
+
+    /// Stop admitting new dispatches and wait up to `deadline` for the
+    /// dispatches in flight to deliver their outcomes. Reads are not
+    /// awaited: their callers hold their futures. If the deadline passes
+    /// first, the remaining dispatches keep running on the runtime and
+    /// still deliver to the stream or the ring.
+    pub async fn close(&self, deadline: Duration) -> std::result::Result<(), CloseError> {
+        self.transport.closing.store(true, Ordering::Release);
+        let until = tokio::time::Instant::now() + deadline;
+        loop {
+            let notified = self.transport.drained.notified();
+            let in_flight = self.transport.dispatches.load(Ordering::Acquire);
+            if in_flight == 0 {
+                return Ok(());
+            }
+            if tokio::time::timeout_at(until, notified).await.is_err() {
+                let in_flight = self.transport.dispatches.load(Ordering::Acquire);
+                if in_flight == 0 {
+                    return Ok(());
+                }
+                return Err(CloseError { in_flight });
+            }
+        }
     }
 
     /// The source identity this client's responses and errors carry; every
@@ -568,6 +731,11 @@ impl HTTPClient {
             .failures
             .lock()
             .unwrap_or_else(|e| e.into_inner());
+        let outcomes = self
+            .transport
+            .outcomes
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         HttpDiagnostics {
             active_attempts: self.transport.config.limits().in_flight()
                 - self.transport.in_flight.available_permits(),
@@ -581,6 +749,10 @@ impl HTTPClient {
                 .collect(),
             last_failures: failures.entries(),
             snapshot_revision: failures.revision(),
+            dispatches_in_flight: self.transport.dispatches.load(Ordering::Acquire),
+            orphaned_outcomes: outcomes.ring.entries(),
+            orphaned_outcome_count: outcomes.orphaned,
+            outcome_stream_dropped: outcomes.shared.dropped.load(Ordering::Acquire),
         }
     }
 
@@ -688,32 +860,114 @@ impl HTTPClient {
             .await
     }
 
-    /// Send a mutation's [`WireForm`] byte for byte and decode the response
-    /// envelope. A `wire` error (the request failed validation) and a body
-    /// over `B-HTTP-09` fail before admission and send nothing. With `auth`
-    /// the client's `Authorization` header is attached; the session
-    /// operations send none.
-    pub(crate) async fn send_wire<Model>(
+    /// Dispatch a mutation: send its [`WireForm`] byte for byte as one
+    /// detached attempt and return the [`Dispatched`] future of its result.
+    ///
+    /// Synchronous up to the spawn: a `wire` error (the request failed
+    /// validation), a body over `B-HTTP-09`, a closing client, a missing
+    /// Tokio runtime, no free in-flight slot (`B-HTTP-10`) or an admission
+    /// refusal (D1) all return a refused `Dispatched` and send nothing.
+    /// Otherwise the attempt runs to completion on a task the client owns
+    /// and its outcome reaches the future, if alive, and the outcome stream
+    /// or orphan ring. With `auth` the client's `Authorization` header is
+    /// attached; the session operations send none. `ids` names the broker
+    /// identifiers a receipt carries, for the outcome record.
+    pub(crate) fn dispatch<Model>(
         &self,
         wire: std::result::Result<WireForm, HttpError>,
         auth: bool,
-    ) -> Result<Response<Model>>
+        ids: fn(&Model) -> ReceiptIds,
+    ) -> Dispatched<Model>
     where
-        Model: DeserializeOwned,
+        Model: DeserializeOwned + Send + 'static,
     {
-        let wire = wire.map_err(|e| self.reject(e))?;
+        let (m, endpoint) = match &wire {
+            Ok(wire) => (wire.method(), wire.endpoint()),
+            Err(e) => (e.method(), e.endpoint()),
+        };
+        let guard = self.guard(m, endpoint);
+        let operation_id = guard.operation_id;
+        let correlation = self.correlation.clone();
+        let refuse = |guard: OpGuard, sha: Option<[u8; 32]>, err: HttpError| {
+            let err = match guard.finish::<()>(Err(err)) {
+                Err(e) => e,
+                Ok(()) => unreachable!("finish returns its input"),
+            };
+            Dispatched::refused(operation_id, correlation.clone(), sha, m, endpoint, err)
+        };
+        let not_started = |kind: HttpErrorKind, detail: &str| {
+            HttpError::new(kind, m, endpoint, Stage::NotStarted).with_detail(detail)
+        };
+        let wire = match wire {
+            Ok(wire) => wire,
+            Err(e) => return refuse(guard, None, e),
+        };
+        let sha = wire.sha256();
+        guard.span.record("wire_sha256", hex::encode(sha).as_str());
         if wire.body_len() > self.transport.config.limits().request_body_bytes() {
-            return Err(self.reject(
-                HttpError::new(
+            return refuse(
+                guard,
+                Some(sha),
+                not_started(
                     HttpErrorKind::Validation,
-                    wire.method(),
-                    wire.endpoint(),
-                    Stage::NotStarted,
-                )
-                .with_detail("the request body exceeds its bound"),
-            ));
+                    "the request body exceeds its bound",
+                ),
+            );
         }
-        let method = match wire.method() {
+        if self.transport.closing.load(Ordering::Acquire) {
+            return refuse(
+                guard,
+                Some(sha),
+                not_started(HttpErrorKind::Admission, "the client is closing"),
+            );
+        }
+        let Ok(runtime) = tokio::runtime::Handle::try_current() else {
+            return refuse(
+                guard,
+                Some(sha),
+                not_started(
+                    HttpErrorKind::Configuration,
+                    "a mutation is dispatched from inside a Tokio runtime",
+                ),
+            );
+        };
+        let Ok(in_flight) = self.transport.in_flight.clone().try_acquire_owned() else {
+            return refuse(
+                guard,
+                Some(sha),
+                not_started(
+                    HttpErrorKind::Admission,
+                    "the in-flight bound (B-HTTP-10) is reached",
+                ),
+            );
+        };
+        let (_, order_id) = rate_key(m, endpoint, wire.path());
+        let spec = OpSpec {
+            method: m,
+            endpoint,
+            order_id: order_id.as_deref(),
+            priority: self.priority_of(m, endpoint),
+        };
+        let quota = spec.quota();
+        let class = spec.class();
+        let ctx = OpObs {
+            obs: &self.transport.obs,
+            span: &guard.span,
+            operation_id,
+            waiting: &self.transport.waiting[quota_index(quota)],
+        };
+        let grant = match self
+            .transport
+            .scheduler
+            .admit_now(&self.transport.admission, &spec, &ctx)
+        {
+            Ok(grant) => grant,
+            Err(e) => return refuse(guard, Some(sha), e),
+        };
+
+        // Admitted: from here the attempt belongs to the client.
+        let timeout = self.transport.scheduler.single_attempt_timeout(class);
+        let method = match m {
             Method::Get => reqwest::Method::GET,
             Method::Post => reqwest::Method::POST,
             Method::Put => reqwest::Method::PUT,
@@ -722,14 +976,115 @@ impl HTTPClient {
         let target = wire.target();
         let content_type = wire.content_type();
         let body = wire.into_body();
-        self.json(method, &target, auth, |rb| match content_type {
-            // Nothing to send: no body and no content type.
+        let build = move |rb: reqwest::RequestBuilder| match content_type {
             None => rb,
             Some(content_type) => rb
                 .header(reqwest::header::CONTENT_TYPE, content_type)
                 .body(body.clone()),
-        })
-        .await
+        };
+        let (sender, receiver) = tokio::sync::oneshot::channel();
+        let client = self.clone();
+        let transport = self.transport.clone();
+        let token = correlation.clone();
+        transport.dispatches.fetch_add(1, Ordering::AcqRel);
+        let task = async move {
+            let span = guard.span.clone();
+            let dispatched = guard.dispatched.clone();
+            let sent_at = guard.sent_at.clone();
+            let ctx = OpObs {
+                obs: &transport.obs,
+                span: &guard.span,
+                operation_id,
+                waiting: &transport.waiting[quota_index(quota)],
+            };
+            let mut in_flight = Some(in_flight);
+            let mut attempt = |ctx: AttemptCtx| {
+                let client = &client;
+                let build = &build;
+                let target = &target;
+                let method = &method;
+                let in_flight = in_flight.take();
+                let dispatched = &dispatched;
+                let sent_at = &sent_at;
+                async move {
+                    let number = ctx.number;
+                    let (status, body, stamps) = client
+                        .attempt(
+                            method,
+                            target,
+                            BodyKind::Json,
+                            auth,
+                            build,
+                            m,
+                            endpoint,
+                            ctx,
+                            dispatched,
+                            sent_at,
+                            in_flight,
+                        )
+                        .await?;
+                    let facts = AttemptFacts {
+                        operation_id,
+                        attempt: number,
+                        http_status: status,
+                        source: client.transport.identity.clone(),
+                        stamps,
+                    };
+                    classify_json(status, &body, m, endpoint)
+                        .map(|envelope| envelope.into_response(facts))
+                        .map_err(|e| {
+                            e.with_attempt(number)
+                                .with_sent_at(stamps.sent_at)
+                                .with_received_at(stamps.received_at)
+                        })
+                }
+            };
+            let result = transport
+                .scheduler
+                .one_attempt(
+                    OneAttempt {
+                        number: 1,
+                        grant,
+                        method: m,
+                        endpoint,
+                        quota,
+                        retry_of: None,
+                        timeout,
+                    },
+                    &ctx,
+                    &mut attempt,
+                )
+                .instrument(span)
+                .await;
+            let result = guard.finish(result);
+            let outcome = Outcome::of(
+                &result,
+                &transport.identity,
+                operation_id,
+                token,
+                m,
+                endpoint,
+                sha,
+                ids,
+            );
+            let orphaned = sender
+                .send(Delivery {
+                    result,
+                    outcome: outcome.clone(),
+                })
+                .is_err();
+            transport
+                .outcomes
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .deliver(outcome, orphaned);
+            transport.dispatches.fetch_sub(1, Ordering::AcqRel);
+            transport.drained.notify_waiters();
+        };
+        runtime.spawn(task);
+        let weak: Weak<Transport> = Arc::downgrade(&self.transport);
+        let sink: Weak<dyn OrphanSink> = weak;
+        Dispatched::in_flight(operation_id, correlation, sha, m, endpoint, receiver, sink)
     }
 
     /// Send `body` as JSON (the margin and charges endpoints,
@@ -767,7 +1122,7 @@ impl HTTPClient {
         .await
     }
 
-    fn guard(&self, method: Method, endpoint: Endpoint) -> OpGuard<'_> {
+    fn guard(&self, method: Method, endpoint: Endpoint) -> OpGuard {
         let class = RetryClass::of(method, endpoint);
         let quota = class.quota_class();
         let priority = self.priority_of(method, endpoint);
@@ -784,9 +1139,14 @@ impl HTTPClient {
             result = tracing::field::Empty,
             stage = tracing::field::Empty,
             admission_cause = tracing::field::Empty,
+            correlation = tracing::field::Empty,
+            wire_sha256 = tracing::field::Empty,
         );
+        if let Some(token) = &self.correlation {
+            span.record("correlation", token.as_str());
+        }
         OpGuard {
-            transport: &self.transport,
+            transport: self.transport.clone(),
             method,
             endpoint,
             quota,
@@ -941,7 +1301,7 @@ impl HTTPClient {
         path: &str,
         kind: BodyKind,
         auth: bool,
-        guard: &OpGuard<'_>,
+        guard: &OpGuard,
         build: B,
         classify: C,
     ) -> std::result::Result<T, HttpError>
@@ -982,6 +1342,7 @@ impl HTTPClient {
                         ctx,
                         op_dispatched,
                         op_sent_at,
+                        None,
                     )
                     .await?;
                 let facts = AttemptFacts {
@@ -1014,6 +1375,7 @@ impl HTTPClient {
         ctx: AttemptCtx,
         op_dispatched: &AtomicBool,
         op_sent_at: &Mutex<Option<IngressStamp>>,
+        in_flight: Option<tokio::sync::OwnedSemaphorePermit>,
     ) -> std::result::Result<(u16, Vec<u8>, AttemptStamps), HttpError>
     where
         B: Fn(reqwest::RequestBuilder) -> reqwest::RequestBuilder,
@@ -1025,13 +1387,17 @@ impl HTTPClient {
                 .with_attempt(attempt)
                 .with_detail(detail)
         };
-        let _in_flight = self
-            .transport
-            .in_flight
-            .clone()
-            .acquire_owned()
-            .await
-            .map_err(|_| not_started(HttpErrorKind::Admission, "the transport is closed"))?;
+        // A dispatch took its slot before spawning; a read takes it here.
+        let _in_flight = match in_flight {
+            Some(permit) => permit,
+            None => self
+                .transport
+                .in_flight
+                .clone()
+                .acquire_owned()
+                .await
+                .map_err(|_| not_started(HttpErrorKind::Admission, "the transport is closed"))?,
+        };
         let url = self.transport.config.url(path);
         let mut rb = self
             .transport
