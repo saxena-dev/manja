@@ -144,6 +144,13 @@ like every observability label domain (§4.1), is `#[non_exhaustive]`; the stabl
 | `Decode` | a response was received but was oversized, malformed or lacked the success envelope |
 | `Cancelled` | an operation whose future was dropped; recorded in `HTTPClient::diagnostics`, never returned by a call |
 
+Every error an operation produces also carries the client's `source()` identity and the
+operation's `operation_id()` (§2.18), whatever its kind and stage. `sent_at()` is `Some`
+once the attempt was dispatched, that is for stage `Started` or later, and `received_at()`
+is `Some` only once a response head arrived, stage `ResponseReceived`; an error with stage
+`NotStarted` has neither stamp. The stamps are the same `IngressStamp`s a response
+carries, from the same clocks.
+
 `HttpError` also reports the method, the endpoint template (never a URL with
 credentials), the HTTP status and broker `error_type` when known, the attempt number,
 retry metadata, and a **transport stage**:
@@ -447,11 +454,20 @@ and `Vec<MfInstrument>` as §2.1 and §2.14 say.
 | `meta.http_status: u16` | The HTTP status of the attempt that produced the response |
 | `meta.operation_id: u64` | The operation's ID: the `operation_id` field of its `manja.http.operation` span (§4.2), unique within the client's observability scope |
 | `meta.attempt: u32` | The number of the attempt that produced the response: 1 for a first try, 2 after one retry; the same numbering as `HttpError::attempt` |
+| `meta.source: SourceIdentity` | The client's producer, run and feed: the type and frame the ticker's envelope carries (§2.8), so HTTP evidence and ticker evidence from one process cite the same run. Set with `HttpClientBuilder::identity`; without it the client generates one (`SourceIdentity::generate()`: producer `manja`, a fresh run ID, feed `default`). Every clone and derived handle of a client shares it; `HTTPClient::source_identity()` reads it |
+| `meta.sent_at: IngressStamp` | When the attempt that produced the response was dispatched: the last instant before its bytes left the process |
+| `meta.received_at: IngressStamp` | When the response head (status and headers) arrived; never earlier than `sent_at` on the monotonic clock. The wall parts are two readings of the system clock, which may step between them (§2.8) |
+
+An `IngressStamp` is one instant in both of the envelope's clocks: `wall`, a `ReceiveTime`
+(signed UTC Unix nanoseconds from the system clock), and `monotonic`, a `MonotonicElapsed`
+(nanoseconds since the client's run origin, the instant its transport was built). Stamps
+from one client and its clones are comparable with each other; stamps from different
+clients are not, as with the ticker. Errors carry the same facts (§2.4).
 
 `Response::map(f)` applies `f` to the data and keeps the meta. `Response<T>` has exactly
-these two public fields; `ResponseMeta` is `#[non_exhaustive]` with public fields, so a
-later release can add the client's source identity and the send and receive stamps
-without a second break. Both serialize. The 0.2 envelope `KiteApiResponse`, with its
+these two public fields; `ResponseMeta` is `#[non_exhaustive]` with public fields. Both
+serialize; `SourceIdentity` serializes as its three identifiers, as a `SourceKey` does,
+and an identifier that `SourceIdentity::new` refuses is refused on the way back in. The 0.2 envelope `KiteApiResponse`, with its
 `status`, `Option<T>` data and `error_type`, no longer exists: `status` was always
 `"success"` and `error_type` always `None` on a returned value, so neither was data
 (`migration.md` §7).
@@ -761,6 +777,7 @@ These choices are not dictated by the Kite documentation alone.
 | No wait for mutations | A mutation or session operation is admitted now or refused with a hint; only reads and calculations wait under `B-HTTP-06` (§2.4, §3.2, §3.6) | A wait between a caller's decision and the socket write makes that decision stale by construction, and a caller whose dispatch gate is serialised with other work cannot afford a call that sleeps. An immediate refusal is affirmative evidence that nothing was sent, and with the exact hint the caller can schedule better than a blind wait. Reads lose nothing by waiting, so they keep the bound |
 | Headroom | Admission capacity is readable as an advisory, local-view snapshot per class and lane, plus the modifications an order has left; a spent daily ceiling zeroes both lanes and announces no next slot, and a lane the reserve covers announces none either (§3.6) | A caller that can only learn capacity by being refused pays a refusal for every full window. A snapshot that agrees with the next decision lets it order its own work, and saying "advisory, local view" keeps the account-wide limit, which includes manual orders, where it belongs: with the caller. A reserving read would be the dispatch permit by another name |
 | Session expiry | The 6 AM expiry is taken as IST, and a token expires at the next 06:00 IST strictly after its issue time: an issue at exactly 06:00:00 expires the next day, an issue before 06:00 expires that same morning (§2.2) | Kite's one sentence (`kite:user.md:115`) names no zone and says "the next day"; every documented Kite time is IST, and a caller that injects the issue time needs one boundary rule with no gap, so the next boundary after the instant is the reading the function implements |
+| Ingress stamps | A response's `sent_at` is taken at dispatch, the last instant before the bytes leave the process, and `received_at` when the response head arrives, not when the body is complete; errors are stamped the same way, so a cut-off body still carries `received_at` (§2.18, §2.4) | A lost response is bounded by when the bytes left, and a response exists from the moment its head arrives, which is also when the error stage becomes `ResponseReceived`; stamping at the body's end would make a slow body look like a late response |
 | Responses | `Response<T> { data: T, meta }` replaces the 0.2 envelope on every JSON endpoint; the `status` and `error_type` fields are gone and `data` is not optional (§2.18) | A success type with an `Option` inside makes every caller write a panic path or a fallback for a case the SDK promises cannot happen, and a fallback such as an empty order book is exactly the silent failure the crate exists to prevent. Fields that are constant on success are not data. Order rows keep every broker quantity and status field as reported so a caller can tell a partial fill from a terminal partially filled order; the SDK never collapses them |
 | Wire forms | Every mutation renders a `WireForm` before it is sent and sends exactly those bytes; the forms of the two session operations exist but never render their token or checksum: the marker `<redacted>` stands in for each (§2.1) | An application that shows a person a compiled order and later journals what was sent needs the two to be provably the same bytes, and the hash of the form gives that without a second entry point. The session forms are included so every mutation has one; their bodies necessarily carry the documented token fields, so they render redacted and expose their bytes only through the hash and the send |
 | Priority lanes | Two caller-selected lanes per quota class with a control reserve (`B-HTTP-15`, §2.1, §3.6); order cancellation and GTT deletion default to `Control`, and the mark is made per call through `HTTPClient::with_priority` rather than as a parameter on every method | Cancellation and the reads that confirm it share one transport with polling, and an in-flight request cannot be recalled, so a reserve that `Standard` traffic may never take is the only honest form of priority. Which reads are urgent is known only to the application, so the mark is per call and the SDK never decides it. A derived client keeps every method's signature unchanged |

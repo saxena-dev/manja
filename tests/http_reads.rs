@@ -347,3 +347,66 @@ async fn every_response_carries_the_facts_of_its_call() {
     assert_eq!(count.data, 10);
     assert_eq!(count.meta.http_status, 200);
 }
+
+// ---- source identity and ingress stamps ----------------------------------
+
+#[tokio::test]
+async fn every_response_is_stamped_and_attributed_to_the_client() {
+    use manja::kite::envelope::{RunId, SourceIdentity};
+    let h = HttpHarness::start(vec![
+        Reply::json(fixtures::json_body("profile.json").unwrap()),
+        Reply::json(fixtures::json_body("orders.json").unwrap()),
+        Reply::json(fixtures::json_body("holdings.json").unwrap()),
+    ])
+    .await;
+    let c = client(&h.base_url());
+    let built = manja::kite::envelope::ReceiveTime::now();
+    let profile = c.user().profile().await.unwrap();
+    let book = c.clone().orders().list_orders().await.unwrap();
+    let holdings = c
+        .with_credentials(Credentials::new("k2", "t2").unwrap())
+        .portfolio()
+        .get_holdings()
+        .await
+        .unwrap();
+    for meta in [&profile.meta, &book.meta, &holdings.meta] {
+        // Received after sent, in both clocks; sent after the client existed.
+        assert!(meta.received_at.wall >= meta.sent_at.wall, "{meta:?}");
+        assert!(
+            meta.received_at.monotonic >= meta.sent_at.monotonic,
+            "{meta:?}"
+        );
+        assert!(meta.sent_at.wall >= built, "{meta:?}");
+        // Clones and derived handles share one identity.
+        assert_eq!(&meta.source, c.source_identity());
+    }
+    assert!(book.meta.sent_at.monotonic > profile.meta.received_at.monotonic);
+    // A client built without an identity generated one: producer `manja`,
+    // feed `default`, a run ID of its own.
+    assert_eq!(c.source_identity().producer_id(), "manja");
+    assert_eq!(c.source_identity().feed_id(), "default");
+    let other = client(&h.base_url());
+    assert_ne!(
+        other.source_identity().run_id(),
+        c.source_identity().run_id()
+    );
+    assert_ne!(other.source_identity(), c.source_identity());
+    // A client built with one reports it.
+    let mine = SourceIdentity::new("engine", RunId::from_u128(7), "http").unwrap();
+    let h2 = HttpHarness::start(vec![Reply::json(
+        fixtures::json_body("profile.json").unwrap(),
+    )])
+    .await;
+    let named = HTTPClient::builder(Config::new(h2.base_url()))
+        .identity(mine.clone())
+        .credentials(Credentials::new("k", "t").unwrap())
+        .build()
+        .unwrap();
+    let profile = named.user().profile().await.unwrap();
+    assert_eq!(profile.meta.source, mine);
+    assert_eq!(profile.meta.source.run_id(), RunId::from_u128(7));
+    // The meta round-trips through serde, identity included.
+    let json = serde_json::to_string(&profile.meta).unwrap();
+    let back: manja::kite::connect::models::ResponseMeta = serde_json::from_str(&json).unwrap();
+    assert_eq!(back, profile.meta);
+}

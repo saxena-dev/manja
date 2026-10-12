@@ -22,11 +22,11 @@ use manja::kite::connect::models::{
     Candle, CandleInterval, DividendType, Exchange, FullQuote, GttCondition, GttOrder,
     GttOrderOutcome, GttOrderRequest, GttOrderResult, GttReceipt, GttRequest, GttStatus,
     GttTrigger, GttType, HistoricalData, HistoricalRequest, Holding, HoldingsAuthorisation,
-    HoldingsAuthorisationRequest, Instrument, LTPQuote, MfHolding, MfInstrument, MfOrder,
-    MfOrderStatus, MfOrderVariety, MfPlan, MfPurchaseType, MfSip, ModifyOrderRequest, OHLCQuote,
-    Order, OrderReceipt, PlaceOrderRequest, Position, PositionConversionRequest, Positions,
-    QuoteMode, Quotes, RequestError, Response, ResponseMeta, Row, RowError, Rows, SchemeType,
-    SipFrequency, SipStatus, Trade, UserSession,
+    HoldingsAuthorisationRequest, IngressStamp, Instrument, LTPQuote, MfHolding, MfInstrument,
+    MfOrder, MfOrderStatus, MfOrderVariety, MfPlan, MfPurchaseType, MfSip, ModifyOrderRequest,
+    OHLCQuote, Order, OrderReceipt, PlaceOrderRequest, Position, PositionConversionRequest,
+    Positions, QuoteMode, Quotes, RequestError, Response, ResponseMeta, Row, RowError, Rows,
+    SchemeType, SipFrequency, SipStatus, Trade, UserSession,
 };
 use manja::kite::connect::scheduler::{DispatchPermit, PermitTarget, SchedulerLimits};
 use manja::kite::connect::wire::WireForm;
@@ -248,6 +248,22 @@ async fn signatures(c: &HTTPClient, h: &TickerHandle) {
     let _: fn(&HttpError) -> Option<chrono::DateTime<chrono::FixedOffset>> = HttpError::resets_at;
     let _: fn(&HttpError) -> Option<manja::kite::obs::schema::AdmissionCause> =
         HttpError::admission_cause;
+    // Source identity and ingress stamps on responses and errors.
+    let _: &SourceIdentity = c.source_identity();
+    if let Ok(book) = c.orders().list_orders().await {
+        let _: (SourceIdentity, IngressStamp, IngressStamp) =
+            (book.meta.source, book.meta.sent_at, book.meta.received_at);
+        let _: (
+            manja::kite::envelope::ReceiveTime,
+            manja::kite::envelope::MonotonicElapsed,
+        ) = (book.meta.sent_at.wall, book.meta.sent_at.monotonic);
+    }
+    let _: fn(&HttpError) -> Option<&SourceIdentity> = HttpError::source;
+    let _: fn(&HttpError) -> Option<u64> = HttpError::operation_id;
+    let _: fn(&HttpError) -> Option<IngressStamp> = HttpError::sent_at;
+    let _: fn(&HttpError) -> Option<IngressStamp> = HttpError::received_at;
+    let _: HttpClientBuilder =
+        HTTPClient::builder(Config::default()).identity(SourceIdentity::generate());
     // Headroom is a plain, copyable snapshot; both readers take the checked ID.
     let room: Headroom = c.admission().headroom(RateClass::OrderPlacement);
     let copy = room;

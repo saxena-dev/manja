@@ -73,12 +73,13 @@ use crate::kite::{
         api::{Charges, Gtt, Margins, Market, MutualFunds, Orders, Portfolio, Session, User},
         config::Config,
         credentials::{AccessToken, ApiKey, Credentials},
-        models::{Response, ResponseMeta, Row, RowError, Rows, UserSession},
+        models::{IngressStamp, Response, ResponseMeta, Row, RowError, Rows, UserSession},
         scheduler::{
             AttemptCtx, DispatchPermit, OpObs, OpSpec, PermitTarget, RetryClass, Scheduler,
         },
         wire::WireForm,
     },
+    envelope::{MonotonicElapsed, ReceiveTime, SourceIdentity},
     error::{
         BrokerError, HttpError, HttpErrorKind, KiteApiException, ManjaError, Result,
         TransportStage as Stage, json_error_detail,
@@ -100,6 +101,22 @@ struct Transport {
     obs: Observability,
     // This transport's operations waiting for admission, per quota class.
     waiting: [AtomicUsize; 4],
+    /// The client's source identity, shared by every handle on this
+    /// transport and carried on every response and error.
+    identity: SourceIdentity,
+}
+
+impl Transport {
+    /// Now, in both of the envelope's clocks: wall time and time since this
+    /// transport's origin.
+    fn stamp(&self) -> IngressStamp {
+        IngressStamp {
+            wall: ReceiveTime::now(),
+            monotonic: MonotonicElapsed::from_nanos(
+                u64::try_from(self.origin.elapsed().as_nanos()).unwrap_or(u64::MAX),
+            ),
+        }
+    }
 }
 
 fn quota_index(q: QuotaClass) -> usize {
@@ -231,9 +248,21 @@ pub struct HttpClientBuilder {
     admission: Option<Admission>,
     credentials: Option<Credentials>,
     observability: Option<Observability>,
+    identity: Option<SourceIdentity>,
 }
 
 impl HttpClientBuilder {
+    /// Identify this client's responses and errors as `identity`: the
+    /// producer, run and feed the ticker's envelope uses, so HTTP evidence
+    /// and ticker evidence from one process cite the same run. Without it
+    /// the client generates one with [`SourceIdentity::generate`]: producer
+    /// `manja`, a fresh run ID, feed `default`. Clones and derived handles
+    /// share the identity.
+    pub fn identity(mut self, identity: SourceIdentity) -> Self {
+        self.identity = Some(identity);
+        self
+    }
+
     /// Record spans and metrics in `obs`'s scope. Without it the client
     /// uses [`Observability::disabled`]; its typed diagnostics work either
     /// way.
@@ -261,6 +290,7 @@ impl HttpClientBuilder {
             self.config,
             self.admission.unwrap_or_default(),
             self.observability.unwrap_or_default(),
+            self.identity.unwrap_or_else(SourceIdentity::generate),
         )?;
         client.credentials = self.credentials;
         Ok(client)
@@ -279,6 +309,9 @@ struct OpGuard<'a> {
     operation_id: u64,
     started: tokio::time::Instant,
     dispatched: Arc<AtomicBool>,
+    /// The dispatch stamp of the latest attempt, for errors built after
+    /// dispatch outside the attempt itself.
+    sent_at: Arc<Mutex<Option<IngressStamp>>>,
     done: bool,
 }
 
@@ -288,6 +321,16 @@ impl OpGuard<'_> {
         result: std::result::Result<T, HttpError>,
     ) -> std::result::Result<T, HttpError> {
         self.done = true;
+        // Every error leaves with the operation's identity and ID, and with
+        // its dispatch stamp when the attempt was dispatched but the error
+        // was built elsewhere (the attempt timeout, in the scheduler).
+        let result = result.map_err(|e| {
+            let e = e.with_operation(self.transport.identity.clone(), self.operation_id);
+            match *self.sent_at.lock().unwrap_or_else(|p| p.into_inner()) {
+                Some(sent_at) if e.stage() != Stage::NotStarted => e.with_sent_at(sent_at),
+                _ => e,
+            }
+        });
         match &result {
             Ok(_) => self.complete(HttpOperationResult::Ok, Stage::ResponseReceived),
             Err(e) => {
@@ -387,6 +430,7 @@ impl HTTPClient {
             admission: None,
             credentials: None,
             observability: None,
+            identity: None,
         }
     }
 
@@ -404,7 +448,12 @@ impl HTTPClient {
         Self::builder(config).observability(obs).build()
     }
 
-    fn build_transport(config: Config, admission: Admission, obs: Observability) -> Result<Self> {
+    fn build_transport(
+        config: Config,
+        admission: Admission,
+        obs: Observability,
+        identity: SourceIdentity,
+    ) -> Result<Self> {
         // Attempt timeouts are enforced by the scheduler, not the transport.
         let http = reqwest::ClientBuilder::new().build().map_err(|e| {
             HttpError::new(
@@ -429,10 +478,17 @@ impl HTTPClient {
                 origin: Instant::now(),
                 obs,
                 waiting: Default::default(),
+                identity,
             }),
             credentials: None,
             priority: None,
         })
+    }
+
+    /// The source identity this client's responses and errors carry; every
+    /// clone and derived handle shares it.
+    pub fn source_identity(&self) -> &SourceIdentity {
+        &self.transport.identity
     }
 
     /// The observability scope this client records in.
@@ -764,6 +820,7 @@ impl HTTPClient {
             operation_id,
             started: tokio::time::Instant::now(),
             dispatched: Arc::new(AtomicBool::new(false)),
+            sent_at: Arc::new(Mutex::new(None)),
             done: false,
         }
     }
@@ -946,6 +1003,7 @@ impl HTTPClient {
         };
         let (build, classify, method) = (&build, &classify, &method);
         let op_dispatched = &guard.dispatched;
+        let op_sent_at = &guard.sent_at;
         self.transport
             .scheduler
             .run(
@@ -955,7 +1013,7 @@ impl HTTPClient {
                 &ctx,
                 |ctx| async move {
                     let number = ctx.number;
-                    let (status, body) = self
+                    let (status, body, stamps) = self
                         .attempt(
                             method,
                             path,
@@ -966,14 +1024,21 @@ impl HTTPClient {
                             endpoint,
                             ctx,
                             op_dispatched,
+                            op_sent_at,
                         )
                         .await?;
                     let facts = AttemptFacts {
                         operation_id: guard.operation_id,
                         attempt: number,
                         http_status: status,
+                        source: self.transport.identity.clone(),
+                        stamps,
                     };
-                    classify(facts, &body).map_err(|e| e.with_attempt(number))
+                    classify(facts, &body).map_err(|e| {
+                        e.with_attempt(number)
+                            .with_sent_at(stamps.sent_at)
+                            .with_received_at(stamps.received_at)
+                    })
                 },
             )
             .await
@@ -992,7 +1057,8 @@ impl HTTPClient {
         endpoint: Endpoint,
         ctx: AttemptCtx,
         op_dispatched: &AtomicBool,
-    ) -> std::result::Result<(u16, Vec<u8>), HttpError>
+        op_sent_at: &Mutex<Option<IngressStamp>>,
+    ) -> std::result::Result<(u16, Vec<u8>, AttemptStamps), HttpError>
     where
         B: Fn(reqwest::RequestBuilder) -> reqwest::RequestBuilder,
     {
@@ -1035,15 +1101,19 @@ impl HTTPClient {
             .with_source(e.without_url())
         })?;
         // Dispatch now: the admitted capacity is used, and from here on the
-        // broker may receive the request.
+        // broker may receive the request. The stamp is the last instant
+        // before the bytes leave the process.
         let span = token.dispatch();
+        let sent_at = self.transport.stamp();
+        *op_sent_at.lock().unwrap_or_else(|p| p.into_inner()) = Some(sent_at);
         op_dispatched.store(true, Ordering::Release);
-        self.receive(request, kind, m, endpoint, attempt, &span)
+        self.receive(request, kind, m, endpoint, attempt, &span, sent_at)
             .instrument(span.clone())
             .await
     }
 
     // The dispatched part of an attempt, inside its span.
+    #[allow(clippy::too_many_arguments)]
     async fn receive(
         &self,
         request: reqwest::Request,
@@ -1052,7 +1122,8 @@ impl HTTPClient {
         endpoint: Endpoint,
         attempt: u32,
         span: &Span,
-    ) -> std::result::Result<(u16, Vec<u8>), HttpError> {
+        sent_at: IngressStamp,
+    ) -> std::result::Result<(u16, Vec<u8>, AttemptStamps), HttpError> {
         let mut response = self.transport.http.execute(request).await.map_err(|e| {
             // A connect failure is affirmative evidence that no request
             // bytes left the process; anything later is not.
@@ -1063,6 +1134,11 @@ impl HTTPClient {
             };
             let err =
                 HttpError::new(HttpErrorKind::Transport, m, endpoint, stage).with_attempt(attempt);
+            let err = if stage == Stage::Started {
+                err.with_sent_at(sent_at)
+            } else {
+                err
+            };
             let err = if e.is_timeout() {
                 err.with_timeout()
             } else {
@@ -1070,6 +1146,11 @@ impl HTTPClient {
             };
             err.with_source(e.without_url())
         })?;
+        // The response head is in hand: the response was received.
+        let stamps = AttemptStamps {
+            sent_at,
+            received_at: self.transport.stamp(),
+        };
         let status = response.status().as_u16();
         span.record("http_status", status);
         let limit = match kind {
@@ -1080,6 +1161,8 @@ impl HTTPClient {
             HttpError::new(kind, m, endpoint, Stage::ResponseReceived)
                 .with_status(status)
                 .with_attempt(attempt)
+                .with_sent_at(stamps.sent_at)
+                .with_received_at(stamps.received_at)
         };
         if response.content_length().is_some_and(|n| n > limit as u64) {
             return Err(
@@ -1109,8 +1192,15 @@ impl HTTPClient {
                 }
             }
         }
-        Ok((status, body))
+        Ok((status, body, stamps))
     }
+}
+
+/// The two instants of one dispatched attempt whose response head arrived.
+#[derive(Clone, Copy)]
+pub(crate) struct AttemptStamps {
+    pub(crate) sent_at: IngressStamp,
+    pub(crate) received_at: IngressStamp,
 }
 
 #[derive(Clone, Copy)]
@@ -1296,11 +1386,13 @@ pub(crate) struct Envelope<T> {
 }
 
 /// The facts of one attempt's response, handed to the classifier.
-#[derive(Clone, Copy)]
+#[derive(Clone)]
 pub(crate) struct AttemptFacts {
     pub(crate) operation_id: u64,
     pub(crate) attempt: u32,
     pub(crate) http_status: u16,
+    pub(crate) source: SourceIdentity,
+    pub(crate) stamps: AttemptStamps,
 }
 
 impl<T> Envelope<T> {
@@ -1312,6 +1404,9 @@ impl<T> Envelope<T> {
                 http_status: facts.http_status,
                 operation_id: facts.operation_id,
                 attempt: facts.attempt,
+                source: facts.source,
+                sent_at: facts.stamps.sent_at,
+                received_at: facts.stamps.received_at,
             },
         }
     }

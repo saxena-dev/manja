@@ -746,3 +746,41 @@ async fn a_receipt_carries_the_message_the_broker_sent() {
         .unwrap();
     assert_eq!(response.meta.message, None);
 }
+
+// ---- an error after dispatch carries the dispatch stamp ------------------
+
+#[tokio::test]
+async fn a_dropped_connection_after_dispatch_is_stamped_sent_but_not_received() {
+    let h = HttpHarness::start(vec![Reply::DropAfterRequest]).await;
+    let c = client(&h.base_url());
+    let err = c.orders().place_order(&market_buy()).await.unwrap_err();
+    let e = err.as_http().unwrap();
+    assert_eq!(e.stage(), TransportStage::Started);
+    assert!(e.may_have_reached_broker());
+    let sent = e.sent_at().expect("the request left the process");
+    assert_eq!(e.received_at(), None, "no response head arrived");
+    assert_eq!(e.source(), Some(c.source_identity()));
+    assert!(e.operation_id().is_some());
+    assert_eq!(h.requests().len(), 1);
+    // The stamp is a real instant: on the wall clock, and after the client's
+    // origin on the monotonic clock.
+    assert!(sent.wall.unix_nanos() > 0);
+    assert!(sent.monotonic.nanos() > 0);
+    // A response that arrives but does not decode carries both stamps.
+    let h = HttpHarness::start(vec![Reply::Respond {
+        status: 200,
+        content_type: "text/html",
+        body: b"<html>ok</html>".to_vec(),
+    }])
+    .await;
+    let err = client(&h.base_url())
+        .orders()
+        .place_order(&market_buy())
+        .await
+        .unwrap_err();
+    let e = err.as_http().unwrap();
+    assert_eq!(e.stage(), TransportStage::ResponseReceived);
+    let (sent, received) = (e.sent_at().unwrap(), e.received_at().unwrap());
+    assert!(received.wall >= sent.wall);
+    assert!(received.monotonic >= sent.monotonic);
+}

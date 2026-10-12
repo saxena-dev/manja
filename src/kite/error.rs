@@ -25,6 +25,8 @@
 use std::fmt;
 
 use crate::kite::connect::credentials::CredentialError;
+use crate::kite::connect::models::IngressStamp;
+use crate::kite::envelope::SourceIdentity;
 use crate::kite::obs::diagnostics::BoundedText;
 use crate::kite::obs::schema::{AdmissionCause, Endpoint, Method};
 use crate::kite::protocol::Inbound;
@@ -213,6 +215,10 @@ struct HttpErrorInner {
     admission_cause: Option<AdmissionCause>,
     retry_after: Option<std::time::Duration>,
     resets_at: Option<chrono::DateTime<chrono::FixedOffset>>,
+    identity: Option<SourceIdentity>,
+    operation_id: Option<u64>,
+    sent_at: Option<IngressStamp>,
+    received_at: Option<IngressStamp>,
     source: Option<Box<dyn std::error::Error + Send + Sync>>,
 }
 
@@ -238,8 +244,40 @@ impl HttpError {
             admission_cause: None,
             retry_after: None,
             resets_at: None,
+            identity: None,
+            operation_id: None,
+            sent_at: None,
+            received_at: None,
             source: None,
         }))
+    }
+
+    /// The operation this error belongs to: the client's identity and the
+    /// operation ID. Set once per operation, on the way out.
+    pub(crate) fn with_operation(mut self, identity: SourceIdentity, operation_id: u64) -> Self {
+        if self.0.identity.is_none() {
+            self.0.identity = Some(identity);
+        }
+        if self.0.operation_id.is_none() {
+            self.0.operation_id = Some(operation_id);
+        }
+        self
+    }
+
+    /// When the failed attempt was dispatched; kept if already set.
+    pub(crate) fn with_sent_at(mut self, sent_at: IngressStamp) -> Self {
+        if self.0.sent_at.is_none() {
+            self.0.sent_at = Some(sent_at);
+        }
+        self
+    }
+
+    /// When the failed attempt's response head arrived; kept if already set.
+    pub(crate) fn with_received_at(mut self, received_at: IngressStamp) -> Self {
+        if self.0.received_at.is_none() {
+            self.0.received_at = Some(received_at);
+        }
+        self
     }
 
     pub(crate) fn with_admission(
@@ -366,6 +404,31 @@ impl HttpError {
     /// and the ceiling resets. There is no earlier recovery.
     pub fn resets_at(&self) -> Option<chrono::DateTime<chrono::FixedOffset>> {
         self.0.resets_at
+    }
+
+    /// The client's source identity (producer, run and feed), on every
+    /// error an operation produces; the same value its responses carry.
+    pub fn source(&self) -> Option<&SourceIdentity> {
+        self.0.identity.as_ref()
+    }
+
+    /// The operation's ID, the `operation_id` its span records, on every
+    /// error an operation produces.
+    pub fn operation_id(&self) -> Option<u64> {
+        self.0.operation_id
+    }
+
+    /// When the failed attempt was dispatched: `Some` once the request left
+    /// the process (stage `Started` or later), `None` for an error with
+    /// stage `NotStarted`.
+    pub fn sent_at(&self) -> Option<IngressStamp> {
+        self.0.sent_at
+    }
+
+    /// When the failed attempt's response head arrived: `Some` only with
+    /// stage `ResponseReceived`.
+    pub fn received_at(&self) -> Option<IngressStamp> {
+        self.0.received_at
     }
 
     /// A bounded, sanitized description, such as why a body failed to

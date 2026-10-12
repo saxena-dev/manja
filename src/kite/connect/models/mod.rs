@@ -15,6 +15,8 @@
 //!
 use serde::{Deserialize, Serialize};
 
+use crate::kite::envelope::{MonotonicElapsed, ReceiveTime, SourceIdentity};
+
 /// A successful response: the endpoint's data and the facts of the call that
 /// produced it.
 ///
@@ -52,8 +54,7 @@ impl<T> Response<T> {
 
 /// The facts of the call behind a [`Response`].
 ///
-/// A later release may add fields (the client's source identity and the
-/// send and receive stamps are planned), so this type is `#[non_exhaustive]`.
+/// A later release may add fields, so this type is `#[non_exhaustive]`.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[non_exhaustive]
 pub struct ResponseMeta {
@@ -67,6 +68,30 @@ pub struct ResponseMeta {
     /// The number of the attempt that produced the response: 1 for a first
     /// try, 2 after one retry.
     pub attempt: u32,
+    /// The client's source identity: producer, run and feed, the same type
+    /// and frame the ticker's envelope carries, so HTTP evidence and ticker
+    /// evidence from one process cite the same run.
+    pub source: SourceIdentity,
+    /// When the attempt that produced this response was dispatched: the
+    /// last instant before its bytes left the process.
+    pub sent_at: IngressStamp,
+    /// When the response head (status and headers) arrived.
+    pub received_at: IngressStamp,
+}
+
+/// One ingress or egress instant, in both of the envelope's clocks: wall
+/// time for display and broker comparison, monotonic time for ordering
+/// within a run.
+///
+/// The monotonic part counts from the client's run origin, so stamps from
+/// one client and its clones are comparable with each other and with the
+/// client's diagnostics, and not with another client's.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub struct IngressStamp {
+    /// Wall-clock time, signed UTC Unix nanoseconds.
+    pub wall: ReceiveTime,
+    /// Monotonic time since the client's run origin.
+    pub monotonic: MonotonicElapsed,
 }
 
 /// Models for the `/session/` API group, including user session management.

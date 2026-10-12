@@ -675,6 +675,11 @@ async fn a_saturated_placement_window_refuses_at_once_with_an_accurate_hint() {
     assert!(!e.may_have_reached_broker());
     assert_eq!(e.admission_cause(), Some(AdmissionCause::WindowFull));
     assert_eq!(e.resets_at(), None);
+    // Nothing was dispatched, so neither stamp exists; the identity and the
+    // operation ID still do.
+    assert_eq!((e.sent_at(), e.received_at()), (None, None));
+    assert_eq!(e.source(), Some(client.source_identity()));
+    assert!(e.operation_id().is_some());
     let hint = e.retry_after().expect("a full window carries retry_after");
     // The hint is the time until the first grant ages out of the window:
     // at most a second, and at least a second less the time already spent.
