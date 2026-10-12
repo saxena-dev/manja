@@ -1,6 +1,6 @@
 //! The HTTP client against a local server that serves the official
-//! `kiteconnect-mocks` responses: account reads, an order with an explicit
-//! dispatch permit, quotes, and the client's own telemetry.
+//! `kiteconnect-mocks` responses: account reads, an order, quotes, and the
+//! client's own telemetry.
 //!
 //! `cargo run --example http_client`. Nothing leaves `127.0.0.1`.
 
@@ -15,7 +15,6 @@ use manja::kite::connect::credentials::Credentials;
 use manja::kite::connect::models::{
     Exchange, FullQuote, OrderType, OrderVariety, PlaceOrderRequest, ProductType, TransactionType,
 };
-use manja::kite::connect::scheduler::PermitTarget;
 use manja::kite::obs::{InMemoryRecorder, Instrument, Observability};
 use manja::kite::protocol::Quantity;
 
@@ -73,15 +72,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         ProductType::CashAndCarry,
     );
     request.validate()?;
-    // Admission is explicit: the permit reserves quota for this one order and
-    // expires after B-HTTP-12. Placement makes exactly one attempt; a lost
-    // response is reported with its stage, never retried or assumed sent.
-    let permit = client.admit(PermitTarget::PlaceOrder).await?;
-    let receipt = client
-        .orders()
-        .place_order_with_permit(&request, permit)
-        .await?
-        .data;
+    // Placement is admitted now or refused with a hint, never queued, and
+    // makes exactly one attempt; a lost response is reported with its stage,
+    // never retried or assumed sent.
+    let receipt = client.orders().place_order(&request).await?.data;
     // A receipt means the broker accepted the request, not that it filled.
     println!("order accepted: {}", receipt.order_id);
 

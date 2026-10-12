@@ -16,17 +16,12 @@
 //! Order IDs are [`OrderId`]s, valid by construction, so no caller string
 //! can change a request path.
 //!
-//! Each mutation has a `*_with_permit` variant that dispatches with a
-//! [`DispatchPermit`] obtained from `HTTPClient::admit`, giving the caller an
-//! explicit point between admission and dispatch.
-//!
 use crate::kite::connect::{
     client::{HTTPClient, RowPolicy},
     models::{
         ModifyOrderRequest, Order, OrderReceipt, OrderVariety, PlaceOrderRequest, Response, Row,
         Rows, Trade,
     },
-    scheduler::DispatchPermit,
     wire::WireForm,
 };
 use crate::kite::error::Result;
@@ -78,25 +73,7 @@ impl<'c> Orders<'c> {
     /// error and nothing is sent. The bytes sent are exactly those of
     /// [`PlaceOrderRequest::wire`].
     pub async fn place_order(&self, request: &PlaceOrderRequest) -> Result<Response<OrderReceipt>> {
-        self.place(request, None).await
-    }
-
-    /// [`Self::place_order`] with admitted capacity from
-    /// `HTTPClient::admit(PermitTarget::PlaceOrder)`.
-    pub async fn place_order_with_permit(
-        &self,
-        request: &PlaceOrderRequest,
-        permit: DispatchPermit,
-    ) -> Result<Response<OrderReceipt>> {
-        self.place(request, Some(permit)).await
-    }
-
-    async fn place(
-        &self,
-        request: &PlaceOrderRequest,
-        permit: Option<DispatchPermit>,
-    ) -> Result<Response<OrderReceipt>> {
-        self.client.send_wire(request.wire(), permit, true).await
+        self.client.send_wire(request.wire(), true).await
     }
 
     /// Modify an open or pending order: `PUT /orders/{variety}/{order_id}`,
@@ -108,30 +85,8 @@ impl<'c> Orders<'c> {
         order_id: &OrderId,
         request: &ModifyOrderRequest,
     ) -> Result<Response<OrderReceipt>> {
-        self.modify(variety, order_id, request, None).await
-    }
-
-    /// [`Self::modify_order`] with admitted capacity from
-    /// `HTTPClient::admit(PermitTarget::ModifyOrder { order_id })`.
-    pub async fn modify_order_with_permit(
-        &self,
-        variety: OrderVariety,
-        order_id: &OrderId,
-        request: &ModifyOrderRequest,
-        permit: DispatchPermit,
-    ) -> Result<Response<OrderReceipt>> {
-        self.modify(variety, order_id, request, Some(permit)).await
-    }
-
-    async fn modify(
-        &self,
-        variety: OrderVariety,
-        order_id: &OrderId,
-        request: &ModifyOrderRequest,
-        permit: Option<DispatchPermit>,
-    ) -> Result<Response<OrderReceipt>> {
         self.client
-            .send_wire(request.wire(variety, order_id), permit, true)
+            .send_wire(request.wire(variety, order_id), true)
             .await
     }
 
@@ -146,28 +101,8 @@ impl<'c> Orders<'c> {
         variety: OrderVariety,
         order_id: &OrderId,
     ) -> Result<Response<OrderReceipt>> {
-        self.cancel(variety, order_id, None).await
-    }
-
-    /// [`Self::cancel_order`] with admitted capacity from
-    /// `HTTPClient::admit(PermitTarget::CancelOrder)`.
-    pub async fn cancel_order_with_permit(
-        &self,
-        variety: OrderVariety,
-        order_id: &OrderId,
-        permit: DispatchPermit,
-    ) -> Result<Response<OrderReceipt>> {
-        self.cancel(variety, order_id, Some(permit)).await
-    }
-
-    async fn cancel(
-        &self,
-        variety: OrderVariety,
-        order_id: &OrderId,
-        permit: Option<DispatchPermit>,
-    ) -> Result<Response<OrderReceipt>> {
         self.client
-            .send_wire(Ok(WireForm::cancel_order(variety, order_id)), permit, true)
+            .send_wire(Ok(WireForm::cancel_order(variety, order_id)), true)
             .await
     }
 

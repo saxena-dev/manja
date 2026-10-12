@@ -74,9 +74,7 @@ use crate::kite::{
         config::Config,
         credentials::{AccessToken, ApiKey, Credentials},
         models::{IngressStamp, Response, ResponseMeta, Row, RowError, Rows, UserSession},
-        scheduler::{
-            AttemptCtx, DispatchPermit, OpObs, OpSpec, PermitTarget, RetryClass, Scheduler,
-        },
+        scheduler::{AttemptCtx, OpObs, OpSpec, RetryClass, Scheduler},
         wire::WireForm,
     },
     envelope::{MonotonicElapsed, ReceiveTime, SourceIdentity},
@@ -563,27 +561,6 @@ impl HTTPClient {
         &self.transport.config
     }
 
-    /// Admit capacity for `target` now, returning a [`DispatchPermit`] to
-    /// pass to the matching operation.
-    ///
-    /// This is the explicit point between admission and dispatch: the
-    /// caller may run its own checks before using the permit. The permit
-    /// expires after `B-HTTP-12`; dropping it unused returns its capacity.
-    pub async fn admit(&self, target: PermitTarget) -> Result<DispatchPermit> {
-        let (method, endpoint) = target.operation();
-        let priority = self.priority_of(method, endpoint);
-        Ok(self
-            .transport
-            .scheduler
-            .admit(
-                &self.transport.admission,
-                target,
-                priority,
-                &self.transport.obs,
-            )
-            .await?)
-    }
-
     /// A bounded diagnostics snapshot of this client's transport.
     pub fn diagnostics(&self) -> HttpDiagnostics {
         let failures = self
@@ -680,7 +657,6 @@ impl HTTPClient {
             reqwest::Method::GET,
             path,
             BodyKind::Csv,
-            None,
             true,
             |rb| rb,
             |facts, body| {
@@ -695,8 +671,7 @@ impl HTTPClient {
     where
         Model: DeserializeOwned,
     {
-        self.json(reqwest::Method::GET, path, None, true, |rb| rb)
-            .await
+        self.json(reqwest::Method::GET, path, true, |rb| rb).await
     }
 
     /// GET `path` with a query and decode the response envelope.
@@ -709,7 +684,7 @@ impl HTTPClient {
         Q: Serialize + ?Sized,
         Model: DeserializeOwned,
     {
-        self.json(reqwest::Method::GET, path, None, true, |rb| rb.query(query))
+        self.json(reqwest::Method::GET, path, true, |rb| rb.query(query))
             .await
     }
 
@@ -721,7 +696,6 @@ impl HTTPClient {
     pub(crate) async fn send_wire<Model>(
         &self,
         wire: std::result::Result<WireForm, HttpError>,
-        permit: Option<DispatchPermit>,
         auth: bool,
     ) -> Result<Response<Model>>
     where
@@ -748,7 +722,7 @@ impl HTTPClient {
         let target = wire.target();
         let content_type = wire.content_type();
         let body = wire.into_body();
-        self.json(method, &target, permit, auth, |rb| match content_type {
+        self.json(method, &target, auth, |rb| match content_type {
             // Nothing to send: no body and no content type.
             None => rb,
             Some(content_type) => rb
@@ -786,7 +760,7 @@ impl HTTPClient {
         if body.len() > self.transport.config.limits().request_body_bytes() {
             return Err(rejected("the request body exceeds its bound"));
         }
-        self.json(method, path, None, true, |rb| {
+        self.json(method, path, true, |rb| {
             rb.header(reqwest::header::CONTENT_TYPE, "application/json")
                 .body(body.clone())
         })
@@ -861,7 +835,6 @@ impl HTTPClient {
             reqwest::Method::GET,
             path,
             BodyKind::Json,
-            None,
             true,
             |rb| rb,
             |facts, body| {
@@ -916,7 +889,6 @@ impl HTTPClient {
         &self,
         method: reqwest::Method,
         path: &str,
-        permit: Option<DispatchPermit>,
         auth: bool,
         build: B,
     ) -> Result<Response<Model>>
@@ -925,18 +897,10 @@ impl HTTPClient {
         B: Fn(reqwest::RequestBuilder) -> reqwest::RequestBuilder,
     {
         let (m, endpoint) = labels(&method, path);
-        self.operation(
-            method,
-            path,
-            BodyKind::Json,
-            permit,
-            auth,
-            build,
-            |facts, body| {
-                classify_json(facts.http_status, body, m, endpoint)
-                    .map(|envelope| envelope.into_response(facts))
-            },
-        )
+        self.operation(method, path, BodyKind::Json, auth, build, |facts, body| {
+            classify_json(facts.http_status, body, m, endpoint)
+                .map(|envelope| envelope.into_response(facts))
+        })
         .await
     }
 
@@ -950,7 +914,6 @@ impl HTTPClient {
         method: reqwest::Method,
         path: &str,
         kind: BodyKind,
-        permit: Option<DispatchPermit>,
         auth: bool,
         build: B,
         classify: C,
@@ -963,7 +926,7 @@ impl HTTPClient {
         let guard = self.guard(m, endpoint);
         let span = guard.span.clone();
         let result = self
-            .execute(method, path, kind, permit, auth, &guard, build, classify)
+            .execute(method, path, kind, auth, &guard, build, classify)
             .instrument(span)
             .await;
         Ok(guard.finish(result)?)
@@ -977,7 +940,6 @@ impl HTTPClient {
         method: reqwest::Method,
         path: &str,
         kind: BodyKind,
-        permit: Option<DispatchPermit>,
         auth: bool,
         guard: &OpGuard<'_>,
         build: B,
@@ -1006,41 +968,35 @@ impl HTTPClient {
         let op_sent_at = &guard.sent_at;
         self.transport
             .scheduler
-            .run(
-                spec,
-                &self.transport.admission,
-                permit,
-                &ctx,
-                |ctx| async move {
-                    let number = ctx.number;
-                    let (status, body, stamps) = self
-                        .attempt(
-                            method,
-                            path,
-                            kind,
-                            auth,
-                            build,
-                            m,
-                            endpoint,
-                            ctx,
-                            op_dispatched,
-                            op_sent_at,
-                        )
-                        .await?;
-                    let facts = AttemptFacts {
-                        operation_id: guard.operation_id,
-                        attempt: number,
-                        http_status: status,
-                        source: self.transport.identity.clone(),
-                        stamps,
-                    };
-                    classify(facts, &body).map_err(|e| {
-                        e.with_attempt(number)
-                            .with_sent_at(stamps.sent_at)
-                            .with_received_at(stamps.received_at)
-                    })
-                },
-            )
+            .run(spec, &self.transport.admission, &ctx, |ctx| async move {
+                let number = ctx.number;
+                let (status, body, stamps) = self
+                    .attempt(
+                        method,
+                        path,
+                        kind,
+                        auth,
+                        build,
+                        m,
+                        endpoint,
+                        ctx,
+                        op_dispatched,
+                        op_sent_at,
+                    )
+                    .await?;
+                let facts = AttemptFacts {
+                    operation_id: guard.operation_id,
+                    attempt: number,
+                    http_status: status,
+                    source: self.transport.identity.clone(),
+                    stamps,
+                };
+                classify(facts, &body).map_err(|e| {
+                    e.with_attempt(number)
+                        .with_sent_at(stamps.sent_at)
+                        .with_received_at(stamps.received_at)
+                })
+            })
             .await
     }
 

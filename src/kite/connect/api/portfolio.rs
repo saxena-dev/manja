@@ -16,7 +16,6 @@ use crate::kite::connect::{
         Auction, Holding, HoldingsAuthorisation, HoldingsAuthorisationRequest,
         PositionConversionRequest, Positions, Response,
     },
-    scheduler::DispatchPermit,
 };
 use crate::kite::error::Result;
 
@@ -104,25 +103,7 @@ impl<'c> Portfolio<'c> {
         &self,
         request: &PositionConversionRequest,
     ) -> Result<Response<bool>> {
-        self.convert(request, None).await
-    }
-
-    /// [`Self::convert_position`] with admitted capacity from
-    /// `HTTPClient::admit(PermitTarget::ConvertPosition)`.
-    pub async fn convert_position_with_permit(
-        &self,
-        request: &PositionConversionRequest,
-        permit: DispatchPermit,
-    ) -> Result<Response<bool>> {
-        self.convert(request, Some(permit)).await
-    }
-
-    async fn convert(
-        &self,
-        request: &PositionConversionRequest,
-        permit: Option<DispatchPermit>,
-    ) -> Result<Response<bool>> {
-        self.client.send_wire(request.wire(), permit, true).await
+        self.client.send_wire(request.wire(), true).await
     }
 
     /// Retrieve the list of auctions that are currently being held.
@@ -152,6 +133,6 @@ impl<'c> Portfolio<'c> {
         &self,
         request: &HoldingsAuthorisationRequest,
     ) -> Result<Response<HoldingsAuthorisation>> {
-        self.client.send_wire(request.wire(), None, true).await
+        self.client.send_wire(request.wire(), true).await
     }
 }

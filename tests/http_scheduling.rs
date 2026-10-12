@@ -17,7 +17,7 @@ use manja::kite::connect::models::{
     Exchange, ModifyOrderRequest, OrderType, OrderVariety, PlaceOrderRequest,
     PositionConversionRequest, PositionType, ProductType, TransactionType,
 };
-use manja::kite::connect::scheduler::{PermitTarget, SchedulerLimits};
+use manja::kite::connect::scheduler::SchedulerLimits;
 use manja::kite::error::{HttpErrorKind, TransportStage};
 use manja::kite::protocol::{OrderId, Quantity};
 
@@ -290,17 +290,4 @@ async fn cancellation_during_admission_is_recorded_as_not_started() {
     assert_eq!(last.kind, HttpErrorKind::Cancelled);
     assert_eq!(last.stage, TransportStage::NotStarted);
     assert_eq!(c.admission().waiters(), 0);
-}
-
-#[tokio::test]
-async fn permits_are_issued_by_the_clients_scope() {
-    let harness = HttpHarness::start(vec![]).await;
-    let c = client(&harness.base_url());
-    let permit = c.admit(PermitTarget::PlaceOrder).await.unwrap();
-    assert!(permit.belongs_to(c.admission()));
-    assert!(!permit.is_expired());
-    assert!(permit.remaining() <= Duration::from_secs(1));
-    let other = client(&harness.base_url());
-    assert!(!permit.belongs_to(other.admission()));
-    assert!(harness.requests().is_empty(), "admission sends nothing");
 }

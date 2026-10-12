@@ -10,17 +10,11 @@
 //! after dispatch does not show whether the broker acted: the error's stage
 //! says so, and [`Gtt::get_trigger`] reports the trigger's state.
 //!
-//! Each mutation has a `*_with_permit` variant that dispatches with a
-//! [`DispatchPermit`] obtained from `HTTPClient::admit`, as the order
-//! mutations do. A GTT permit names the operation, not the trigger: GTT
-//! mutations share the standard quota class, with no per-trigger limit.
-//!
 //! The documented sandbox does not offer GTT (`kite:sandbox.md:298`).
 //!
 use crate::kite::connect::{
     client::HTTPClient,
     models::{GttReceipt, GttRequest, GttTrigger, Response},
-    scheduler::DispatchPermit,
     wire::WireForm,
 };
 use crate::kite::error::Result;
@@ -78,25 +72,7 @@ impl<'c> Gtt<'c> {
     /// error and nothing is sent. The bytes sent are exactly those of
     /// [`GttRequest::wire`].
     pub async fn place_trigger(&self, request: &GttRequest) -> Result<Response<GttReceipt>> {
-        self.place(request, None).await
-    }
-
-    /// [`Self::place_trigger`] with admitted capacity from
-    /// `HTTPClient::admit(PermitTarget::PlaceGtt)`.
-    pub async fn place_trigger_with_permit(
-        &self,
-        request: &GttRequest,
-        permit: DispatchPermit,
-    ) -> Result<Response<GttReceipt>> {
-        self.place(request, Some(permit)).await
-    }
-
-    async fn place(
-        &self,
-        request: &GttRequest,
-        permit: Option<DispatchPermit>,
-    ) -> Result<Response<GttReceipt>> {
-        self.client.send_wire(request.wire(), permit, true).await
+        self.client.send_wire(request.wire(), true).await
     }
 
     /// Replace an active GTT: `PUT /gtt/triggers/{trigger_id}`, form-encoded
@@ -107,54 +83,16 @@ impl<'c> Gtt<'c> {
         trigger_id: u64,
         request: &GttRequest,
     ) -> Result<Response<GttReceipt>> {
-        self.modify(trigger_id, request, None).await
-    }
-
-    /// [`Self::modify_trigger`] with admitted capacity from
-    /// `HTTPClient::admit(PermitTarget::ModifyGtt)`.
-    pub async fn modify_trigger_with_permit(
-        &self,
-        trigger_id: u64,
-        request: &GttRequest,
-        permit: DispatchPermit,
-    ) -> Result<Response<GttReceipt>> {
-        self.modify(trigger_id, request, Some(permit)).await
-    }
-
-    async fn modify(
-        &self,
-        trigger_id: u64,
-        request: &GttRequest,
-        permit: Option<DispatchPermit>,
-    ) -> Result<Response<GttReceipt>> {
         self.client
-            .send_wire(request.wire_modification(trigger_id), permit, true)
+            .send_wire(request.wire_modification(trigger_id), true)
             .await
     }
 
     /// Delete an active GTT: `DELETE /gtt/triggers/{trigger_id}`. The request
     /// is [`WireForm::delete_trigger`].
     pub async fn delete_trigger(&self, trigger_id: u64) -> Result<Response<GttReceipt>> {
-        self.delete(trigger_id, None).await
-    }
-
-    /// [`Self::delete_trigger`] with admitted capacity from
-    /// `HTTPClient::admit(PermitTarget::DeleteGtt)`.
-    pub async fn delete_trigger_with_permit(
-        &self,
-        trigger_id: u64,
-        permit: DispatchPermit,
-    ) -> Result<Response<GttReceipt>> {
-        self.delete(trigger_id, Some(permit)).await
-    }
-
-    async fn delete(
-        &self,
-        trigger_id: u64,
-        permit: Option<DispatchPermit>,
-    ) -> Result<Response<GttReceipt>> {
         self.client
-            .send_wire(Ok(WireForm::delete_trigger(trigger_id)), permit, true)
+            .send_wire(Ok(WireForm::delete_trigger(trigger_id)), true)
             .await
     }
 

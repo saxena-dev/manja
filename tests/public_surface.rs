@@ -28,7 +28,7 @@ use manja::kite::connect::models::{
     Positions, QuoteMode, Quotes, RequestError, Response, ResponseMeta, Row, RowError, Rows,
     SchemeType, SipFrequency, SipStatus, Trade, UserSession,
 };
-use manja::kite::connect::scheduler::{DispatchPermit, PermitTarget, SchedulerLimits};
+use manja::kite::connect::scheduler::SchedulerLimits;
 use manja::kite::connect::wire::WireForm;
 use manja::kite::decoder::adapter::{Adapter, AdapterError, Decoded, DecodedEvent, Versions};
 use manja::kite::decoder::framing::{Frame, FramingError, FramingLimits, Message, PacketFamily};
@@ -111,9 +111,6 @@ async fn signatures(c: &HTTPClient, h: &TickerHandle) {
         Row::Decoded(t) => Some(t),
         _ => None,
     };
-    let _ = PermitTarget::ModifyOrder {
-        order_id: id.clone(),
-    };
     let _: Result<Response<Vec<Holding>>, ManjaError> = c.portfolio().get_holdings().await;
     let _: Result<Response<Positions>, ManjaError> = c.portfolio().get_positions().await;
     let gtt: GttRequest = GttRequest::single(
@@ -133,18 +130,6 @@ async fn signatures(c: &HTTPClient, h: &TickerHandle) {
     let _: Result<Response<GttReceipt>, ManjaError> = c.gtt().place_trigger(&gtt).await;
     let _: Result<Response<GttReceipt>, ManjaError> = c.gtt().modify_trigger(1, &gtt).await;
     let _: Result<Response<GttReceipt>, ManjaError> = c.gtt().delete_trigger(1).await;
-    if let Ok(p) = c.admit(PermitTarget::PlaceGtt).await {
-        let _: Result<Response<GttReceipt>, ManjaError> =
-            c.gtt().place_trigger_with_permit(&gtt, p).await;
-    }
-    if let Ok(p) = c.admit(PermitTarget::ModifyGtt).await {
-        let _: Result<Response<GttReceipt>, ManjaError> =
-            c.gtt().modify_trigger_with_permit(1, &gtt, p).await;
-    }
-    if let Ok(p) = c.admit(PermitTarget::DeleteGtt).await {
-        let _: Result<Response<GttReceipt>, ManjaError> =
-            c.gtt().delete_trigger_with_permit(1, p).await;
-    }
     let _: Result<Response<Vec<GttTrigger>>, ManjaError> = c.gtt().list_triggers().await;
     let _: Result<Response<GttTrigger>, ManjaError> = c.gtt().get_trigger(1).await;
     let _: Result<Response<Quotes<LTPQuote>>, ManjaError> =
@@ -168,7 +153,6 @@ async fn signatures(c: &HTTPClient, h: &TickerHandle) {
     let _: Result<Response<Vec<MfHolding>>, ManjaError> = mf.list_holdings().await;
     let _: Result<Vec<MfInstrument>, ManjaError> = mf.get_instruments().await;
     let _: Result<String, ManjaError> = mf.get_instruments_csv().await;
-    let _: Result<DispatchPermit, ManjaError> = c.admit(PermitTarget::PlaceOrder).await;
     let _: HttpDiagnostics = c.diagnostics();
     // Wire forms of every mutation, with and without a request type.
     let place = PlaceOrderRequest::new(
@@ -341,4 +325,41 @@ fn status_carries_no_runtime_handle_and_events_are_serializable_data() {
     fn assert_send_sync<T: Send + Sync>() {}
     assert_send_sync::<TickerHandle>();
     assert_send_sync::<TickerStatus>();
+}
+
+/// The 0.2 dispatch permit API is gone from the HTTP slice: no public item
+/// in `src/kite/connect` carries a retired name. The needles are assembled
+/// from fragments so that this file itself does not spell them.
+#[test]
+fn the_dispatch_permit_api_is_absent_from_the_http_slice() {
+    fn sources(dir: &std::path::Path, out: &mut Vec<String>) {
+        for entry in std::fs::read_dir(dir).unwrap() {
+            let path = entry.unwrap().path();
+            if path.is_dir() {
+                sources(&path, out);
+            } else if path.extension().is_some_and(|e| e == "rs") {
+                out.push(std::fs::read_to_string(&path).unwrap());
+            }
+        }
+    }
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/kite/connect");
+    let mut files = Vec::new();
+    sources(&root, &mut files);
+    assert!(files.len() > 10, "the HTTP slice was scanned");
+    let retired = [
+        ["Dispatch", "Permit"].concat(),
+        ["Permit", "Target"].concat(),
+        ["pub async fn ", "admit("].concat(),
+        ["_with_", "permit"].concat(),
+        ["permit_", "validity"].concat(),
+        ["B-HTTP-", "12"].concat(),
+    ];
+    for source in &files {
+        for needle in &retired {
+            assert!(
+                !source.contains(needle.as_str()),
+                "retired name present: {needle}"
+            );
+        }
+    }
 }

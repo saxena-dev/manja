@@ -138,12 +138,12 @@ impl HttpLimits {
         Ok(self)
     }
 
-    /// Deadline, attempt-timeout, retry and permit bounds.
+    /// Deadline, attempt-timeout and retry bounds.
     pub fn scheduler(&self) -> &SchedulerLimits {
         &self.scheduler
     }
 
-    /// Replace the deadline, attempt-timeout, retry and permit bounds.
+    /// Replace the deadline, attempt-timeout and retry bounds.
     pub fn with_scheduler(mut self, scheduler: SchedulerLimits) -> Self {
         self.scheduler = scheduler;
         self

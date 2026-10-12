@@ -11,7 +11,7 @@
 //! - [`credentials`]: API keys, access tokens and secrets, validated and
 //!   kept out of logs.
 //! - [`config`]: the API base URL and the runtime bounds.
-//! - [`scheduler`]: deadlines, retries and dispatch permits.
+//! - [`scheduler`]: deadlines and retries.
 //! - [`admission`]: local enforcement of Kite's rate limits.
 //! - [`wire`]: the exact bytes a mutation sends, inspectable before the
 //!   call and hashable after it.

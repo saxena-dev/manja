@@ -19,7 +19,7 @@ use manja::kite::connect::models::{
     Exchange, ModifyOrderRequest, OrderType, OrderValidity, OrderVariety, PlaceOrderRequest,
     PositionConversionRequest, PositionType, ProductType, SliceResult, TransactionType,
 };
-use manja::kite::connect::scheduler::{PermitTarget, SchedulerLimits};
+use manja::kite::connect::scheduler::SchedulerLimits;
 use manja::kite::error::{HttpErrorKind, ManjaError, TransportStage};
 use manja::kite::protocol::{OrderId, Quantity};
 
@@ -353,52 +353,41 @@ async fn a_malformed_acknowledgement_is_evidence_not_success() {
 }
 
 #[tokio::test]
-async fn a_permit_separates_admission_from_dispatch() {
+async fn a_refused_placement_sends_nothing_and_carries_a_hint() {
+    // Placements admit one per minute here: the second is refused, not
+    // queued, and the call itself is the admission boundary. That the next
+    // call after the hint is sent is pinned in http_admission.
+    use manja::kite::connect::admission::{
+        Admission, AdmissionLimits, QuotaProfile, RateClass, Window,
+    };
     let h = serve("order_response.json").await;
-    let c = client(&h.base_url());
-    let permit = c.admit(PermitTarget::PlaceOrder).await.unwrap();
-    // The caller's own checks run here; nothing has been sent.
-    assert!(h.requests().is_empty());
-    c.orders()
-        .place_order_with_permit(&limit_buy(), permit)
-        .await
+    let profile = QuotaProfile::kite_v3()
+        .with_version("one-placement")
+        .with_windows(
+            RateClass::OrderPlacement,
+            vec![Window::new(1, Duration::from_secs(60))],
+        )
         .unwrap();
-    assert_eq!(h.requests().len(), 1);
-}
-
-#[tokio::test]
-async fn a_mismatched_or_expired_permit_cannot_start_transport() {
-    let h = HttpHarness::start(vec![]).await;
-    let c = client_with(
-        &h.base_url(),
-        SchedulerLimits::default()
-            .with_permit_validity(Duration::from_millis(20))
-            .unwrap(),
+    let c = HTTPClient::builder(Config::new(h.base_url()))
+        .admission(Admission::new(profile, AdmissionLimits::default()))
+        .credentials(Credentials::new("test_api_key", "test_access_token").unwrap())
+        .build()
+        .unwrap();
+    c.orders().place_order(&limit_buy()).await.unwrap();
+    let before = h.requests().len();
+    let err = c.orders().place_order(&limit_buy()).await.unwrap_err();
+    let e = err.as_http().unwrap();
+    assert_eq!(e.kind(), HttpErrorKind::Admission);
+    assert_eq!(e.stage(), TransportStage::NotStarted);
+    assert!(e.retry_after().is_some());
+    assert_eq!(h.requests().len(), before, "a refusal sends nothing");
+    // Nothing to hand back: the next call is admitted on its own merits.
+    assert_eq!(
+        c.admission()
+            .headroom(RateClass::OrderPlacement)
+            .standard_now,
+        0
     );
-    let wrong = c.admit(PermitTarget::CancelOrder).await.unwrap();
-    let e = c
-        .orders()
-        .place_order_with_permit(&limit_buy(), wrong)
-        .await
-        .unwrap_err();
-    assert_eq!(e.as_http().unwrap().kind(), HttpErrorKind::Admission);
-    let permit = c.admit(PermitTarget::PlaceOrder).await.unwrap();
-    tokio::time::sleep(Duration::from_millis(40)).await;
-    let e = c
-        .orders()
-        .place_order_with_permit(&limit_buy(), permit)
-        .await
-        .unwrap_err();
-    assert_eq!(e.as_http().unwrap().kind(), HttpErrorKind::Deadline);
-    let other = client(&h.base_url());
-    let foreign = other.admit(PermitTarget::PlaceOrder).await.unwrap();
-    let e = c
-        .orders()
-        .place_order_with_permit(&limit_buy(), foreign)
-        .await
-        .unwrap_err();
-    assert_eq!(e.as_http().unwrap().kind(), HttpErrorKind::Admission);
-    assert!(h.requests().is_empty());
 }
 
 #[tokio::test]

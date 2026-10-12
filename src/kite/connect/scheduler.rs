@@ -1,4 +1,4 @@
-//! Operation scheduling: total deadlines, safe retries and dispatch permits.
+//! Operation scheduling: total deadlines and safe retries.
 //!
 //! Admission ([`crate::kite::connect::admission`]) decides when an attempt
 //! may start. The scheduler decides whether another attempt may be made and
@@ -23,18 +23,8 @@
 //! backoff and full jitter (`B-HTTP-05`), and never past the deadline.
 //! `Mut` and `Sess` operations make at most one actual attempt per
 //! invocation, including after a 429 or a lost response; any further
-//! attempt is a new explicit call by the caller.
-//!
-//! # Dispatch permits
-//!
-//! A [`DispatchPermit`] is admitted capacity for one specific operation,
-//! obtained ahead of time with `HTTPClient::admit`. It gives the caller an
-//! explicit point between admission and dispatch, with no callback: run any
-//! checks, then pass the permit to the operation. A permit is valid for
-//! `B-HTTP-12` (1 s by default), belongs to one admission scope and one
-//! target, and is consumed by value, so it cannot be reused. An expired,
-//! wrong-scope or mismatched permit fails before any transport starts, and a
-//! valid one skips admission instead of queueing again.
+//! attempt is a new explicit call by the caller. They are admitted at the
+//! call, now or refused with a hint; there is nothing to obtain first.
 //!
 use std::fmt;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
@@ -53,7 +43,6 @@ use crate::kite::obs::schema::{
     AdmissionResult, Endpoint, HttpAttemptResult, Instrument, Method, QuotaClass, RetryCause,
     TransportLabel,
 };
-use crate::kite::protocol::OrderId;
 
 /// Retry class of an endpoint (see the module table).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -104,7 +93,6 @@ impl RetryClass {
 /// | `B-HTTP-04` mutation and session attempts | 1 | fixed | |
 /// | `B-HTTP-05` backoff initial / cap | 250 ms / 5 s | 10 ms ..= 5 s / 10 ms ..= 30 s | cap ≥ initial |
 /// | `B-HTTP-11` session deadline | 15 s | 1 s ..= 60 s | |
-/// | `B-HTTP-12` permit validity | 1 s | 10 ms ..= 30 s | ≤ `B-HTTP-01` |
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct SchedulerLimits {
     operation_deadline: Duration,
@@ -113,7 +101,6 @@ pub struct SchedulerLimits {
     backoff_initial: Duration,
     backoff_cap: Duration,
     session_deadline: Duration,
-    permit_validity: Duration,
     jitter_seed: Option<u64>,
 }
 
@@ -126,7 +113,6 @@ impl Default for SchedulerLimits {
             backoff_initial: Duration::from_millis(250),
             backoff_cap: Duration::from_secs(5),
             session_deadline: Duration::from_secs(15),
-            permit_validity: Duration::from_secs(1),
             jitter_seed: None,
         }
     }
@@ -221,17 +207,6 @@ impl SchedulerLimits {
         Ok(self)
     }
 
-    /// Set the dispatch permit validity (`B-HTTP-12`).
-    pub fn with_permit_validity(mut self, d: Duration) -> Result<Self, SchedulerLimitError> {
-        self.permit_validity = within(
-            "B-HTTP-12",
-            d,
-            Duration::from_millis(10),
-            Duration::from_secs(30),
-        )?;
-        self.check()
-    }
-
     /// Seed the jitter generator, for reproducible schedules in tests.
     pub fn with_jitter_seed(mut self, seed: u64) -> Self {
         self.jitter_seed = Some(seed);
@@ -244,9 +219,6 @@ impl SchedulerLimits {
         }
         if self.backoff_cap < self.backoff_initial {
             return Err(SchedulerLimitError("B-HTTP-05 cap >= initial"));
-        }
-        if self.permit_validity > self.operation_deadline {
-            return Err(SchedulerLimitError("B-HTTP-12 <= B-HTTP-01"));
         }
         Ok(self)
     }
@@ -276,11 +248,6 @@ impl SchedulerLimits {
         self.session_deadline
     }
 
-    /// Permit validity.
-    pub fn permit_validity(&self) -> Duration {
-        self.permit_validity
-    }
-
     /// Attempts allowed for `class`.
     pub fn max_attempts(&self, class: RetryClass) -> u32 {
         match class {
@@ -295,102 +262,6 @@ impl SchedulerLimits {
             RetryClass::Sess => self.session_deadline,
             _ => self.operation_deadline,
         }
-    }
-}
-
-/// What a permit admits.
-#[derive(Clone, Debug, PartialEq, Eq)]
-#[non_exhaustive]
-pub enum PermitTarget {
-    /// `POST /orders/{variety}`.
-    PlaceOrder,
-    /// `PUT /orders/{variety}/{order_id}` for this order.
-    ModifyOrder {
-        /// The order to modify.
-        order_id: OrderId,
-    },
-    /// `DELETE /orders/{variety}/{order_id}`.
-    CancelOrder,
-    /// `PUT /portfolio/positions`.
-    ConvertPosition,
-    /// `POST /gtt/triggers`.
-    PlaceGtt,
-    /// `PUT /gtt/triggers/{id}`.
-    ModifyGtt,
-    /// `DELETE /gtt/triggers/{id}`.
-    DeleteGtt,
-}
-
-impl PermitTarget {
-    pub(crate) fn operation(&self) -> (Method, Endpoint) {
-        match self {
-            Self::PlaceOrder => (Method::Post, Endpoint::OrdersVariety),
-            Self::ModifyOrder { .. } => (Method::Put, Endpoint::OrdersVarietyId),
-            Self::CancelOrder => (Method::Delete, Endpoint::OrdersVarietyId),
-            Self::ConvertPosition => (Method::Put, Endpoint::Positions),
-            Self::PlaceGtt => (Method::Post, Endpoint::GttTriggers),
-            Self::ModifyGtt => (Method::Put, Endpoint::GttTriggersId),
-            Self::DeleteGtt => (Method::Delete, Endpoint::GttTriggersId),
-        }
-    }
-
-    fn order_id(&self) -> Option<&str> {
-        match self {
-            Self::ModifyOrder { order_id } => Some(order_id.as_str()),
-            _ => None,
-        }
-    }
-}
-
-/// Admitted capacity for one specific mutation, valid until it expires.
-///
-/// It is consumed by the operation it is passed to, so it can be used at
-/// most once:
-///
-/// ```compile_fail
-/// # async fn f(client: manja::kite::connect::client::HTTPClient,
-/// #            permit: manja::kite::connect::scheduler::DispatchPermit) {
-/// let a = permit;
-/// let b = permit; // use of moved value
-/// # }
-/// ```
-///
-/// Dropping an unused permit returns its capacity to the admission scope.
-#[must_use = "an unused permit returns its capacity when dropped"]
-pub struct DispatchPermit {
-    grant: AdmissionGrant,
-    target: PermitTarget,
-    expires_at: Instant,
-}
-
-impl fmt::Debug for DispatchPermit {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("DispatchPermit")
-            .field("target", &self.target)
-            .field("expired", &self.is_expired())
-            .finish()
-    }
-}
-
-impl DispatchPermit {
-    /// What the permit admits.
-    pub fn target(&self) -> &PermitTarget {
-        &self.target
-    }
-
-    /// Whether the permit has expired.
-    pub fn is_expired(&self) -> bool {
-        Instant::now() >= self.expires_at
-    }
-
-    /// Time left before the permit expires.
-    pub fn remaining(&self) -> Duration {
-        self.expires_at.saturating_duration_since(Instant::now())
-    }
-
-    /// Whether the permit was issued by `admission`.
-    pub fn belongs_to(&self, admission: &Admission) -> bool {
-        self.grant.belongs_to(admission)
     }
 }
 
@@ -729,45 +600,12 @@ impl Scheduler {
         Duration::from_nanos(if nanos == 0 { 0 } else { r % (nanos + 1) })
     }
 
-    /// Admit capacity for `target` now on the lane `priority`, valid for
-    /// the permit validity bound.
-    pub(crate) async fn admit(
-        &self,
-        admission: &Admission,
-        target: PermitTarget,
-        priority: Priority,
-        obs: &Observability,
-    ) -> Result<DispatchPermit, HttpError> {
-        let (method, endpoint) = target.operation();
-        let quota = RetryClass::of(method, endpoint).quota_class();
-        let rate = RateClass::of(method, endpoint);
-        // Every permit target is a mutation: admitted now or refused.
-        let grant = acquire_observed(
-            admission,
-            priority,
-            rate,
-            target.order_id(),
-            AdmissionMode::Synchronous,
-            quota,
-            None,
-            obs,
-        )
-        .await
-        .map_err(|e| admission_error(e, method, endpoint, 0, false))?;
-        Ok(DispatchPermit {
-            grant,
-            expires_at: Instant::now() + self.limits.permit_validity,
-            target,
-        })
-    }
-
     /// Run `attempt` under the operation's deadline, admission and retry
-    /// policy, optionally starting from an externally admitted permit.
+    /// policy.
     pub(crate) async fn run<T, F, Fut>(
         &self,
         spec: OpSpec<'_>,
         admission: &Admission,
-        permit: Option<DispatchPermit>,
         ctx: &OpObs<'_>,
         mut attempt: F,
     ) -> Result<T, HttpError>
@@ -783,12 +621,6 @@ impl Scheduler {
         let mut retry_of = None;
         let start = Instant::now();
         let deadline_at = start + self.limits.deadline(class);
-        let mut permit = permit;
-        let mut deadline_at_permit = None;
-        if let Some(p) = &permit {
-            check_permit(p, admission, method, endpoint, spec.order_id)?;
-            deadline_at_permit = Some(p.expires_at);
-        }
         let retry_info = |n: u32| RetryInfo {
             attempts: n,
             max_attempts,
@@ -799,41 +631,38 @@ impl Scheduler {
                 return Err(deadline_error(method, endpoint, n).with_retry(retry_info(n - 1)));
             }
             let remaining = deadline_at - now;
-            let grant = match permit.take() {
-                Some(p) => p.grant,
-                None => {
-                    // Mutations and session operations are admitted now or
-                    // refused; reads and calculations wait up to B-HTTP-06,
-                    // cut short by the remaining deadline.
-                    let wait = admission.limits().wait().min(remaining);
-                    let deadline_bound = wait < admission.limits().wait();
-                    let mode = match class {
-                        RetryClass::Mut | RetryClass::Sess => AdmissionMode::Synchronous,
-                        RetryClass::Read | RetryClass::Calc => AdmissionMode::Wait {
-                            wait,
-                            deadline_bound,
-                        },
-                    };
-                    acquire_observed(
-                        admission,
-                        spec.priority,
-                        rate,
-                        spec.order_id,
-                        mode,
-                        quota,
-                        Some(ctx),
-                        ctx.obs,
-                    )
-                    .await
-                    .map_err(|e| {
-                        let deadline_bound = mode != AdmissionMode::Synchronous && deadline_bound;
-                        admission_error(e, method, endpoint, n, deadline_bound)
-                            .with_retry(retry_info(n - 1))
-                    })?
-                }
+            let grant = {
+                // Mutations and session operations are admitted now or
+                // refused; reads and calculations wait up to B-HTTP-06,
+                // cut short by the remaining deadline.
+                let wait = admission.limits().wait().min(remaining);
+                let deadline_bound = wait < admission.limits().wait();
+                let mode = match class {
+                    RetryClass::Mut | RetryClass::Sess => AdmissionMode::Synchronous,
+                    RetryClass::Read | RetryClass::Calc => AdmissionMode::Wait {
+                        wait,
+                        deadline_bound,
+                    },
+                };
+                acquire_observed(
+                    admission,
+                    spec.priority,
+                    rate,
+                    spec.order_id,
+                    mode,
+                    quota,
+                    Some(ctx),
+                    ctx.obs,
+                )
+                .await
+                .map_err(|e| {
+                    let deadline_bound = mode != AdmissionMode::Synchronous && deadline_bound;
+                    admission_error(e, method, endpoint, n, deadline_bound)
+                        .with_retry(retry_info(n - 1))
+                })?
             };
             let now = Instant::now();
-            if now >= deadline_at || deadline_at_permit.is_some_and(|p| now >= p) {
+            if now >= deadline_at {
                 drop(grant);
                 return Err(deadline_error(method, endpoint, n).with_retry(retry_info(n - 1)));
             }
@@ -903,34 +732,6 @@ impl Scheduler {
     }
 }
 
-fn check_permit(
-    p: &DispatchPermit,
-    admission: &Admission,
-    method: Method,
-    endpoint: Endpoint,
-    order_id: Option<&str>,
-) -> Result<(), HttpError> {
-    let refuse = |kind: HttpErrorKind, detail: &str| {
-        HttpError::new(kind, method, endpoint, TransportStage::NotStarted).with_detail(detail)
-    };
-    if !p.belongs_to(admission) {
-        return Err(refuse(
-            HttpErrorKind::Admission,
-            "the permit belongs to another admission scope",
-        ));
-    }
-    if p.target.operation() != (method, endpoint) || p.target.order_id() != order_id {
-        return Err(refuse(
-            HttpErrorKind::Admission,
-            "the permit was issued for a different operation",
-        ));
-    }
-    if p.is_expired() {
-        return Err(refuse(HttpErrorKind::Deadline, "the permit has expired"));
-    }
-    Ok(())
-}
-
 fn deadline_error(method: Method, endpoint: Endpoint, attempt: u32) -> HttpError {
     HttpError::new(
         HttpErrorKind::Deadline,
@@ -968,12 +769,11 @@ mod tests {
     use std::sync::atomic::AtomicU32;
 
     impl Scheduler {
-        // `run` and `admit` with a disabled observability scope.
+        // `run` with a disabled observability scope.
         async fn run_q<T, F, Fut>(
             &self,
             spec: OpSpec<'_>,
             admission: &Admission,
-            permit: Option<DispatchPermit>,
             attempt: F,
         ) -> Result<T, HttpError>
         where
@@ -989,18 +789,7 @@ mod tests {
                 operation_id: 0,
                 waiting: &waiting,
             };
-            self.run(spec, admission, permit, &ctx, attempt).await
-        }
-
-        async fn admit_q(
-            &self,
-            admission: &Admission,
-            target: PermitTarget,
-        ) -> Result<DispatchPermit, HttpError> {
-            let (method, endpoint) = target.operation();
-            let priority = Priority::default_for(method, endpoint);
-            self.admit(admission, target, priority, &Observability::disabled())
-                .await
+            self.run(spec, admission, &ctx, attempt).await
         }
     }
 
@@ -1096,12 +885,7 @@ mod tests {
                 .with_session_deadline(Duration::from_secs(61))
                 .is_err()
         );
-        assert!(
-            d.clone()
-                .with_permit_validity(Duration::from_millis(9))
-                .is_err()
-        );
-        assert!(d.with_permit_validity(Duration::from_secs(30)).is_ok());
+        assert!(d.with_session_deadline(Duration::from_secs(60)).is_ok());
     }
 
     #[tokio::test(start_paused = true)]
@@ -1111,7 +895,7 @@ mod tests {
         let calls = AtomicU32::new(0);
         let start = Instant::now();
         let err = s
-            .run_q(spec(Method::Get, Endpoint::Orders), &a, None, |mut ctx| {
+            .run_q(spec(Method::Get, Endpoint::Orders), &a, |mut ctx| {
                 calls.fetch_add(1, Ordering::Relaxed);
                 ctx.token.dispatch();
                 async { Err::<(), _>(failing(429, Method::Get, Endpoint::Orders)) }
@@ -1142,7 +926,7 @@ mod tests {
             for status in [429, 502, 504] {
                 let calls = AtomicU32::new(0);
                 let err = s
-                    .run_q(spec(m, e), &a, None, |mut ctx| {
+                    .run_q(spec(m, e), &a, |mut ctx| {
                         calls.fetch_add(1, Ordering::Relaxed);
                         ctx.token.dispatch();
                         async move { Err::<(), _>(failing(status, m, e)) }
@@ -1170,7 +954,7 @@ mod tests {
         let start = Instant::now();
         // Every attempt stalls until its timeout.
         let err = s
-            .run_q(spec(Method::Get, Endpoint::Trades), &a, None, |mut ctx| {
+            .run_q(spec(Method::Get, Endpoint::Trades), &a, |mut ctx| {
                 ctx.token.dispatch();
                 std::future::pending::<Result<(), HttpError>>()
             })
@@ -1193,12 +977,9 @@ mod tests {
         let s = scheduler();
         let a = admission();
         let err = s
-            .run_q(
-                spec(Method::Post, Endpoint::OrdersVariety),
-                &a,
-                None,
-                |_ctx| std::future::pending::<Result<(), HttpError>>(),
-            )
+            .run_q(spec(Method::Post, Endpoint::OrdersVariety), &a, |_ctx| {
+                std::future::pending::<Result<(), HttpError>>()
+            })
             .await
             .unwrap_err();
         assert_eq!(err.stage(), TransportStage::NotStarted);
@@ -1206,7 +987,6 @@ mod tests {
             .run_q(
                 spec(Method::Post, Endpoint::OrdersVariety),
                 &a,
-                None,
                 |mut ctx| {
                     ctx.token.dispatch();
                     std::future::pending::<Result<(), HttpError>>()
@@ -1216,103 +996,6 @@ mod tests {
             .unwrap_err();
         assert_eq!(err.stage(), TransportStage::Started);
         assert!(err.may_have_reached_broker());
-    }
-
-    #[tokio::test(start_paused = true)]
-    async fn permits_are_scoped_targeted_expiring_and_single_use() {
-        let s = scheduler();
-        let a = admission();
-        let never = |_ctx: AttemptCtx| async { Ok::<(), HttpError>(()) };
-        let calls = AtomicU32::new(0);
-        let counted = |mut ctx: AttemptCtx| {
-            calls.fetch_add(1, Ordering::Relaxed);
-            ctx.token.dispatch();
-            async { Ok::<(), HttpError>(()) }
-        };
-        // Wrong scope.
-        let other = admission();
-        let p = s.admit_q(&other, PermitTarget::PlaceOrder).await.unwrap();
-        let e = s
-            .run_q(
-                spec(Method::Post, Endpoint::OrdersVariety),
-                &a,
-                Some(p),
-                never,
-            )
-            .await
-            .unwrap_err();
-        assert_eq!(
-            (e.kind(), e.stage()),
-            (HttpErrorKind::Admission, TransportStage::NotStarted)
-        );
-        // Wrong target.
-        let p = s.admit_q(&a, PermitTarget::CancelOrder).await.unwrap();
-        let e = s
-            .run_q(
-                spec(Method::Post, Endpoint::OrdersVariety),
-                &a,
-                Some(p),
-                never,
-            )
-            .await
-            .unwrap_err();
-        assert_eq!(e.kind(), HttpErrorKind::Admission);
-        // Expired.
-        let p = s.admit_q(&a, PermitTarget::PlaceOrder).await.unwrap();
-        tokio::time::advance(Duration::from_secs(2)).await;
-        let e = s
-            .run_q(
-                spec(Method::Post, Endpoint::OrdersVariety),
-                &a,
-                Some(p),
-                never,
-            )
-            .await
-            .unwrap_err();
-        assert_eq!(e.kind(), HttpErrorKind::Deadline);
-        // Valid: dispatched exactly once, without re-admission.
-        let waiters_before = a.waiters();
-        let p = s.admit_q(&a, PermitTarget::PlaceOrder).await.unwrap();
-        s.run_q(
-            spec(Method::Post, Endpoint::OrdersVariety),
-            &a,
-            Some(p),
-            counted,
-        )
-        .await
-        .unwrap();
-        assert_eq!(calls.load(Ordering::Relaxed), 1);
-        assert_eq!(a.waiters(), waiters_before);
-    }
-
-    #[tokio::test(start_paused = true)]
-    async fn modify_permits_are_bound_to_their_order() {
-        let s = scheduler();
-        let a = admission();
-        let p = s
-            .admit_q(
-                &a,
-                PermitTarget::ModifyOrder {
-                    order_id: "A".parse().unwrap(),
-                },
-            )
-            .await
-            .unwrap();
-        let e = s
-            .run_q(
-                OpSpec {
-                    method: Method::Put,
-                    endpoint: Endpoint::OrdersVarietyId,
-                    order_id: Some("B"),
-                    priority: Priority::Standard,
-                },
-                &a,
-                Some(p),
-                |_ctx| async { Ok::<(), HttpError>(()) },
-            )
-            .await
-            .unwrap_err();
-        assert_eq!(e.kind(), HttpErrorKind::Admission);
     }
 
     #[test]

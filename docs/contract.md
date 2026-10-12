@@ -332,13 +332,8 @@ are in `GttTrigger::orders`, where each fired order carries a `GttOrderResult`. 
 types and statuses (`kite:gtt.md:359-371`) are `Inbound` values, so an undocumented one
 is preserved. Every GTT endpoint is in the `Standard` quota class (§3.6).
 
-Each mutation has a `*_with_permit` form, `place_trigger_with_permit`,
-`modify_trigger_with_permit` and `delete_trigger_with_permit`, that dispatches with a
-`DispatchPermit` from `HTTPClient::admit(PermitTarget::PlaceGtt)`, `ModifyGtt` or
-`DeleteGtt`. The request is still validated first. A GTT
-permit names the operation but not the trigger, because no per-trigger limit is
-documented; an expired permit, one for another operation or one from another client's
-admission scope starts no transport (`B-HTTP-12`).
+Each mutation is admitted on its own call, now or refused with a hint (§3.6); no
+per-trigger limit is documented, so GTT mutations share the `Standard` class.
 
 ### 2.13 Historical candles
 
@@ -401,7 +396,7 @@ type in `kite::protocol`, and a value that could change the path cannot be const
 
 | Type | Grammar | Used by |
 |---|---|---|
-| `OrderId` | 1 to 64 ASCII letters or digits | `Orders::modify_order`, `cancel_order` (and their `_with_permit` forms), `get_order_history` and `get_order_trades`; `PermitTarget::ModifyOrder`; the `order_id` of `Order`, `Trade`, `OrderReceipt`, `SliceResult::Placed` and `OrderUpdate`, `Order::parent_order_id` and `OrderUpdate::parent_order_id`, and `GttOrderOutcome::order_id` |
+| `OrderId` | 1 to 64 ASCII letters or digits | `Orders::modify_order`, `cancel_order`, `get_order_history` and `get_order_trades`; the `order_id` of `Order`, `Trade`, `OrderReceipt`, `SliceResult::Placed` and `OrderUpdate`, `Order::parent_order_id` and `OrderUpdate::parent_order_id`, and `GttOrderOutcome::order_id` |
 | `MfOrderId` | 1 to 64 ASCII letters, digits or hyphens | `MutualFunds::get_order` and `MfOrder::order_id` |
 
 Both are built with `new`, `TryFrom<&str>`, `TryFrom<String>` or `FromStr`, and deserialize
@@ -508,7 +503,7 @@ cannot be changed.
 | `B-HTTP-09` | Request body | 1 MiB | 1 KiB to 8 MiB | when exceeded, a `Validation` error before admission |
 | `B-HTTP-10` | In-flight attempts per transport | 32 | 1 to 256 | |
 | `B-HTTP-11` | Session operation deadline | 15 s | 1 s to 60 s | one attempt (`B-HTTP-04`) |
-| `B-HTTP-12` | Dispatch permit validity | 1 s | 10 ms to 30 s | ≤ `B-HTTP-01`; a permit is used once, and an expired one sends nothing |
+| `B-HTTP-12` | Retired in 0.3.0 with the dispatch permit (it bounded a permit's validity); the ID is never reused | | | |
 | `B-HTTP-15` | Control reserve per quota class, in requests per second: the part of the class rate only `Control` traffic may use | 2 for `Standard`, 0 for `Quote`, `Historical`, `OrderPlacement`, `OrderModification` and `Unclassified` | 0 to 5 | For a window of period `p` it reserves `reserve × p` slots, rounded up; ceilings have no reserve. A reserve at or above a window's rate leaves the class no `Standard` capacity: every `Standard` request in it is refused at once with an `Admission` error naming this bound, and never waits. 0 makes the lanes equal |
 
 Retries apply to 429, 502 to 504, transport faults and attempt timeouts, and only in
@@ -774,6 +769,7 @@ These choices are not dictated by the Kite documentation alone.
 | Ticker price scale | Currency derivatives (CDS) divide by 10 000 000; NSE, NFO, BSE, BFO, MCX, MCXSX and indices divide by 100. The BSE currency segment (BCD) is refused | The documentation gives 10 000 000 for currencies and 100 for everything else (`kite:websocket.md:89`); nothing establishes a separate BCD scale, and the segment cannot be read from the token, so the caller supplies it |
 | Handshake rejection | A 401 or 403 WebSocket handshake ends the ticker with `AuthRejected` | Retrying rejected credentials cannot succeed and would only repeat the rejection |
 | Quota enforcement | Every documented window is enforced locally by default (§3.6) | Exceeding them is a documented broker error (`kite:exceptions.md:39`) |
+| No dispatch permits | The permit API of 0.2 (`admit`, `DispatchPermit`, `PermitTarget`, the `*_with_permit` methods and `B-HTTP-12`) is removed; the mutation call is the admission boundary (§3.6) | A permit was a timed race whose validity bound had to outlast the caller's own checks, which is the caller's policy in the SDK's configuration; it held a window slot for a request that might never be sent, exactly the slot a cancellation needs under load; and it doubled the mutation surface. A call that is admitted now or refused with a hint gives the same affirmative not-sent evidence with no token |
 | No wait for mutations | A mutation or session operation is admitted now or refused with a hint; only reads and calculations wait under `B-HTTP-06` (§2.4, §3.2, §3.6) | A wait between a caller's decision and the socket write makes that decision stale by construction, and a caller whose dispatch gate is serialised with other work cannot afford a call that sleeps. An immediate refusal is affirmative evidence that nothing was sent, and with the exact hint the caller can schedule better than a blind wait. Reads lose nothing by waiting, so they keep the bound |
 | Headroom | Admission capacity is readable as an advisory, local-view snapshot per class and lane, plus the modifications an order has left; a spent daily ceiling zeroes both lanes and announces no next slot, and a lane the reserve covers announces none either (§3.6) | A caller that can only learn capacity by being refused pays a refusal for every full window. A snapshot that agrees with the next decision lets it order its own work, and saying "advisory, local view" keeps the account-wide limit, which includes manual orders, where it belongs: with the caller. A reserving read would be the dispatch permit by another name |
 | Session expiry | The 6 AM expiry is taken as IST, and a token expires at the next 06:00 IST strictly after its issue time: an issue at exactly 06:00:00 expires the next day, an issue before 06:00 expires that same morning (§2.2) | Kite's one sentence (`kite:user.md:115`) names no zone and says "the next day"; every documented Kite time is IST, and a caller that injects the issue time needs one boundary rule with no gap, so the next boundary after the instant is the reading the function implements |

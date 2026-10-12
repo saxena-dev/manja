@@ -98,7 +98,7 @@ impl<'c> Session<'c> {
         api_secret: &ApiSecret,
     ) -> Result<Response<UserSession>> {
         let wire = WireForm::session_exchange(&self.api_key, request_token, api_secret);
-        self.client.send_wire(Ok(wire), None, false).await
+        self.client.send_wire(Ok(wire), false).await
     }
 
     /// Invalidate the session of `access_token` for this API key: one
@@ -114,6 +114,6 @@ impl<'c> Session<'c> {
     /// ```
     pub async fn invalidate(&self, access_token: &AccessToken) -> Result<Response<bool>> {
         let wire = WireForm::session_invalidation(&self.api_key, access_token);
-        self.client.send_wire(Ok(wire), None, false).await
+        self.client.send_wire(Ok(wire), false).await
     }
 }

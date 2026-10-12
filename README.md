@@ -195,10 +195,9 @@ async fn buy(client: &HTTPClient) -> Result<(), Box<dyn std::error::Error>> {
 A receipt means Kite accepted the order, not that it filled. Follow its progress with
 `get_order_history`, or with the order updates the ticker delivers.
 
-When you want a last check between waiting for rate-limit capacity and sending, reserve
-the capacity first with `HTTPClient::admit` and place the order with
-`place_order_with_permit`. The permit expires after a second, which keeps the check
-close to the send.
+An order call never waits for rate-limit capacity: it is sent at once or refused with an
+`Admission` error that says how long until the next slot (`retry_after`), so a check you
+make just before calling it is still current when the bytes leave.
 
 ### 4. Stream live market data
 
@@ -313,8 +312,8 @@ async fn holdings(client: &HTTPClient) {
 |---|---|
 | `Validation` | your request was invalid; nothing was sent |
 | `Configuration` | the client or the request could not be built; nothing was sent |
-| `Admission` | a local limit refused the request: rate-limit capacity was not available within the wait, the day's order limit or an order's modification limit is spent, or a dispatch permit does not match; nothing was sent |
-| `Deadline` | the operation's deadline, or a dispatch permit, expired before an attempt could start; nothing was sent |
+| `Admission` | a local limit refused the request: an order call found its window full (the error carries `retry_after`), a read found no capacity within the wait, or the day's order limit or an order's modification limit is spent; nothing was sent |
+| `Deadline` | the operation's deadline expired before an attempt could start; nothing was sent |
 | `Transport` | the network failed or timed out; a deadline that runs out during an attempt shows up here, as a timeout |
 | `Broker` | Kite returned an error, available through `e.broker()` |
 | `AuthRejected` | Kite rejected the credentials |
@@ -456,7 +455,7 @@ without an account:
 
 | Example | What it shows |
 |---|---|
-| `http_client` | account reads, placing an order with a permit, quotes, diagnostics and metrics |
+| `http_client` | account reads, placing an order, quotes, diagnostics and metrics |
 | `session` | exchanging a request token and invalidating a session |
 | `ticker` | subscribing, changing modes, reading raw messages, status and a clean shutdown |
 | `ticker_typed` | the ticker with the decoder: every message with its decoded packets |
