@@ -664,3 +664,58 @@ fn clients_default_to_a_disabled_scope_and_share_it_with_clones() {
     let e = HTTPClient::with_observability(Config::default(), obs.clone()).unwrap();
     assert!(e.observability().same_scope(&obs));
 }
+
+// ---- priority lanes -----------------------------------------------------
+
+#[tokio::test]
+async fn the_operation_span_records_the_priority_lane() {
+    let cap = Capture::default();
+    let _g = cap.install();
+    let (_rec, obs) = recording();
+    let orders = fixtures::json_body("orders.json").unwrap();
+    let h = HttpHarness::start(vec![
+        Reply::json(orders.clone()),
+        Reply::json(fixtures::json_body("order_cancel.json").unwrap()),
+        Reply::json(orders),
+        Reply::json(fixtures::json_body("gtt_delete_order.json").unwrap()),
+    ])
+    .await;
+    let c = client(&h.base_url(), &obs);
+    // A read is standard by default, a cancel is control by default, a read
+    // marked control is control, and a GTT deletion is control by default.
+    c.orders().list_orders().await.unwrap();
+    c.orders()
+        .cancel_order(
+            OrderVariety::Regular,
+            &OrderId::new("151220000000000").unwrap(),
+        )
+        .await
+        .unwrap();
+    c.with_priority(manja::kite::connect::admission::Priority::Control)
+        .orders()
+        .list_orders()
+        .await
+        .unwrap();
+    c.gtt().delete_trigger(123).await.unwrap();
+    assert_eq!(h.requests().len(), 4);
+
+    let ops = cap.named(OP);
+    let lanes: Vec<(Option<&str>, Option<&str>)> = ops
+        .iter()
+        .map(|op| (op.field("endpoint"), op.field("priority")))
+        .collect();
+    assert_eq!(
+        lanes,
+        [
+            (Some("/orders"), Some("standard")),
+            (Some("/orders/{variety}/{order_id}"), Some("control")),
+            (Some("/orders"), Some("control")),
+            (Some("/gtt/triggers/{id}"), Some("control")),
+        ]
+    );
+    // The lane is recorded on the operation span alone; the admission span
+    // and every metric label set are unchanged.
+    for a in cap.named(ADMISSION) {
+        assert_eq!(a.field("priority"), None);
+    }
+}

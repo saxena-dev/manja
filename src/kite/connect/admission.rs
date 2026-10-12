@@ -31,6 +31,18 @@
 //! future, and a grant that is dropped before its request is dispatched
 //! returns its capacity.
 //!
+//! # Priority lanes
+//!
+//! Every request is admitted on one of two lanes, [`Priority::Standard`] or
+//! [`Priority::Control`]. Within a class, the `Standard` lane may fill each
+//! window only up to its limit minus the class's **control reserve**
+//! (`B-HTTP-15`, a field of [`AdmissionLimits`]: 2 per second on the
+//! `Standard` class by default, 0 elsewhere), while the `Control` lane may
+//! fill the whole window. The reserve keeps the last slots of each second
+//! for traffic the caller marks as control, such as cancellations and the
+//! reads that confirm them; the SDK never decides which traffic that is. A
+//! reserve of 0 makes the lanes equal.
+//!
 use std::collections::{HashMap, VecDeque};
 use std::fmt;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -39,7 +51,7 @@ use std::time::Duration;
 
 use tokio::time::Instant;
 
-use crate::kite::obs::schema::{Endpoint, Method};
+use crate::kite::obs::schema::{Endpoint, Method, PriorityLabel};
 
 /// Version of the default quota profile: the documentation page it encodes,
 /// the date that page was accessed, and a revision that increases whenever
@@ -70,6 +82,9 @@ pub enum RateClass {
 }
 
 impl RateClass {
+    /// Number of classes, the length of the per-class reserve table.
+    const COUNT: usize = 6;
+
     /// The class of an HTTP operation.
     pub fn of(method: Method, endpoint: Endpoint) -> Self {
         match (method, endpoint) {
@@ -79,6 +94,58 @@ impl RateClass {
             (Method::Put, Endpoint::OrdersVarietyId) => Self::OrderModification,
             (_, Endpoint::Unknown) => Self::Unclassified,
             _ => Self::Standard,
+        }
+    }
+
+    /// Position in the per-class reserve table; the match keeps the table
+    /// and the enum in step.
+    const fn index(self) -> usize {
+        match self {
+            Self::Quote => 0,
+            Self::Historical => 1,
+            Self::OrderPlacement => 2,
+            Self::OrderModification => 3,
+            Self::Standard => 4,
+            Self::Unclassified => 5,
+        }
+    }
+}
+
+/// The admission lane of a request.
+///
+/// Every HTTP operation is admitted on a lane. `Standard` traffic may use a
+/// class's rate minus its control reserve (`B-HTTP-15`); `Control` traffic
+/// may use the whole rate. Order cancellation and GTT deletion are `Control`
+/// unless the caller marks them otherwise; every other operation is
+/// `Standard` unless the caller marks it `Control` with
+/// `HTTPClient::with_priority`. The SDK never decides which traffic is
+/// control.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+pub enum Priority {
+    /// Ordinary traffic: may not take a class's reserved slots.
+    Standard,
+    /// Control traffic: may use a class's whole rate.
+    Control,
+}
+
+impl Priority {
+    /// The lane an operation takes when the caller sets none: `Control` for
+    /// `DELETE /orders/{variety}/{order_id}` and `DELETE /gtt/triggers/{id}`,
+    /// `Standard` for everything else.
+    pub(crate) fn default_for(method: Method, endpoint: Endpoint) -> Self {
+        match (method, endpoint) {
+            (Method::Delete, Endpoint::OrdersVarietyId | Endpoint::GttTriggersId) => Self::Control,
+            _ => Self::Standard,
+        }
+    }
+}
+
+impl From<Priority> for PriorityLabel {
+    fn from(priority: Priority) -> Self {
+        match priority {
+            Priority::Standard => Self::Standard,
+            Priority::Control => Self::Control,
         }
     }
 }
@@ -286,17 +353,33 @@ impl QuotaProfile {
 /// |---|---|---|
 /// | `B-HTTP-06` admission wait | 5 s | 1 ms ..= 60 s |
 /// | `B-HTTP-07` waiters per scope | 256 | 1 ..= 4 096 |
+/// | `B-HTTP-15` control reserve per class, per second | 2 (`Standard`), 0 (every other class) | 0 ..= 5 |
+///
+/// The control reserve is the part of a class's rate that only
+/// [`Priority::Control`] traffic may use. For a window of period `p` it
+/// reserves `reserve × p` slots, rounded up, so a reserve of 2 per second
+/// leaves `Standard` traffic 8 of 10 per second and 280 of 400 per minute.
+/// Ceilings (the daily order ceiling and the per-order modification limit)
+/// are counts, not rates, and have no reserve. A reserve at or above a
+/// window's rate leaves the class no `Standard` capacity: every `Standard`
+/// request in it is refused at once with
+/// [`AdmissionError::NoStandardCapacity`].
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct AdmissionLimits {
     wait: Duration,
     waiters: usize,
+    /// Control reserve per class, per second, indexed by `RateClass::index`.
+    reserve: [u32; RateClass::COUNT],
 }
 
 impl Default for AdmissionLimits {
     fn default() -> Self {
+        let mut reserve = [0; RateClass::COUNT];
+        reserve[RateClass::Standard.index()] = 2;
         Self {
             wait: Duration::from_secs(5),
             waiters: 256,
+            reserve,
         }
     }
 }
@@ -320,6 +403,30 @@ impl AdmissionLimits {
         Ok(self)
     }
 
+    /// Set the control reserve of `class`, in requests per second
+    /// (`B-HTTP-15`). Zero makes the two lanes equal in that class.
+    ///
+    /// ```
+    /// use manja::kite::connect::admission::{AdmissionLimits, RateClass};
+    ///
+    /// let limits = AdmissionLimits::default()
+    ///     .with_control_reserve(RateClass::Standard, 3)
+    ///     .unwrap();
+    /// assert_eq!(limits.control_reserve(RateClass::Standard), 3);
+    /// assert!(AdmissionLimits::default().with_control_reserve(RateClass::Standard, 6).is_err());
+    /// ```
+    pub fn with_control_reserve(
+        mut self,
+        class: RateClass,
+        per_second: u32,
+    ) -> Result<Self, QuotaError> {
+        if per_second > 5 {
+            return Err(QuotaError::Bound("B-HTTP-15"));
+        }
+        self.reserve[class.index()] = per_second;
+        Ok(self)
+    }
+
     /// The admission wait bound.
     pub fn wait(&self) -> Duration {
         self.wait
@@ -328,6 +435,19 @@ impl AdmissionLimits {
     /// The waiter bound.
     pub fn waiters(&self) -> usize {
         self.waiters
+    }
+
+    /// The control reserve of `class`, in requests per second.
+    pub fn control_reserve(&self, class: RateClass) -> u32 {
+        self.reserve[class.index()]
+    }
+
+    /// Slots of `window` reserved for the `Control` lane in `class`:
+    /// the per-second reserve over the window's period, rounded up.
+    fn reserved_slots(&self, class: RateClass, window: Window) -> u32 {
+        let reserve = u128::from(self.control_reserve(class));
+        let slots = (reserve * window.period.as_millis()).div_ceil(1000);
+        u32::try_from(slots).unwrap_or(u32::MAX)
     }
 }
 
@@ -343,6 +463,9 @@ pub enum AdmissionError {
     DailyCeilingReached,
     /// The order's modification limit for the IST day is exhausted.
     ModificationLimitReached,
+    /// The class's control reserve (`B-HTTP-15`) is at or above one of its
+    /// window rates, so the `Standard` lane can never be admitted in it.
+    NoStandardCapacity,
 }
 
 impl fmt::Display for AdmissionError {
@@ -352,6 +475,9 @@ impl fmt::Display for AdmissionError {
             Self::WaitExpired => "no admission capacity within the wait bound",
             Self::DailyCeilingReached => "the daily order ceiling is reached",
             Self::ModificationLimitReached => "the order's modification limit is reached",
+            Self::NoStandardCapacity => {
+                "the control reserve (B-HTTP-15) leaves the class no standard capacity"
+            }
         })
     }
 }
@@ -426,6 +552,7 @@ impl Default for Admission {
 pub struct AdmissionGrant {
     admission: Admission,
     class: RateClass,
+    priority: Priority,
     id: u64,
     order_id: Option<String>,
     consumed: bool,
@@ -435,6 +562,7 @@ impl fmt::Debug for AdmissionGrant {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("AdmissionGrant")
             .field("class", &self.class)
+            .field("priority", &self.priority)
             .field("consumed", &self.consumed)
             .finish()
     }
@@ -444,6 +572,11 @@ impl AdmissionGrant {
     /// The rate class admitted.
     pub fn class(&self) -> RateClass {
         self.class
+    }
+
+    /// The lane admitted on.
+    pub fn priority(&self) -> Priority {
+        self.priority
     }
 
     /// Whether `self` was issued by `admission`.
@@ -524,13 +657,27 @@ impl Admission {
     }
 
     /// Wait at most `max_wait` (itself capped at the configured admission
-    /// wait) for capacity in `class`. `order_id` identifies the order of a
-    /// modification, for the per-order limit.
+    /// wait) for capacity in `class` on the `Standard` lane. `order_id`
+    /// identifies the order of a modification, for the per-order limit.
     ///
     /// Dropping the returned future before it resolves abandons the wait and
-    /// consumes nothing.
+    /// consumes nothing. [`Self::acquire_with_priority`] chooses the lane.
     pub async fn acquire(
         &self,
+        class: RateClass,
+        order_id: Option<&str>,
+        max_wait: Duration,
+    ) -> Result<AdmissionGrant, AdmissionError> {
+        self.acquire_with_priority(Priority::Standard, class, order_id, max_wait)
+            .await
+    }
+
+    /// [`Self::acquire`] on the lane `priority`: `Control` may use the
+    /// class's whole rate, `Standard` the rate minus the control reserve
+    /// (`B-HTTP-15`).
+    pub async fn acquire_with_priority(
+        &self,
+        priority: Priority,
         class: RateClass,
         order_id: Option<&str>,
         max_wait: Duration,
@@ -538,7 +685,7 @@ impl Admission {
         let deadline = Instant::now() + max_wait.min(self.0.limits.wait);
         let mut waiter: Option<WaiterGuard<'_>> = None;
         loop {
-            match self.try_grant(class, order_id)? {
+            match self.try_grant(priority, class, order_id)? {
                 Ok(grant) => return Ok(grant),
                 Err(ready_at) => {
                     if waiter.is_none() {
@@ -564,6 +711,7 @@ impl Admission {
     #[allow(clippy::type_complexity)]
     fn try_grant(
         &self,
+        priority: Priority,
         class: RateClass,
         order_id: Option<&str>,
     ) -> Result<Result<AdmissionGrant, Instant>, AdmissionError> {
@@ -600,6 +748,17 @@ impl Admission {
         }
         let mut ready_at = None;
         for (i, w) in windows.iter().enumerate() {
+            // The lane's share of the window: all of it for `Control`, the
+            // limit minus the reserved slots for `Standard`.
+            let share = match priority {
+                Priority::Control => w.limit,
+                Priority::Standard => w
+                    .limit
+                    .saturating_sub(self.0.limits.reserved_slots(class, *w)),
+            };
+            if share == 0 {
+                return Err(AdmissionError::NoStandardCapacity);
+            }
             let log = state.windows.entry((class, i)).or_default();
             while log
                 .front()
@@ -607,8 +766,11 @@ impl Admission {
             {
                 log.pop_front();
             }
-            if log.len() >= w.limit as usize {
-                let frees = log.front().expect("full log").1 + w.period;
+            let share = share as usize;
+            if log.len() >= share {
+                // The lane has a slot once the log is below its share: when
+                // the (len - share + 1)-th oldest entry ages out.
+                let frees = log[log.len() - share].1 + w.period;
                 ready_at = Some(ready_at.map_or(frees, |r: Instant| r.max(frees)));
             }
         }
@@ -636,6 +798,7 @@ impl Admission {
         Ok(Ok(AdmissionGrant {
             admission: self.clone(),
             class,
+            priority,
             id,
             order_id: order_id.map(str::to_string),
             consumed: false,
@@ -758,6 +921,53 @@ mod tests {
         assert_eq!(
             RateClass::of(Method::Delete, Endpoint::OrdersVarietyId),
             RateClass::Standard
+        );
+    }
+
+    #[test]
+    fn only_order_cancellation_and_gtt_deletion_default_to_control() {
+        for method in Method::ALL {
+            for endpoint in Endpoint::ALL {
+                let expected = match (method, endpoint) {
+                    (Method::Delete, Endpoint::OrdersVarietyId | Endpoint::GttTriggersId) => {
+                        Priority::Control
+                    }
+                    _ => Priority::Standard,
+                };
+                assert_eq!(
+                    Priority::default_for(*method, *endpoint),
+                    expected,
+                    "{method:?} {endpoint:?}"
+                );
+            }
+        }
+        assert_eq!(
+            Priority::default_for(Method::Delete, Endpoint::SessionToken),
+            Priority::Standard
+        );
+    }
+
+    #[test]
+    fn the_reserve_scales_with_the_window_period_rounding_up() {
+        let limits = AdmissionLimits::default()
+            .with_control_reserve(RateClass::OrderPlacement, 2)
+            .unwrap();
+        let slots = |limit, period| {
+            limits.reserved_slots(RateClass::OrderPlacement, Window::new(limit, period))
+        };
+        assert_eq!(slots(10, Duration::from_secs(1)), 2);
+        assert_eq!(slots(400, Duration::from_secs(60)), 120);
+        assert_eq!(slots(5, Duration::from_millis(500)), 1);
+        assert_eq!(slots(5, Duration::from_millis(1)), 1, "rounded up");
+        assert_eq!(
+            limits.reserved_slots(RateClass::Standard, Window::new(10, Duration::from_secs(1))),
+            2,
+            "the default standard reserve"
+        );
+        assert_eq!(
+            limits.reserved_slots(RateClass::Quote, Window::new(1, Duration::from_secs(1))),
+            0,
+            "no reserve by default elsewhere"
         );
     }
 

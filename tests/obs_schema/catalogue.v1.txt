@@ -28,7 +28,7 @@ metric manja_decode_duration_seconds histogram unit=seconds labels=[source_mode,
 metric manja_ticker_shutdown_duration_seconds histogram unit=seconds labels=[result] series_bound=4
 metric manja_telemetry_dropped_records_total counter unit=records labels=[] series_bound=1
 
-span manja.http.operation level=DEBUG fields=[operation_id,method,endpoint,quota_class,deadline_ms,result,stage]
+span manja.http.operation level=DEBUG fields=[operation_id,method,endpoint,quota_class,priority,deadline_ms,result,stage]
 span manja.http.admission level=DEBUG fields=[operation_id,quota_class,wait_ms,admission_result]
 span manja.http.attempt level=DEBUG fields=[operation_id,attempt,method,endpoint,http_status,error_class,stage]
 span manja.ticker.connection level=DEBUG fields=[feed_id,connection_epoch,reason,result]
@@ -44,6 +44,7 @@ domain result.http_operation [ok,http_status,broker_error,auth_rejected,transpor
 domain result.http_attempt [ok,http_status,broker_error,auth_rejected,transport_error,timeout,cancelled,decode_error]
 domain error_class [http_429,http_5xx,transport_error,timeout]
 domain admission_result [granted,rejected,cancelled,deadline]
+domain priority [standard,control]
 domain transport [http,ticker]
 domain result.ticker_connection [ok,auth_rejected,http_status,transport_error,timeout,cancelled]
 domain reason [eof,remote_close,liveness_timeout,transport_error,protocol_error]

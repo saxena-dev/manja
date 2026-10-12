@@ -145,3 +145,20 @@ recovered, and a reconnect reports the gap instead.
 `examples/ticker.rs` follows §5 and `examples/session.rs` follows `BR-10`. Both build and
 run against local servers. `tests/public_surface.rs` compiles the old `&mut` accessor
 calls and every new public path.
+
+## 7. Towards 0.3.0
+
+0.3.0 is being assembled on the `feat/v0.3.0` branch. Entries are added here with each
+change and consolidated when the release is cut.
+
+### 7.1 Additions
+
+| Area | New API |
+|---|---|
+| Priority lanes | `Priority { Standard, Control }` in `kite::connect::admission`; `HTTPClient::with_priority(priority)` returns a client whose calls take that lane; `AdmissionLimits::with_control_reserve(class, per_second)` and `control_reserve(class)` for `B-HTTP-15`; `Admission::acquire_with_priority`; `AdmissionGrant::priority`; `AdmissionError::NoStandardCapacity`; the `priority` field on the `manja.http.operation` span and its `priority` domain (`contract.md` §2.1, `contract.md` §3.2, `contract.md` §3.6, `contract.md` §4.2) |
+
+### 7.2 Changes that keep their path
+
+| Item | Change |
+|---|---|
+| Admission of `Standard`-class reads and other `Standard`-lane traffic | By default the `Standard` class now admits 8 `Standard`-lane requests per second, keeping 2 per second for the `Control` lane (`B-HTTP-15`). Order cancellation and GTT deletion take the `Control` lane by default and are no longer queued behind a full second of polling. A caller that needs the previous single-lane behaviour sets `AdmissionLimits::default().with_control_reserve(RateClass::Standard, 0)`; one whose own polling must not displace its urgent reads marks those calls with `with_priority(Priority::Control)`. The class total is unchanged at the documented 10 per second |

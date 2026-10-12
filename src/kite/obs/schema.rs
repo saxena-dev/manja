@@ -263,6 +263,16 @@ domain!(
 );
 
 domain!(
+    /// The admission lane of an HTTP operation (`priority` span field).
+    PriorityLabel {
+        /// Ordinary traffic.
+        Standard => "standard",
+        /// Control traffic: may use a class's reserved slots.
+        Control => "control",
+    }
+);
+
+domain!(
     /// Transport that observed a credential rejection.
     TransportLabel {
         /// HTTP.
@@ -558,6 +568,7 @@ pub const SPANS: &[SpanSpec] = &[
             "method",
             "endpoint",
             "quota_class",
+            "priority",
             "deadline_ms",
             "result",
             "stage",
@@ -667,6 +678,7 @@ pub fn catalogue_text() -> String {
         "result.http_attempt" => HttpAttemptResult,
         "error_class" => RetryCause,
         "admission_result" => AdmissionResult,
+        "priority" => PriorityLabel,
         "transport" => TransportLabel,
         "result.ticker_connection" => ConnectionResult,
         "reason" => ReconnectReason,

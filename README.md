@@ -346,8 +346,11 @@ default every request class is admitted at its documented rate, a request waits 
 seconds for capacity, a read makes up to three attempts with jittered backoff between
 them, and each operation has 30 seconds to finish (15 for the session calls). The daily
 order limit and the per-order modification limit never wait: once spent, they refuse
-the request straight away. `docs/contract.md` calls these limits quotas, and lists every
-bound with its range.
+the request straight away. Two requests per second of the standard class, and none of
+any other class by default, are kept for control traffic: order cancellations and GTT
+deletions take that lane by default, and `client.with_priority(Priority::Control)`
+marks any other call, such as the order-book read that confirms a cancellation.
+`docs/contract.md` calls these limits quotas, and lists every bound with its range.
 
 When your application needs different bounds, set them once on the configuration.
 Every setter checks its value against a documented range:

@@ -44,7 +44,9 @@ use std::time::Duration;
 use tokio::time::Instant;
 use tracing::{Instrument as _, Span};
 
-use crate::kite::connect::admission::{Admission, AdmissionError, AdmissionGrant, RateClass};
+use crate::kite::connect::admission::{
+    Admission, AdmissionError, AdmissionGrant, Priority, RateClass,
+};
 use crate::kite::error::{HttpError, HttpErrorKind, RetryInfo, TransportStage};
 use crate::kite::obs::handle::{GaugeGuard, Labels, Observability};
 use crate::kite::obs::schema::{
@@ -582,6 +584,7 @@ impl Drop for AdmissionWatch<'_> {
 #[allow(clippy::too_many_arguments)]
 async fn acquire_observed(
     admission: &Admission,
+    priority: Priority,
     rate: RateClass,
     order_id: Option<&str>,
     wait: Duration,
@@ -599,7 +602,7 @@ async fn acquire_observed(
     );
     let span = watch.span.clone();
     let result = admission
-        .acquire(rate, order_id, wait)
+        .acquire_with_priority(priority, rate, order_id, wait)
         .instrument(span)
         .await;
     watch.finish(match &result {
@@ -621,6 +624,9 @@ pub(crate) struct OpSpec<'a> {
     pub(crate) method: Method,
     pub(crate) endpoint: Endpoint,
     pub(crate) order_id: Option<&'a str>,
+    /// The admission lane, already resolved from the caller's mark or the
+    /// operation's default.
+    pub(crate) priority: Priority,
 }
 
 /// The instrumentation context of one operation, passed explicitly through
@@ -697,11 +703,13 @@ impl Scheduler {
         Duration::from_nanos(if nanos == 0 { 0 } else { r % (nanos + 1) })
     }
 
-    /// Admit capacity for `target` now, valid for the permit validity bound.
+    /// Admit capacity for `target` now on the lane `priority`, valid for
+    /// the permit validity bound.
     pub(crate) async fn admit(
         &self,
         admission: &Admission,
         target: PermitTarget,
+        priority: Priority,
         obs: &Observability,
     ) -> Result<DispatchPermit, HttpError> {
         let (method, endpoint) = target.operation();
@@ -710,6 +718,7 @@ impl Scheduler {
         let rate = RateClass::of(method, endpoint);
         let grant = acquire_observed(
             admission,
+            priority,
             rate,
             target.order_id(),
             wait,
@@ -772,6 +781,7 @@ impl Scheduler {
                     let deadline_bound = wait < admission.limits().wait();
                     acquire_observed(
                         admission,
+                        spec.priority,
                         rate,
                         spec.order_id,
                         wait,
@@ -951,7 +961,9 @@ mod tests {
             admission: &Admission,
             target: PermitTarget,
         ) -> Result<DispatchPermit, HttpError> {
-            self.admit(admission, target, &Observability::disabled())
+            let (method, endpoint) = target.operation();
+            let priority = Priority::default_for(method, endpoint);
+            self.admit(admission, target, priority, &Observability::disabled())
                 .await
         }
     }
@@ -984,6 +996,7 @@ mod tests {
             method,
             endpoint,
             order_id: None,
+            priority: Priority::default_for(method, endpoint),
         }
     }
 
@@ -1253,6 +1266,7 @@ mod tests {
                     method: Method::Put,
                     endpoint: Endpoint::OrdersVarietyId,
                     order_id: Some("B"),
+                    priority: Priority::Standard,
                 },
                 &a,
                 Some(p),

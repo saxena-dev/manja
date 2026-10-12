@@ -69,7 +69,7 @@ use tracing::{Instrument as _, Span};
 
 use crate::kite::{
     connect::{
-        admission::{Admission, RateClass},
+        admission::{Admission, Priority, RateClass},
         api::{Charges, Gtt, Margins, Market, MutualFunds, Orders, Portfolio, Session, User},
         config::Config,
         credentials::{AccessToken, ApiKey, Credentials},
@@ -84,7 +84,7 @@ use crate::kite::{
     },
     obs::diagnostics::{BoundedText, DEFAULT_HISTORY, FailureHistory},
     obs::handle::{Labels, Observability},
-    obs::schema::{Endpoint, HttpOperationResult, Instrument, Method, QuotaClass},
+    obs::schema::{Endpoint, HttpOperationResult, Instrument, Method, PriorityLabel, QuotaClass},
     protocol::Inbound,
 };
 
@@ -179,6 +179,12 @@ pub struct HttpDiagnostics {
 /// [`gtt`](Self::gtt), [`mutual_funds`](Self::mutual_funds),
 /// [`margins`](Self::margins) and [`charges`](Self::charges).
 ///
+/// Every call is admitted on a [`Priority`] lane. Without a mark, order
+/// cancellation and GTT deletion are `Control` and everything else is
+/// `Standard`; [`Self::with_priority`] returns a client whose calls all
+/// take the given lane, so a caller can mark any call `Control`, for
+/// example the reads that confirm a cancellation.
+///
 /// # Example
 ///
 /// ```no_run
@@ -198,6 +204,8 @@ pub struct HttpDiagnostics {
 pub struct HTTPClient {
     transport: Arc<Transport>,
     credentials: Option<Credentials>,
+    /// The caller's lane mark; `None` means each operation's default.
+    priority: Option<Priority>,
 }
 
 impl std::fmt::Debug for HTTPClient {
@@ -205,6 +213,7 @@ impl std::fmt::Debug for HTTPClient {
         f.debug_struct("HTTPClient")
             .field("config", &self.transport.config)
             .field("credentials", &self.credentials)
+            .field("priority", &self.priority)
             .finish()
     }
 }
@@ -418,6 +427,7 @@ impl HTTPClient {
                 waiting: Default::default(),
             }),
             credentials: None,
+            priority: None,
         })
     }
 
@@ -452,6 +462,37 @@ impl HTTPClient {
         Ok(self.with_credentials(credentials))
     }
 
+    /// A client sharing this client's transport, admission scope and
+    /// credentials whose every call is admitted on the lane `priority`,
+    /// in place of each operation's default. The original client is
+    /// unchanged.
+    ///
+    /// `Control` traffic may use a class's whole rate; `Standard` traffic
+    /// leaves the control reserve (`B-HTTP-15`) untouched. Mark the calls
+    /// your application cannot afford to have queued behind its own polling,
+    /// such as the order-book read that confirms a cancellation:
+    ///
+    /// ```no_run
+    /// use manja::kite::connect::admission::Priority;
+    /// # use manja::kite::connect::client::HTTPClient;
+    /// # async fn run(client: HTTPClient) -> Result<(), Box<dyn std::error::Error>> {
+    /// let control = client.with_priority(Priority::Control);
+    /// let orders = control.orders().list_orders().await?;
+    /// # Ok(()) }
+    /// ```
+    pub fn with_priority(&self, priority: Priority) -> Self {
+        Self {
+            priority: Some(priority),
+            ..self.clone()
+        }
+    }
+
+    /// The lane an operation on this client is admitted on.
+    fn priority_of(&self, method: Method, endpoint: Endpoint) -> Priority {
+        self.priority
+            .unwrap_or_else(|| Priority::default_for(method, endpoint))
+    }
+
     /// The credential snapshot, if any.
     pub fn credentials(&self) -> Option<&Credentials> {
         self.credentials.as_ref()
@@ -469,10 +510,17 @@ impl HTTPClient {
     /// caller may run its own checks before using the permit. The permit
     /// expires after `B-HTTP-12`; dropping it unused returns its capacity.
     pub async fn admit(&self, target: PermitTarget) -> Result<DispatchPermit> {
+        let (method, endpoint) = target.operation();
+        let priority = self.priority_of(method, endpoint);
         Ok(self
             .transport
             .scheduler
-            .admit(&self.transport.admission, target, &self.transport.obs)
+            .admit(
+                &self.transport.admission,
+                target,
+                priority,
+                &self.transport.obs,
+            )
             .await?)
     }
 
@@ -722,6 +770,7 @@ impl HTTPClient {
     fn guard(&self, method: Method, endpoint: Endpoint) -> OpGuard<'_> {
         let class = RetryClass::of(method, endpoint);
         let quota = class.quota_class();
+        let priority = self.priority_of(method, endpoint);
         let operation_id = self.transport.obs.next_operation_id();
         let deadline = self.transport.scheduler.limits().deadline(class);
         let span = tracing::debug_span!(
@@ -730,6 +779,7 @@ impl HTTPClient {
             method = method.as_str(),
             endpoint = endpoint.as_str(),
             quota_class = quota.as_str(),
+            priority = PriorityLabel::from(priority).as_str(),
             deadline_ms = deadline.as_millis().min(u64::MAX as u128) as u64,
             result = tracing::field::Empty,
             stage = tracing::field::Empty,
@@ -912,6 +962,7 @@ impl HTTPClient {
             method: m,
             endpoint,
             order_id: order_id.as_deref(),
+            priority: self.priority_of(m, endpoint),
         };
         let ctx = OpObs {
             obs: &self.transport.obs,

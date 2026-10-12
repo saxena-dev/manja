@@ -67,6 +67,13 @@ so for that endpoint alone an absent `status` is accepted; any `status` other th
 `success` is still an error.
 Order IDs used in request paths, and those in responses, are checked types, valid by
 construction (§2.16).
+Every operation takes a `Priority`, `Standard` or `Control`, which chooses its admission
+lane (§3.6). The caller marks it per call by making the call through
+`HTTPClient::with_priority(priority)`, a client sharing the original's transport,
+admission scope and credentials. Without a mark, `DELETE /orders/{variety}/{order_id}`
+and `DELETE /gtt/triggers/{id}` are `Control` and every other operation is `Standard`;
+a mark replaces the default in either direction. The SDK never decides which traffic
+is control: it honours the mark and keeps the reserve (`B-HTTP-15`).
 Order placement, modification and conversion, and GTT placement and modification, take
 dedicated request types and are form-encoded (`kite:response-structure.md:2`); margin and charge calculations are JSON
 (`kite:margins.md:13`). Quote requests above the documented key limits (500 for
@@ -433,6 +440,7 @@ cannot be changed.
 | `B-HTTP-10` | In-flight attempts per transport | 32 | 1 to 256 | |
 | `B-HTTP-11` | Session operation deadline | 15 s | 1 s to 60 s | one attempt (`B-HTTP-04`) |
 | `B-HTTP-12` | Dispatch permit validity | 1 s | 10 ms to 30 s | ≤ `B-HTTP-01`; a permit is used once, and an expired one sends nothing |
+| `B-HTTP-15` | Control reserve per quota class, in requests per second: the part of the class rate only `Control` traffic may use | 2 for `Standard`, 0 for `Quote`, `Historical`, `OrderPlacement`, `OrderModification` and `Unclassified` | 0 to 5 | For a window of period `p` it reserves `reserve × p` slots, rounded up; ceilings have no reserve. A reserve at or above a window's rate leaves the class no `Standard` capacity: every `Standard` request in it is refused at once with an `Admission` error naming this bound, and never waits. 0 makes the lanes equal |
 
 Retries apply to 429, 502 to 504, transport faults and attempt timeouts, and only in
 the read and calculation classes. The calculation endpoints are documented as
@@ -501,6 +509,18 @@ class needs at least one window, limits must be positive, windows at least 1 ms,
 placement at most 10 per second. Admission cannot see requests
 from other processes or other SDK instances using the same API key.
 
+Within a class, every request is admitted on one of two lanes (§2.1). `Control` traffic
+may fill each window of the class entirely. `Standard` traffic may fill a window only up
+to its limit minus the class's control reserve (`B-HTTP-15`, §3.2), so with the default
+profile and reserve the `Standard` class admits 8 `Standard` requests per second and 10
+in all, and a `Control` request is admitted while the reserved slots are free whatever
+`Standard` traffic has done. Both lanes draw from the same windows and ceilings: a
+`Control` request counts against the class rate, the daily order ceiling and the
+per-order modification limit like any other, so the lanes together never exceed the
+documented rate. A lane whose share is full waits like any other request, under
+`B-HTTP-06`. The reserve is a local view: it cannot keep capacity from other processes
+or the Kite app.
+
 ---
 
 ## 4. Observability schema
@@ -528,12 +548,13 @@ Additions within version 1:
 | `endpoint` value `/portfolio/holdings/authorise` (§2.15) | the domain grows to 31 values, with the §4.4 bounds |
 | `manja_http_rejected_rows_total` (§2.16) | a new counter of list rows that did not decode, labelled by `endpoint` only |
 | `DecodeDiagnosticKind::InvalidField` (§4.5) | one more diagnostic kind |
+| `priority` field on `manja.http.operation` and the `priority` domain `standard`, `control` (§2.1, §4.2, §4.3) | a span field and a domain; no metric gains a label, so no series bound changes |
 
 ### 4.2 Spans
 
 | Span | Level | Fields |
 |---|---|---|
-| `manja.http.operation` | DEBUG | `operation_id`, `method`, `endpoint`, `quota_class`, `deadline_ms`, `result`, `stage` |
+| `manja.http.operation` | DEBUG | `operation_id`, `method`, `endpoint`, `quota_class`, `priority`, `deadline_ms`, `result`, `stage` |
 | `manja.http.admission` | DEBUG | `operation_id`, `quota_class`, `wait_ms`, `admission_result` |
 | `manja.http.attempt` | DEBUG | `operation_id`, `attempt`, `method`, `endpoint`, `http_status`, `error_class`, `stage` |
 | `manja.ticker.connection` | DEBUG | `feed_id`, `connection_epoch`, `reason`, `result` |
@@ -559,6 +580,7 @@ or query parameters to Kite requests.
 | `result` (HTTP attempt) | `ok`, `http_status`, `broker_error`, `auth_rejected`, `transport_error`, `timeout`, `cancelled`, `decode_error` |
 | `error_class` | `http_429`, `http_5xx`, `transport_error`, `timeout` |
 | `admission_result` | `granted`, `rejected`, `cancelled`, `deadline` |
+| `priority` | `standard`, `control` (the operation's admission lane, §2.1; a span field, not a metric label) |
 | `transport` | `http`, `ticker` |
 | `result` (ticker connection) | `ok`, `auth_rejected`, `http_status`, `transport_error`, `timeout`, `cancelled` |
 | `reason` | `eof`, `remote_close`, `liveness_timeout`, `transport_error`, `protocol_error` |
@@ -657,6 +679,7 @@ These choices are not dictated by the Kite documentation alone.
 | Ticker price scale | Currency derivatives (CDS) divide by 10 000 000; NSE, NFO, BSE, BFO, MCX, MCXSX and indices divide by 100. The BSE currency segment (BCD) is refused | The documentation gives 10 000 000 for currencies and 100 for everything else (`kite:websocket.md:89`); nothing establishes a separate BCD scale, and the segment cannot be read from the token, so the caller supplies it |
 | Handshake rejection | A 401 or 403 WebSocket handshake ends the ticker with `AuthRejected` | Retrying rejected credentials cannot succeed and would only repeat the rejection |
 | Quota enforcement | Every documented window is enforced locally by default (§3.6) | Exceeding them is a documented broker error (`kite:exceptions.md:39`) |
+| Priority lanes | Two caller-selected lanes per quota class with a control reserve (`B-HTTP-15`, §2.1, §3.6); order cancellation and GTT deletion default to `Control`, and the mark is made per call through `HTTPClient::with_priority` rather than as a parameter on every method | Cancellation and the reads that confirm it share one transport with polling, and an in-flight request cannot be recalled, so a reserve that `Standard` traffic may never take is the only honest form of priority. Which reads are urgent is known only to the application, so the mark is per call and the SDK never decides it. A derived client keeps every method's signature unchanged |
 | Oversized quote requests | Rejected before sending, never split or truncated | A split would return several snapshots taken at different times as one result |
 | Endpoint support | Holdings auctions and the order charges calculation stay supported | Both are documented read or calculation endpoints with official fixtures |
 | Holdings authorisation | Supported as the HTTP call that starts the flow, with the documented portal URL; the portal itself is left to the application | The endpoint and its result are documented (`kite:portfolio.md:503-541`). The remaining steps happen in the user's browser on the depository's portal, which an SDK cannot and should not drive |

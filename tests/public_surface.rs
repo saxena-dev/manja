@@ -7,7 +7,8 @@
 #![allow(dead_code, unused_imports)]
 
 use manja::kite::connect::admission::{
-    Admission, AdmissionError, AdmissionGrant, AdmissionLimits, QuotaProfile, RateClass, Window,
+    Admission, AdmissionError, AdmissionGrant, AdmissionLimits, Priority, QuotaProfile, RateClass,
+    Window,
 };
 use manja::kite::connect::api::{
     Charges, Gtt, Margins, Market, MutualFunds, Orders, Portfolio, Session, User,
@@ -159,6 +160,26 @@ async fn signatures(c: &HTTPClient, h: &TickerHandle) {
     let _: Result<String, ManjaError> = mf.get_instruments_csv().await;
     let _: Result<DispatchPermit, ManjaError> = c.admit(PermitTarget::PlaceOrder).await;
     let _: HttpDiagnostics = c.diagnostics();
+    // Priority lanes: a marked client, and the lane on an admission grant.
+    let control: HTTPClient = c.with_priority(Priority::Control);
+    let _: Result<KiteApiResponse<Vec<Order>>, ManjaError> = control.orders().list_orders().await;
+    let _: Result<AdmissionLimits, manja::kite::connect::admission::QuotaError> =
+        AdmissionLimits::default().with_control_reserve(RateClass::Standard, 2);
+    let _: fn(&AdmissionLimits, RateClass) -> u32 = AdmissionLimits::control_reserve;
+    if let Ok(grant) = c
+        .admission()
+        .acquire_with_priority(
+            Priority::Control,
+            RateClass::Standard,
+            None,
+            std::time::Duration::ZERO,
+        )
+        .await
+    {
+        let _: Priority = grant.priority();
+        let _: AdmissionError = AdmissionError::NoStandardCapacity;
+        grant.consume();
+    }
     let _: Result<Revision, CommandError> =
         h.subscribe([InstrumentToken::new(1)], Mode::Quote).await;
     let _: TickerStatus = h.status();
