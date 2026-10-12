@@ -389,7 +389,7 @@ user completes on the depository's portal by keying in their demat PIN
 The SDK opens no browser, does not watch for the redirect, and does not retry the refused
 order; the application does each.
 
-### 2.16 Order IDs
+### 2.16 Order IDs and tags
 
 An order ID becomes a path segment of the order endpoints, so every one is a checked
 type in `kite::protocol`, and a value that could change the path cannot be constructed.
@@ -435,6 +435,24 @@ complete response records nothing there. Single-object responses, and the mutual
 holdings and GTT lists, stay strict. The order ID in an
 `OrderChargesRequest` is not an `OrderId`: the documentation allows any string there
 (`kite:margins.md:395`), and it travels in the JSON body, never in a path.
+
+**Tags.** An order placement carries a `Tag` (`kite::connect::models`), required by
+`PlaceOrderRequest::new` and always sent as the `tag` field (`kite:orders.md:103`): 1 to
+20 ASCII letters or digits, valid by construction, built with `Tag::new`, `TryFrom<&str>`,
+`TryFrom<String>` or `FromStr`, each failing with the `tag` `RequestError` naming the
+grammar, which a call reports as a `Validation` error. The tag is a **correlation**
+field, not an idempotency key and not an identity: the broker echoes it on the order it
+registered and enforces no uniqueness, and an order placed from the Kite app can carry any
+text, so `Order::tag` stays the broker's text as received (the official order book carries
+`connect test order1`, which a `Tag` cannot hold). `Orders::list_orders_tagged(&tag)`
+fetches the strict order book (`GET /orders`; Kite has no tag query) and returns every row
+whose tag equals the argument, in broker order, with the response meta: a filter, never
+proof that a particular attempt was placed, since two rows may carry one tag. The SDK
+recommends one tag per **attempt**, not per intent: when an attempt ends with its outcome
+unknown and a later attempt is made, two attempt tags tell the two orders apart, while two
+copies of one intent tag cannot be told from one order seen twice. Modification,
+cancellation, conversion, GTT and session operations carry no tag; the wire has no field
+for one, and their recovery identity is the order or trigger ID.
 
 ### 2.17 Dispatch
 
@@ -812,6 +830,7 @@ These choices are not dictated by the Kite documentation alone.
 | Oversized quote requests | Rejected before sending, never split or truncated | A split would return several snapshots taken at different times as one result |
 | Endpoint support | Holdings auctions and the order charges calculation stay supported | Both are documented read or calculation endpoints with official fixtures |
 | Holdings authorisation | Supported as the HTTP call that starts the flow, with the documented portal URL; the portal itself is left to the application | The endpoint and its result are documented (`kite:portfolio.md:503-541`). The remaining steps happen in the user's browser on the depository's portal, which an SDK cannot and should not drive |
+| Required tag | `PlaceOrderRequest::new` takes a `Tag`; the tag is documented as a correlation field, never an idempotency key, with one tag per attempt recommended; `list_orders_tagged` is a client-side filter over the order book (§2.16) | Kite has no idempotency key and the tag is the only caller-chosen field it echoes, so a placement whose response was lost has no other anchor than symbol, quantity and time, which an active caller's own flow makes ambiguous within seconds. A generated tag the caller never saw would be useless for recovery, and modification and cancellation carry an order ID and no tag field, so requiring one there would be a lie in the type. The broker does not make tags unique and manual orders can carry any text, so the SDK filters and the caller assigns the confidence; one tag per attempt is what makes a duplicate visible |
 | Order IDs | Checked types; a response ID that fails its grammar is a `Decode` error | An ID is a request path segment. A lenient fallback would let a malformed broker value reach a path unchecked, and every ID in the official samples already fits its grammar |
 | Rejected list rows | The default equity order and trade list methods stay strict; a paired `*_with_rejections` method returns every row, rejected ones in place (§2.16) | Strict is the default because `?` keeps a failure loud, and an entirely rejected book can never pass for an empty one. The tolerant form lets a caller still see, and act on, the rows that decoded. Keeping partial data out of `HttpError` keeps broker rows out of commonly logged errors |
 | Error details | A parse or decode failure is described by serde's category and position, with no field path | serde's message quotes the offending value. A field path would need a new dependency, and in a map-shaped payload such as a quote response its keys are broker values (instrument symbols). The tolerant order and trade lists hand the full serde error to the caller in `RowError`, outside any error (§2.16) |

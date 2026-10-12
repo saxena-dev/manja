@@ -21,7 +21,7 @@ use crate::kite::connect::{
     dispatch::{Dispatched, ReceiptIds},
     models::{
         ModifyOrderRequest, Order, OrderReceipt, OrderVariety, PlaceOrderRequest, Response, Row,
-        Rows, Trade,
+        Rows, Tag, Trade,
     },
     wire::WireForm,
 };
@@ -35,8 +35,9 @@ use crate::kite::protocol::OrderId;
 /// Placement, modification and cancellation make exactly one attempt. If one
 /// fails after the request may have reached Kite
 /// ([`HttpError::may_have_reached_broker`](crate::kite::error::HttpError::may_have_reached_broker)),
-/// look the order up before sending it again: give orders a `tag` so you can
-/// find them. A receipt means Kite accepted the request, not that the order
+/// look the order up before sending it again: [`Self::list_orders_tagged`]
+/// finds the rows carrying the placement's [`Tag`], which every placement must
+/// carry. A receipt means Kite accepted the request, not that the order
 /// filled.
 ///
 /// # Example
@@ -122,6 +123,25 @@ impl<'c> Orders<'c> {
     /// index. [`Self::list_orders_with_rejections`] returns the other rows.
     pub async fn list_orders(&self) -> Result<Response<Vec<Order>>> {
         strict(self.client.get_rows("/orders", RowPolicy::Strict).await?)
+    }
+
+    /// The orders of the day carrying `tag`: `GET /orders`, filtered here.
+    ///
+    /// The broker echoes a placement's [`Tag`] on the order it registered,
+    /// so this is how a placement whose response was lost is looked for.
+    /// It is a filter, not proof: Kite does not enforce tag uniqueness and
+    /// an order placed elsewhere can carry any text, so every row with the
+    /// tag is returned, in broker order, and the caller weighs them. The
+    /// whole order book is fetched and decoded strictly, as by
+    /// [`Self::list_orders`]; the broker has no tag query.
+    pub async fn list_orders_tagged(&self, tag: &Tag) -> Result<Response<Vec<Order>>> {
+        let book = self.list_orders().await?;
+        Ok(book.map(|orders| {
+            orders
+                .into_iter()
+                .filter(|order| order.tag.as_deref() == Some(tag.as_str()))
+                .collect()
+        }))
     }
 
     /// Every order of the day, row by row: `GET /orders`.

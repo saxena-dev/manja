@@ -13,7 +13,7 @@ use manja::kite::connect::config::Config;
 use manja::kite::connect::credentials::{ApiKey, Credentials};
 use manja::kite::connect::models::{
     Exchange, HoldingsAuthorisation, HoldingsAuthorisationRequest, OrderType, OrderVariety,
-    PlaceOrderRequest, ProductType, TransactionType,
+    PlaceOrderRequest, ProductType, Tag, TransactionType,
 };
 use manja::kite::connect::scheduler::RetryClass;
 use manja::kite::error::{HttpErrorKind, TransportStage};
@@ -153,6 +153,7 @@ async fn a_sell_order_refused_with_428_asks_for_authorisation() {
         OrderType::Limit,
         Quantity::new(10).unwrap(),
         ProductType::CashAndCarry,
+        Tag::new("t1").unwrap(),
     );
     sell.price = Some(1500.0);
     let err = client(&h.base_url())

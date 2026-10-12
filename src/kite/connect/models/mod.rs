@@ -111,7 +111,7 @@ mod order;
 mod order_enums;
 pub use order::{
     ModifyOrderRequest, Order, OrderReceipt, PlaceOrderRequest, RequestError, SliceError,
-    SliceResult, Trade,
+    SliceResult, Tag, Trade,
 };
 pub use order_enums::{
     OrderStatus, OrderType, OrderValidity, OrderVariety, ProductType, TransactionType,

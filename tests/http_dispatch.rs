@@ -17,7 +17,7 @@ use manja::kite::connect::dispatch::{
     Dispatched, ORPHANED_OUTCOMES, Outcome, OutcomeStream, OutcomeStreamError,
 };
 use manja::kite::connect::models::{
-    Exchange, OrderReceipt, OrderType, OrderVariety, PlaceOrderRequest, ProductType,
+    Exchange, OrderReceipt, OrderType, OrderVariety, PlaceOrderRequest, ProductType, Tag,
     TransactionType,
 };
 use manja::kite::connect::scheduler::SchedulerLimits;
@@ -37,6 +37,7 @@ fn market_buy() -> PlaceOrderRequest {
         OrderType::Market,
         Quantity::new(1).unwrap(),
         ProductType::CashAndCarry,
+        Tag::new("t1").unwrap(),
     )
 }
 

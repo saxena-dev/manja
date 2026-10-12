@@ -15,7 +15,7 @@ use manja::kite::connect::credentials::{
 };
 use manja::kite::connect::models::{
     Exchange, ModifyOrderRequest, OrderType, OrderVariety, PlaceOrderRequest,
-    PositionConversionRequest, PositionType, ProductType, TransactionType,
+    PositionConversionRequest, PositionType, ProductType, Tag, TransactionType,
 };
 use manja::kite::connect::scheduler::SchedulerLimits;
 use manja::kite::error::{HttpErrorKind, TransportStage};
@@ -63,6 +63,7 @@ fn place_request() -> PlaceOrderRequest {
         OrderType::Limit,
         Quantity::new(1).unwrap(),
         ProductType::CashAndCarry,
+        Tag::new("t1").unwrap(),
     );
     r.price = Some(1500.0);
     r

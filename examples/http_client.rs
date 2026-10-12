@@ -13,7 +13,8 @@ use manja::kite::connect::client::HTTPClient;
 use manja::kite::connect::config::Config;
 use manja::kite::connect::credentials::Credentials;
 use manja::kite::connect::models::{
-    Exchange, FullQuote, OrderType, OrderVariety, PlaceOrderRequest, ProductType, TransactionType,
+    Exchange, FullQuote, OrderType, OrderVariety, PlaceOrderRequest, ProductType, Tag,
+    TransactionType,
 };
 use manja::kite::obs::{InMemoryRecorder, Instrument, Observability};
 use manja::kite::protocol::Quantity;
@@ -70,6 +71,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         OrderType::Market,
         Quantity::new(1)?,
         ProductType::CashAndCarry,
+        Tag::new("example1")?,
     );
     request.validate()?;
     // Placement is admitted now or refused with a hint, never queued, and

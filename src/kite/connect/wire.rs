@@ -53,7 +53,7 @@ const FORM: &str = "application/x-www-form-urlencoded";
 ///
 /// ```
 /// use manja::kite::connect::models::{
-///     Exchange, OrderType, OrderVariety, PlaceOrderRequest, ProductType, TransactionType,
+///     Exchange, OrderType, OrderVariety, PlaceOrderRequest, ProductType, Tag, TransactionType,
 /// };
 /// use manja::kite::protocol::Quantity;
 ///
@@ -65,13 +65,14 @@ const FORM: &str = "application/x-www-form-urlencoded";
 ///     OrderType::Market,
 ///     Quantity::new(1).unwrap(),
 ///     ProductType::CashAndCarry,
+///     Tag::new("rebalance42").unwrap(),
 /// );
 /// let wire = request.wire().unwrap();
 /// assert_eq!(wire.path(), "/orders/regular");
 /// assert_eq!(
 ///     wire.to_string(),
 ///     "tradingsymbol=INFY&exchange=NSE&transaction_type=BUY&order_type=MARKET\
-///      &quantity=1&product=CNC&validity=DAY"
+///      &quantity=1&product=CNC&validity=DAY&tag=rebalance42"
 /// );
 /// assert_eq!(wire.sha256(), request.wire().unwrap().sha256());
 /// ```

@@ -603,7 +603,7 @@ async fn two_modifications_through_the_client_leave_twenty_three() {
 // ---- mutations never wait: admitted now or refused ----------------------
 
 use manja::kite::connect::models::{
-    Exchange, OrderType as PlaceOrderType, PlaceOrderRequest, ProductType, TransactionType,
+    Exchange, OrderType as PlaceOrderType, PlaceOrderRequest, ProductType, Tag, TransactionType,
 };
 use manja::kite::obs::schema::AdmissionCause;
 use manja::kite::protocol::Quantity;
@@ -617,6 +617,7 @@ fn market_buy() -> PlaceOrderRequest {
         PlaceOrderType::Market,
         Quantity::new(1).unwrap(),
         ProductType::CashAndCarry,
+        Tag::new("t1").unwrap(),
     )
 }
 

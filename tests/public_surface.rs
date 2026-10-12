@@ -101,6 +101,13 @@ async fn signatures(c: &HTTPClient, h: &TickerHandle) {
         .orders()
         .cancel_order(manja::kite::connect::models::OrderVariety::Regular, &id);
     let _: Result<OrderId, OrderIdError> = OrderId::new("1");
+    let tag: Result<manja::kite::connect::models::Tag, RequestError> =
+        manja::kite::connect::models::Tag::new("rebalance42");
+    if let Ok(tag) = tag {
+        let _: (&str, String) = (tag.as_str(), tag.to_string());
+        let _: Result<Response<Vec<Order>>, ManjaError> = c.orders().list_orders_tagged(&tag).await;
+    }
+    let _: Result<manja::kite::connect::models::Tag, RequestError> = "a".parse();
     let _: Result<Response<Rows<Order>>, ManjaError> =
         c.orders().list_orders_with_rejections().await;
     let _: Result<Response<Rows<Order>>, ManjaError> =
@@ -165,6 +172,7 @@ async fn signatures(c: &HTTPClient, h: &TickerHandle) {
         manja::kite::connect::models::OrderType::Market,
         Quantity::new(1).unwrap(),
         manja::kite::connect::models::ProductType::CashAndCarry,
+        manja::kite::connect::models::Tag::new("t1").unwrap(),
     );
     let wire: WireForm = place.wire().unwrap();
     let _: (

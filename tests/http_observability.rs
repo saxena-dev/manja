@@ -745,7 +745,7 @@ async fn the_response_meta_names_the_operation_and_the_attempt_that_answered() {
 #[tokio::test]
 async fn a_refused_mutation_records_refused_and_the_cause() {
     use manja::kite::connect::models::{
-        Exchange, OrderType, OrderVariety, PlaceOrderRequest, ProductType, TransactionType,
+        Exchange, OrderType, OrderVariety, PlaceOrderRequest, ProductType, Tag, TransactionType,
     };
     use manja::kite::protocol::Quantity;
     let cap = Capture::default();
@@ -778,6 +778,7 @@ async fn a_refused_mutation_records_refused_and_the_cause() {
         OrderType::Market,
         Quantity::new(1).unwrap(),
         ProductType::CashAndCarry,
+        Tag::new("t1").unwrap(),
     );
     c.orders().place_order(&order).await.unwrap();
     let err = c.orders().place_order(&order).await.unwrap_err();
@@ -808,7 +809,7 @@ async fn a_refused_mutation_records_refused_and_the_cause() {
 #[tokio::test]
 async fn the_operation_span_records_a_mutations_correlation_and_wire_hash() {
     use manja::kite::connect::models::{
-        Exchange, OrderType, PlaceOrderRequest, ProductType, TransactionType,
+        Exchange, OrderType, PlaceOrderRequest, ProductType, Tag, TransactionType,
     };
     use manja::kite::protocol::Quantity;
     let cap = Capture::default();
@@ -828,6 +829,7 @@ async fn the_operation_span_records_a_mutations_correlation_and_wire_hash() {
         OrderType::Market,
         Quantity::new(1).unwrap(),
         ProductType::CashAndCarry,
+        Tag::new("t1").unwrap(),
     );
     let wire = order.wire().unwrap();
     let token = "attempt 7f3a";

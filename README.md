@@ -153,17 +153,21 @@ limits, so create it once and hand clones to the tasks that need it.
 ### 3. Place an order, carefully
 
 Orders are built from a request type that is checked before anything is sent. A
-quantity of zero, a LIMIT order without a price or a malformed tag is a `Validation`
-error, and nothing reaches Kite.
+quantity of zero or a LIMIT order without a price is a `Validation` error, and nothing
+reaches Kite. The tag is checked when it is built: 1 to 20 ASCII letters or digits,
+nothing else.
 
 ```rust,no_run
 use manja::kite::connect::client::HTTPClient;
 use manja::kite::connect::models::{
-    Exchange, OrderType, OrderVariety, PlaceOrderRequest, ProductType, TransactionType,
+    Exchange, OrderType, OrderVariety, PlaceOrderRequest, ProductType, Tag, TransactionType,
 };
 use manja::kite::protocol::Quantity;
 
 async fn buy(client: &HTTPClient) -> Result<(), Box<dyn std::error::Error>> {
+    // The tag is required: it is what finds this order again if the
+    // response is lost. Use a fresh one for every attempt.
+    let tag = Tag::new("rebalance42")?;
     let mut order = PlaceOrderRequest::new(
         OrderVariety::Regular,
         Exchange::NSE,
@@ -172,19 +176,18 @@ async fn buy(client: &HTTPClient) -> Result<(), Box<dyn std::error::Error>> {
         OrderType::Limit,
         Quantity::new(1)?,
         ProductType::CashAndCarry,
+        tag.clone(),
     );
     order.price = Some(1500.0);
-    // A tag lets you find this order again if the response is lost.
-    order.tag = Some("rebalance42".into());
 
     match client.orders().place_order(&order).await {
         Ok(receipt) => println!("accepted as {}", receipt.data.order_id),
         Err(err) if err.may_have_reached_broker() => {
-            // The request left the process, so the order may exist. Check the
-            // order book before deciding to place it again.
-            let book = client.orders().list_orders().await?.data;
-            let placed = book.iter().any(|o| o.tag.as_deref() == Some("rebalance42"));
-            println!("order was placed: {placed}");
+            // The request left the process, so the order may exist. Look for
+            // the tag in the order book before deciding to place it again: a
+            // match is evidence, not proof, since Kite does not make tags unique.
+            let matches = client.orders().list_orders_tagged(&tag).await?.data;
+            println!("orders carrying the tag: {}", matches.len());
         }
         Err(err) => return Err(err.into()),
     }

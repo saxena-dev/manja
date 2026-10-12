@@ -17,7 +17,7 @@ use manja::kite::connect::config::{Config, HttpLimits};
 use manja::kite::connect::credentials::Credentials;
 use manja::kite::connect::models::{
     Exchange, ModifyOrderRequest, OrderType, OrderValidity, OrderVariety, PlaceOrderRequest,
-    PositionConversionRequest, PositionType, ProductType, SliceResult, TransactionType,
+    PositionConversionRequest, PositionType, ProductType, SliceResult, Tag, TransactionType,
 };
 use manja::kite::connect::scheduler::SchedulerLimits;
 use manja::kite::error::{HttpError, HttpErrorKind, TransportStage};
@@ -56,6 +56,7 @@ fn market_buy() -> PlaceOrderRequest {
         OrderType::Market,
         Quantity::new(1).unwrap(),
         ProductType::MarginIntradaySquareoff,
+        Tag::new("mkt1").unwrap(),
     );
     r.market_protection = Some(-1.0);
     r
@@ -70,6 +71,7 @@ fn limit_buy() -> PlaceOrderRequest {
         OrderType::Limit,
         Quantity::new(1).unwrap(),
         ProductType::CashAndCarry,
+        Tag::new("lim1").unwrap(),
     );
     r.price = Some(1500.5);
     r
@@ -105,7 +107,7 @@ async fn placement_is_form_encoded_and_acknowledged() {
     assert_eq!(
         String::from_utf8(r.body).unwrap(),
         "tradingsymbol=ACC&exchange=NSE&transaction_type=BUY&order_type=MARKET&quantity=1\
-         &product=MIS&validity=DAY&market_protection=-1"
+         &product=MIS&validity=DAY&market_protection=-1&tag=mkt1"
     );
 }
 
@@ -244,12 +246,6 @@ async fn invalid_requests_are_rejected_before_any_transport() {
     let mut r = limit_buy();
     r.auction_number = Some("20".into());
     cases.push(("number outside auction", r));
-    let mut r = limit_buy();
-    r.tag = Some("has space".into());
-    cases.push(("tag with space", r));
-    let mut r = limit_buy();
-    r.tag = Some("x".repeat(21));
-    cases.push(("21-char tag", r));
     let mut r = limit_buy();
     r.exchange = Exchange::INDICES;
     cases.push(("INDICES exchange", r));
@@ -645,7 +641,7 @@ fn a_wire_form_renders_the_form_body_and_nothing_secret() {
     assert_eq!(
         shown,
         "tradingsymbol=INFY&exchange=NSE&transaction_type=BUY&order_type=LIMIT&quantity=1\
-         &product=CNC&validity=DAY&price=1500.5"
+         &product=CNC&validity=DAY&price=1500.5&tag=lim1"
     );
     let debug = format!("{wire:?}");
     for secret in ["api_key", "access_token", "Authorization", "token "] {
@@ -771,4 +767,93 @@ async fn a_dropped_connection_after_dispatch_is_stamped_sent_but_not_received() 
     let (sent, received) = (e.sent_at().unwrap(), e.received_at().unwrap());
     assert!(received.wall >= sent.wall);
     assert!(received.monotonic >= sent.monotonic);
+}
+
+// ---- tags ----------------------------------------------------------------
+
+#[test]
+fn a_tag_is_one_to_twenty_ascii_letters_or_digits() {
+    let tag = Tag::new("abc123").unwrap();
+    assert_eq!(tag.as_str(), "abc123");
+    assert_eq!(tag.to_string(), "abc123");
+    assert_eq!(Tag::try_from("abc123").unwrap(), tag);
+    assert_eq!(Tag::try_from(String::from("abc123")).unwrap(), tag);
+    assert_eq!("abc123".parse::<Tag>().unwrap(), tag);
+    assert!(Tag::new("x".repeat(20)).is_ok());
+    for bad in [
+        "x".repeat(21),
+        String::new(),
+        "a-b".into(),
+        "has space".into(),
+    ] {
+        let err = Tag::new(bad.as_str()).unwrap_err();
+        assert_eq!(err.field, "tag");
+        assert!(err.reason.contains("1-20 ASCII letters or digits"), "{err}");
+        assert_eq!(Tag::try_from(bad.as_str()).unwrap_err(), err);
+        assert_eq!(Tag::try_from(bad.clone()).unwrap_err(), err);
+        assert_eq!(bad.parse::<Tag>().unwrap_err(), err);
+    }
+    // The error is the request's validation error, which the call reports
+    // as a `Validation` refusal; a placement cannot be built without a tag,
+    // so the grammar is checked before the request exists.
+    let err = Tag::new("has space").unwrap_err();
+    assert_eq!(
+        err.to_string(),
+        "invalid `tag`: must be 1-20 ASCII letters or digits"
+    );
+}
+
+#[tokio::test]
+async fn list_orders_tagged_returns_every_row_with_the_tag_and_no_other() {
+    // Supplemental, derived from orders.json: two rows carry one tag, one
+    // row carries another; the official rows' own tags include text a
+    // placement could not send ("connect test order1"), which stays as the
+    // broker sent it on `Order::tag`.
+    let body = fixtures::json_body("orders.json")
+        .unwrap()
+        .replace("\"tag\": \"icebergord\"", "\"tag\": \"rebalance42\"")
+        .replace(
+            "\"tag\": \"connect test order1\"",
+            "\"tag\": \"rebalance42\"",
+        )
+        .replace("\"tag\": \"connect test order2\"", "\"tag\": \"other1\"");
+    assert_eq!(body.matches("\"rebalance42\"").count(), 2);
+    let h = HttpHarness::start(vec![
+        Reply::json(body.clone()),
+        Reply::json(body.clone()),
+        Reply::json(body),
+    ])
+    .await;
+    let c = client(&h.base_url());
+    let tag = Tag::new("rebalance42").unwrap();
+    let matched = c.orders().list_orders_tagged(&tag).await.unwrap();
+    let ids: Vec<&str> = matched.data.iter().map(|o| o.order_id.as_str()).collect();
+    // Both rows, in broker order: a filter, not proof of one placement.
+    assert_eq!(ids, ["220524001859672", "700000000000000"]);
+    assert!(
+        matched
+            .data
+            .iter()
+            .all(|o| o.tag.as_deref() == Some("rebalance42"))
+    );
+    assert_eq!(matched.meta.http_status, 200);
+    let other = c
+        .orders()
+        .list_orders_tagged(&Tag::new("other1").unwrap())
+        .await
+        .unwrap()
+        .data;
+    assert_eq!(other.len(), 1);
+    assert_eq!(other[0].order_id.as_str(), "9000000000000000");
+    let none = c
+        .orders()
+        .list_orders_tagged(&Tag::new("unused").unwrap())
+        .await
+        .unwrap();
+    assert!(none.data.is_empty());
+    assert_eq!(none.meta.http_status, 200);
+    // Each call is the plain order book: the broker has no tag query.
+    for r in h.requests() {
+        assert_eq!((r.method.as_str(), r.target.as_str()), ("GET", "/orders"));
+    }
 }

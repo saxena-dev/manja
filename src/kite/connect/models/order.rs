@@ -348,6 +348,83 @@ pub(super) fn invalid(field: &'static str, reason: &'static str) -> Result<(), R
     Err(RequestError { field, reason })
 }
 
+const TAG_REASON: &str = "must be 1-20 ASCII letters or digits";
+
+/// The tag of an order placement: 1 to 20 ASCII letters or digits
+/// (`kite:orders.md:103`), valid by construction.
+///
+/// The broker echoes the tag on the order it registered, so it is the one
+/// caller-chosen field that links a placement to a row of the order book
+/// (`Orders::list_orders_tagged`). It is a **correlation** field, not an
+/// identity: Kite does not enforce uniqueness, and an order placed from the
+/// Kite app can carry any text, so a tag match is evidence to weigh, never
+/// proof that a particular attempt was placed. Use one tag per **attempt**,
+/// not per intent: when an attempt ends with its outcome unknown and a
+/// second attempt is later made, two attempt tags tell the two orders
+/// apart, which two copies of one intent tag cannot.
+///
+/// ```
+/// use manja::kite::connect::models::Tag;
+///
+/// let tag = Tag::new("rebalance42")?;
+/// assert_eq!(tag.as_str(), "rebalance42");
+/// assert!(Tag::new("has space").is_err());
+/// assert!("x".repeat(21).parse::<Tag>().is_err());
+/// # Ok::<(), manja::kite::connect::models::RequestError>(())
+/// ```
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize)]
+#[serde(transparent)]
+pub struct Tag(String);
+
+impl Tag {
+    /// A tag, or the `tag` [`RequestError`] naming the grammar.
+    pub fn new(tag: impl Into<String>) -> Result<Self, RequestError> {
+        let tag = tag.into();
+        if tag.is_empty() || tag.len() > 20 || !tag.bytes().all(|b| b.is_ascii_alphanumeric()) {
+            return Err(RequestError {
+                field: "tag",
+                reason: TAG_REASON,
+            });
+        }
+        Ok(Self(tag))
+    }
+
+    /// The tag's text, as sent.
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl std::fmt::Display for Tag {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
+impl TryFrom<&str> for Tag {
+    type Error = RequestError;
+
+    fn try_from(tag: &str) -> Result<Self, RequestError> {
+        Self::new(tag)
+    }
+}
+
+impl TryFrom<String> for Tag {
+    type Error = RequestError;
+
+    fn try_from(tag: String) -> Result<Self, RequestError> {
+        Self::new(tag)
+    }
+}
+
+impl std::str::FromStr for Tag {
+    type Err = RequestError;
+
+    fn from_str(tag: &str) -> Result<Self, RequestError> {
+        Self::new(tag)
+    }
+}
+
 fn check_price(field: &'static str, p: Option<f64>) -> Result<(), RequestError> {
     match p {
         Some(v) if !v.is_finite() || v <= 0.0 => invalid(field, "must be finite and positive"),
@@ -378,8 +455,8 @@ fn push<T: std::fmt::Display>(
 /// A new order: `POST /orders/{variety}`, form-encoded
 /// (`kite:orders.md:58-103`).
 ///
-/// Build one with [`PlaceOrderRequest::new`], set any optional fields such as
-/// `price` or `tag`, and send it with
+/// Build one with [`PlaceOrderRequest::new`], which takes the required
+/// [`Tag`], set any optional fields such as `price`, and send it with
 /// [`Orders::place_order`](crate::kite::connect::api::Orders::place_order),
 /// whose documentation shows the whole flow, including what to do when a
 /// response is lost.
@@ -393,8 +470,22 @@ fn push<T: std::fmt::Display>(
 /// let mut req = PlaceOrderRequest::new(
 ///     OrderVariety::Regular, Exchange::NSE, "INFY", TransactionType::BUY,
 ///     OrderType::Market, Quantity::new(1).unwrap(), ProductType::CashAndCarry,
+///     Tag::new("rebalance42").unwrap(),
 /// );
 /// req.order_id = "151220000000000".into();
+/// ```
+///
+/// A placement without a tag does not compile: the tag is what links the
+/// order the broker registers back to this attempt when the response is
+/// lost, so it cannot be left out.
+///
+/// ```compile_fail
+/// # use manja::kite::connect::models::*;
+/// # use manja::kite::protocol::Quantity;
+/// let req = PlaceOrderRequest::new(
+///     OrderVariety::Regular, Exchange::NSE, "INFY", TransactionType::BUY,
+///     OrderType::Market, Quantity::new(1).unwrap(), ProductType::CashAndCarry,
+/// );
 /// ```
 ///
 /// [`Self::validate`] checks the protocol shape only: the route, identifiers,
@@ -436,12 +527,18 @@ pub struct PlaceOrderRequest {
     pub market_protection: Option<f64>,
     /// Automatic slicing above freeze quantity.
     pub autoslice: Option<bool>,
-    /// Optional tag, at most 20 ASCII letters and digits.
-    pub tag: Option<String>,
+    /// The tag the broker echoes on the order it registers
+    /// (`kite:orders.md:103`): the attempt's correlation anchor, required.
+    pub tag: Tag,
 }
 
 impl PlaceOrderRequest {
-    /// A request with `DAY` validity and no optional fields.
+    /// A request with `DAY` validity, the given tag and no optional fields.
+    /// Use one tag per attempt (see [`Tag`]).
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "the eight required fields of a placement; a builder would let one be left out"
+    )]
     pub fn new(
         variety: OrderVariety,
         exchange: Exchange,
@@ -450,6 +547,7 @@ impl PlaceOrderRequest {
         order_type: OrderType,
         quantity: crate::kite::protocol::Quantity,
         product: ProductType,
+        tag: Tag,
     ) -> Self {
         Self {
             variety,
@@ -469,7 +567,7 @@ impl PlaceOrderRequest {
             auction_number: None,
             market_protection: None,
             autoslice: None,
-            tag: None,
+            tag,
         }
     }
 
@@ -548,11 +646,7 @@ impl PlaceOrderRequest {
             (false, None) => {}
             (false, Some(_)) => return invalid("auction_number", "is only for auction orders"),
         }
-        if let Some(tag) = &self.tag
-            && (tag.is_empty() || tag.len() > 20 || !tag.bytes().all(|b| b.is_ascii_alphanumeric()))
-        {
-            return invalid("tag", "must be 1-20 ASCII letters or digits");
-        }
+        // The tag is valid by construction.
         Ok(())
     }
 
@@ -577,7 +671,7 @@ impl PlaceOrderRequest {
         push(&mut p, "auction_number", self.auction_number.as_ref());
         push(&mut p, "market_protection", self.market_protection);
         push(&mut p, "autoslice", self.autoslice);
-        push(&mut p, "tag", self.tag.as_ref());
+        p.push(("tag", self.tag.to_string()));
         p
     }
 }
