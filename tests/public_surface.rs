@@ -7,8 +7,8 @@
 #![allow(dead_code, unused_imports)]
 
 use manja::kite::connect::admission::{
-    Admission, AdmissionError, AdmissionGrant, AdmissionLimits, Priority, QuotaProfile, RateClass,
-    Window,
+    Admission, AdmissionError, AdmissionGrant, AdmissionLimits, Headroom, Priority, QuotaProfile,
+    RateClass, Window,
 };
 use manja::kite::connect::api::{
     Charges, Gtt, Margins, Market, MutualFunds, Orders, Portfolio, Session, User,
@@ -227,6 +227,17 @@ async fn signatures(c: &HTTPClient, h: &TickerHandle) {
         let _: AdmissionError = AdmissionError::NoStandardCapacity;
         grant.consume();
     }
+    // Headroom is a plain, copyable snapshot; both readers take the checked ID.
+    let room: Headroom = c.admission().headroom(RateClass::OrderPlacement);
+    let copy = room;
+    let _: (u32, u32, Option<std::time::Duration>, Option<u32>) = (
+        room.standard_now,
+        room.control_now,
+        room.next_slot_in,
+        room.day_remaining,
+    );
+    let _ = (format!("{copy:?}"), copy == room, Clone::clone(&room));
+    let _: u32 = c.admission().modifications_remaining(&id);
     let _: Result<Revision, CommandError> =
         h.subscribe([InstrumentToken::new(1)], Mode::Quote).await;
     let _: TickerStatus = h.status();

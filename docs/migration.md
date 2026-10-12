@@ -155,6 +155,7 @@ change and consolidated when the release is cut.
 
 | Area | New API |
 |---|---|
+| Headroom | `Admission::headroom(class)` returning `Headroom { standard_now, control_now, next_slot_in, day_remaining }` and `Admission::modifications_remaining(&order_id)`, advisory local-view snapshots (`contract.md` §3.6) |
 | Session expiry | `kite::protocol::SESSION_EXPIRY_IST` (06:00 IST) and `session_expires_at(issued_at)`, the next 06:00 IST strictly after the issue time, always available (`contract.md` §2.2) |
 | Wire forms | `kite::connect::wire::WireForm` with `method`, `endpoint`, `path`, `content_type`, `body_len`, `sha256`, `sha256_hex`, `Display` and `Debug`; `PlaceOrderRequest::wire`, `ModifyOrderRequest::wire(variety, &order_id)`, `PositionConversionRequest::wire`, `HoldingsAuthorisationRequest::wire`, `GttRequest::wire` and `wire_modification(trigger_id)`; `WireForm::cancel_order`, `delete_trigger`, `session_exchange` and `session_invalidation`. A mutation sends exactly the bytes its form renders (`contract.md` §2.1) |
 | Priority lanes | `Priority { Standard, Control }` in `kite::connect::admission`; `HTTPClient::with_priority(priority)` returns a client whose calls take that lane; `AdmissionLimits::with_control_reserve(class, per_second)` and `control_reserve(class)` for `B-HTTP-15`; `Admission::acquire_with_priority`; `AdmissionGrant::priority`; `AdmissionError::NoStandardCapacity`; the `priority` field on the `manja.http.operation` span and its `priority` domain (`contract.md` §2.1, `contract.md` §3.2, `contract.md` §3.6, `contract.md` §4.2) |

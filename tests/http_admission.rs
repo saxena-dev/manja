@@ -391,3 +391,195 @@ async fn a_reserve_covering_the_class_refuses_standard_calls_naming_the_bound() 
         .unwrap();
     assert_eq!(harness.requests().len(), 1);
 }
+
+// ---- headroom and modifications remaining: advisory, the local view -----
+
+use manja::kite::connect::admission::Headroom;
+use manja::kite::connect::models::{ModifyOrderRequest, OrderType};
+
+#[tokio::test(start_paused = true)]
+async fn headroom_agrees_with_the_next_admission_decision() {
+    let a = scope(AdmissionLimits::default());
+    let start = tokio::time::Instant::now();
+    let h = a.headroom(RateClass::Standard);
+    assert_eq!(
+        h,
+        Headroom {
+            standard_now: 8,
+            control_now: 10,
+            next_slot_in: None,
+            day_remaining: None,
+        }
+    );
+    // Reading reserves nothing: the same snapshot again.
+    assert_eq!(a.headroom(RateClass::Standard), h);
+    // Exactly standard_now Standard calls admit at once; the next waits.
+    for n in (1..=h.standard_now).rev() {
+        assert_eq!(a.headroom(RateClass::Standard).standard_now, n);
+        admit(&a, Priority::Standard, RateClass::Standard).await;
+    }
+    assert_eq!(start.elapsed(), Duration::ZERO);
+    let h = a.headroom(RateClass::Standard);
+    assert_eq!(h.standard_now, 0);
+    assert_eq!(h.control_now, 2, "the reserve is what Control has left");
+    let wait = h.next_slot_in.expect("a window is full");
+    assert_eq!(wait, Duration::from_secs(1));
+    let ninth = a.acquire_with_priority(Priority::Standard, RateClass::Standard, None, WAIT);
+    assert!(
+        tokio::time::timeout(wait - Duration::from_millis(1), ninth)
+            .await
+            .is_err(),
+        "the ninth Standard call waits"
+    );
+    // Control still admits its two, and then reports none.
+    admit(&a, Priority::Control, RateClass::Standard).await;
+    admit(&a, Priority::Control, RateClass::Standard).await;
+    assert_eq!(a.headroom(RateClass::Standard).control_now, 0);
+    // Advancing the clock by the hint makes a Standard slot appear.
+    tokio::time::advance(Duration::from_millis(1)).await;
+    assert_eq!(start.elapsed(), wait);
+    let h = a.headroom(RateClass::Standard);
+    assert!(h.standard_now >= 1, "{h:?}");
+    assert_eq!(h.next_slot_in, None);
+    let before = tokio::time::Instant::now();
+    admit(&a, Priority::Standard, RateClass::Standard).await;
+    assert_eq!(before.elapsed(), Duration::ZERO);
+    // A grant dropped unconsumed gives its slot back.
+    let h = a.headroom(RateClass::Standard);
+    let grant = a
+        .acquire_with_priority(Priority::Standard, RateClass::Standard, None, WAIT)
+        .await
+        .unwrap();
+    assert_eq!(
+        a.headroom(RateClass::Standard).standard_now,
+        h.standard_now - 1
+    );
+    drop(grant);
+    assert_eq!(a.headroom(RateClass::Standard), h);
+}
+
+#[tokio::test(start_paused = true)]
+async fn headroom_reports_equal_lanes_without_a_reserve_and_none_when_covered() {
+    let a = scope(
+        AdmissionLimits::default()
+            .with_control_reserve(RateClass::Standard, 0)
+            .unwrap()
+            .with_control_reserve(RateClass::Quote, 1)
+            .unwrap(),
+    );
+    let h = a.headroom(RateClass::Standard);
+    assert_eq!((h.standard_now, h.control_now), (10, 10));
+    // A reserve at the window rate: the Standard lane never admits, so no
+    // slot is ever announced, while Control has the whole rate.
+    let h = a.headroom(RateClass::Quote);
+    assert_eq!(h.standard_now, 0);
+    assert_eq!(h.control_now, 1);
+    assert_eq!(h.next_slot_in, None);
+    admit(&a, Priority::Control, RateClass::Quote).await;
+    assert_eq!(a.headroom(RateClass::Quote).control_now, 0);
+    assert_eq!(a.headroom(RateClass::Quote).next_slot_in, None);
+}
+
+#[tokio::test(start_paused = true)]
+async fn day_remaining_counts_placements_down_to_the_ceiling() {
+    let profile = QuotaProfile::kite_v3()
+        .with_version("t")
+        .with_daily_order_ceiling(3)
+        .unwrap();
+    let a = Admission::new(profile, AdmissionLimits::default());
+    assert_eq!(a.headroom(RateClass::Standard).day_remaining, None);
+    assert_eq!(a.headroom(RateClass::OrderModification).day_remaining, None);
+    let h = a.headroom(RateClass::OrderPlacement);
+    assert_eq!(h.day_remaining, Some(3));
+    assert_eq!(
+        (h.standard_now, h.control_now),
+        (10, 10),
+        "no reserve by default"
+    );
+    for left in [2, 1, 0] {
+        admit(&a, Priority::Standard, RateClass::OrderPlacement).await;
+        assert_eq!(
+            a.headroom(RateClass::OrderPlacement).day_remaining,
+            Some(left)
+        );
+    }
+    // The ceiling refuses both lanes, and no window frees it.
+    let h = a.headroom(RateClass::OrderPlacement);
+    assert_eq!(
+        h,
+        Headroom {
+            standard_now: 0,
+            control_now: 0,
+            next_slot_in: None,
+            day_remaining: Some(0),
+        }
+    );
+    assert_eq!(
+        a.acquire_with_priority(Priority::Control, RateClass::OrderPlacement, None, WAIT)
+            .await
+            .unwrap_err(),
+        AdmissionError::DailyCeilingReached
+    );
+}
+
+#[tokio::test(start_paused = true)]
+async fn modifications_remaining_counts_each_order_down_from_the_limit() {
+    let a = scope(AdmissionLimits::default());
+    let order_a = OrderId::new("151220000000000").unwrap();
+    let order_b = OrderId::new("151220000000001").unwrap();
+    assert_eq!(a.modifications_remaining(&order_a), 25);
+    for _ in 0..2 {
+        a.acquire_with_priority(
+            Priority::Standard,
+            RateClass::OrderModification,
+            Some(order_a.as_str()),
+            WAIT,
+        )
+        .await
+        .unwrap()
+        .consume();
+    }
+    assert_eq!(a.modifications_remaining(&order_a), 23);
+    assert_eq!(a.modifications_remaining(&order_b), 25, "per order");
+    // A grant dropped unconsumed is not a modification.
+    let g = a
+        .acquire_with_priority(
+            Priority::Standard,
+            RateClass::OrderModification,
+            Some(order_a.as_str()),
+            WAIT,
+        )
+        .await
+        .unwrap();
+    assert_eq!(a.modifications_remaining(&order_a), 22);
+    drop(g);
+    assert_eq!(a.modifications_remaining(&order_a), 23);
+}
+
+#[tokio::test]
+async fn two_modifications_through_the_client_leave_twenty_three() {
+    let modify = fixtures::json_body("order_modify.json").unwrap();
+    let harness = HttpHarness::start(vec![Reply::json(modify.clone()), Reply::json(modify)]).await;
+    let client = HTTPClient::builder(Config::new(&*harness.base_url()))
+        .credentials(Credentials::new("k", "t").unwrap())
+        .build()
+        .unwrap();
+    let order = OrderId::new("151220000000000").unwrap();
+    let request = ModifyOrderRequest {
+        order_type: Some(OrderType::Market),
+        ..Default::default()
+    };
+    assert_eq!(client.admission().modifications_remaining(&order), 25);
+    for _ in 0..2 {
+        client
+            .orders()
+            .modify_order(OrderVariety::Regular, &order, &request)
+            .await
+            .unwrap();
+    }
+    assert_eq!(harness.requests().len(), 2);
+    assert_eq!(client.admission().modifications_remaining(&order), 23);
+    let h = client.admission().headroom(RateClass::OrderModification);
+    assert_eq!(h.standard_now, 8, "two of the second's ten slots are used");
+    assert_eq!(h.day_remaining, None);
+}

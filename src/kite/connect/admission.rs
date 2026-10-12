@@ -52,6 +52,7 @@ use std::time::Duration;
 use tokio::time::Instant;
 
 use crate::kite::obs::schema::{Endpoint, Method, PriorityLabel};
+use crate::kite::protocol::OrderId;
 
 /// Version of the default quota profile: the documentation page it encodes,
 /// the date that page was accessed, and a revision that increases whenever
@@ -449,6 +450,60 @@ impl AdmissionLimits {
         let slots = (reserve * window.period.as_millis()).div_ceil(1000);
         u32::try_from(slots).unwrap_or(u32::MAX)
     }
+
+    /// The lane's share of `window` in `class`: all of it for `Control`, the
+    /// limit minus the reserved slots for `Standard`.
+    fn lane_share(&self, class: RateClass, window: Window, priority: Priority) -> u32 {
+        match priority {
+            Priority::Control => window.limit,
+            Priority::Standard => window
+                .limit
+                .saturating_sub(self.reserved_slots(class, window)),
+        }
+    }
+}
+
+/// A snapshot of one class's admission capacity, from [`Admission::headroom`].
+///
+/// Advisory and the local view: capacity can be taken between the read and
+/// the call, and the scope cannot see other processes or the Kite app.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Headroom {
+    /// `Standard`-lane admissions the class would grant at this instant: its
+    /// windows' Standard shares minus the live admissions, the smallest
+    /// window deciding. 0 when the daily ceiling is spent.
+    pub standard_now: u32,
+    /// `Control`-lane admissions the class would grant at this instant: the
+    /// whole window rate minus the live admissions. 0 when the daily
+    /// ceiling is spent.
+    pub control_now: u32,
+    /// When `standard_now` is 0 because a window is full: the time until the
+    /// `Standard` lane next has a slot. `None` when a slot is available now,
+    /// when the daily ceiling is spent (no window frees it), and when the
+    /// control reserve covers a window's rate, so the `Standard` lane can
+    /// never be admitted in this class.
+    pub next_slot_in: Option<Duration>,
+    /// Placements left under the daily ceiling for `OrderPlacement`; `None`
+    /// for every other class, which has no daily ceiling.
+    pub day_remaining: Option<u32>,
+}
+
+/// Drop the entries of `log` older than `period`.
+fn purge_expired(log: &mut VecDeque<(u64, Instant)>, now: Instant, period: Duration) {
+    while log
+        .front()
+        .is_some_and(|(_, t)| now.duration_since(*t) >= period)
+    {
+        log.pop_front();
+    }
+}
+
+/// When a lane whose share of the window is `share` next has a slot, or
+/// `None` if it has one now: the lane has a slot once the log is below its
+/// share, when the (len - share + 1)-th oldest entry ages out.
+fn lane_frees_at(log: &VecDeque<(u64, Instant)>, share: u32, period: Duration) -> Option<Instant> {
+    let share = share as usize;
+    (log.len() >= share).then(|| log[log.len() - share].1 + period)
 }
 
 /// Why admission did not grant capacity.
@@ -656,6 +711,118 @@ impl Admission {
         (self.0.clock.unix_seconds() + IST_OFFSET_SECONDS).div_euclid(86_400)
     }
 
+    /// The state, locked, with the day counters reset when the IST day has
+    /// changed since they were last touched.
+    fn lock_today(&self) -> std::sync::MutexGuard<'_, State> {
+        let today = self.ist_day();
+        let mut state = self.0.state.lock().unwrap_or_else(|e| e.into_inner());
+        if state.day.day != today {
+            state.day = DayState {
+                day: today,
+                ..Default::default()
+            };
+        }
+        state
+    }
+
+    /// A snapshot of `class`'s capacity now: what each lane would be granted
+    /// at this instant, when the `Standard` lane next has a slot if it has
+    /// none, and the placements left under the daily ceiling.
+    ///
+    /// Advisory, and the local view: capacity can be taken between this
+    /// read and the call that follows, and the scope cannot see other
+    /// processes, other SDK instances or the Kite app, whose orders count
+    /// against the same limits (`kite:exceptions.md:45-58`). Reading never
+    /// reserves anything. The snapshot agrees with the next admission decision
+    /// in this scope on the windows and the daily ceiling: if it reports `n`
+    /// on a lane, `n` calls on that lane admit at once and the next one waits
+    /// or is refused, subject for `OrderModification` to the order's own
+    /// limit, which [`Self::modifications_remaining`] reads.
+    ///
+    /// ```
+    /// use manja::kite::connect::admission::{Admission, RateClass};
+    ///
+    /// let admission = Admission::default();
+    /// let h = admission.headroom(RateClass::Standard);
+    /// // 10 per second, 2 of them reserved for the Control lane.
+    /// assert_eq!((h.standard_now, h.control_now), (8, 10));
+    /// assert_eq!(h.next_slot_in, None);
+    /// assert_eq!(h.day_remaining, None);
+    /// assert_eq!(admission.headroom(RateClass::OrderPlacement).day_remaining, Some(5000));
+    /// ```
+    pub fn headroom(&self, class: RateClass) -> Headroom {
+        let now = Instant::now();
+        let windows = self.0.profile.windows(class);
+        let mut state = self.lock_today();
+        let day_remaining = match class {
+            RateClass::OrderPlacement => Some(
+                self.0
+                    .profile
+                    .daily_order_ceiling
+                    .saturating_sub(state.day.placements),
+            ),
+            _ => None,
+        };
+        let mut standard_now = u32::MAX;
+        let mut control_now = u32::MAX;
+        let mut standard_never = false;
+        let mut next_slot: Option<Instant> = None;
+        for (i, w) in windows.iter().enumerate() {
+            let log = state.windows.entry((class, i)).or_default();
+            purge_expired(log, now, w.period);
+            let live = log.len() as u32;
+            let control_share = self.0.limits.lane_share(class, *w, Priority::Control);
+            let standard_share = self.0.limits.lane_share(class, *w, Priority::Standard);
+            control_now = control_now.min(control_share.saturating_sub(live));
+            if standard_share == 0 {
+                standard_never = true;
+                standard_now = 0;
+                continue;
+            }
+            standard_now = standard_now.min(standard_share.saturating_sub(live));
+            if let Some(frees) = lane_frees_at(log, standard_share, w.period) {
+                next_slot = Some(next_slot.map_or(frees, |n: Instant| n.max(frees)));
+            }
+        }
+        if day_remaining == Some(0) {
+            // The ceiling refuses both lanes, and no window frees it.
+            standard_now = 0;
+            control_now = 0;
+            next_slot = None;
+        }
+        let next_slot_in = if standard_now == 0 && !standard_never {
+            next_slot.map(|t| t.saturating_duration_since(now))
+        } else {
+            None
+        };
+        Headroom {
+            standard_now,
+            control_now,
+            next_slot_in,
+            day_remaining,
+        }
+    }
+
+    /// Modifications `order_id` may still make today under the profile's
+    /// per-order limit, as this scope has counted them. Advisory and the
+    /// local view, like [`Self::headroom`]: a modification sent by another
+    /// process or the Kite app is not counted here.
+    pub fn modifications_remaining(&self, order_id: &OrderId) -> u32 {
+        let state = self.lock_today();
+        let limit = self.0.profile.modifications_per_order;
+        match state.day.modifications.get(order_id.as_str()) {
+            Some(used) => limit.saturating_sub(*used),
+            // An untracked order can only be tracked while the table, bounded
+            // by the daily ceiling of orders, has room.
+            None if state.day.modifications.len()
+                >= self.0.profile.daily_order_ceiling as usize =>
+            {
+                0
+            }
+            None => limit,
+        }
+    }
+
     /// Wait at most `max_wait` (itself capped at the configured admission
     /// wait) for capacity in `class` on the `Standard` lane. `order_id`
     /// identifies the order of a modification, for the per-order limit.
@@ -716,15 +883,8 @@ impl Admission {
         order_id: Option<&str>,
     ) -> Result<Result<AdmissionGrant, Instant>, AdmissionError> {
         let now = Instant::now();
-        let today = self.ist_day();
         let windows = self.0.profile.windows(class);
-        let mut state = self.0.state.lock().unwrap_or_else(|e| e.into_inner());
-        if state.day.day != today {
-            state.day = DayState {
-                day: today,
-                ..Default::default()
-            };
-        }
+        let mut state = self.lock_today();
         match class {
             RateClass::OrderPlacement
                 if state.day.placements >= self.0.profile.daily_order_ceiling =>
@@ -748,29 +908,13 @@ impl Admission {
         }
         let mut ready_at = None;
         for (i, w) in windows.iter().enumerate() {
-            // The lane's share of the window: all of it for `Control`, the
-            // limit minus the reserved slots for `Standard`.
-            let share = match priority {
-                Priority::Control => w.limit,
-                Priority::Standard => w
-                    .limit
-                    .saturating_sub(self.0.limits.reserved_slots(class, *w)),
-            };
+            let share = self.0.limits.lane_share(class, *w, priority);
             if share == 0 {
                 return Err(AdmissionError::NoStandardCapacity);
             }
             let log = state.windows.entry((class, i)).or_default();
-            while log
-                .front()
-                .is_some_and(|(_, t)| now.duration_since(*t) >= w.period)
-            {
-                log.pop_front();
-            }
-            let share = share as usize;
-            if log.len() >= share {
-                // The lane has a slot once the log is below its share: when
-                // the (len - share + 1)-th oldest entry ages out.
-                let frees = log[log.len() - share].1 + w.period;
+            purge_expired(log, now, w.period);
+            if let Some(frees) = lane_frees_at(log, share, w.period) {
                 ready_at = Some(ready_at.map_or(frees, |r: Instant| r.max(frees)));
             }
         }

@@ -574,6 +574,25 @@ documented rate. A lane whose share is full waits like any other request, under
 `B-HTTP-06`. The reserve is a local view: it cannot keep capacity from other processes
 or the Kite app.
 
+Capacity is readable. `Admission::headroom(class)` returns a `Headroom` snapshot:
+`standard_now` and `control_now`, the admissions each lane would be granted at that
+instant (each window's lane share minus its live admissions, the smallest window
+deciding; both 0 once the daily ceiling is spent); `next_slot_in`, the time until the
+`Standard` lane next has a slot when it has none, and `None` when it has one now, when
+the ceiling is spent (no window frees it) or when the control reserve covers a window's
+rate (the lane can never be admitted); and `day_remaining`, the placements left under
+the daily ceiling for `OrderPlacement` and `None` for every other class.
+`Admission::modifications_remaining(&order_id)` is the modifications that order may
+still make today under the per-order limit. Both are **advisory** and the **local
+view**: reading reserves nothing, capacity can be taken between the read and the call,
+and the scope cannot see other processes, other SDK instances or the Kite app, whose
+orders count against the same limits (`kite:exceptions.md:45-58`; the daily ceiling is
+per user and API key, `kite:exceptions.md:57`). Within one scope the snapshot agrees
+with the next admission decision on the windows and the daily ceiling: if a lane reports
+`n`, `n` calls on it admit at once and the next waits or is refused, subject for
+`OrderModification` to the order's own limit, which `modifications_remaining` reads. There
+is no reserving variant.
+
 ---
 
 ## 4. Observability schema
@@ -732,6 +751,7 @@ These choices are not dictated by the Kite documentation alone.
 | Ticker price scale | Currency derivatives (CDS) divide by 10 000 000; NSE, NFO, BSE, BFO, MCX, MCXSX and indices divide by 100. The BSE currency segment (BCD) is refused | The documentation gives 10 000 000 for currencies and 100 for everything else (`kite:websocket.md:89`); nothing establishes a separate BCD scale, and the segment cannot be read from the token, so the caller supplies it |
 | Handshake rejection | A 401 or 403 WebSocket handshake ends the ticker with `AuthRejected` | Retrying rejected credentials cannot succeed and would only repeat the rejection |
 | Quota enforcement | Every documented window is enforced locally by default (§3.6) | Exceeding them is a documented broker error (`kite:exceptions.md:39`) |
+| Headroom | Admission capacity is readable as an advisory, local-view snapshot per class and lane, plus the modifications an order has left; a spent daily ceiling zeroes both lanes and announces no next slot, and a lane the reserve covers announces none either (§3.6) | A caller that can only learn capacity by being refused pays a refusal for every full window. A snapshot that agrees with the next decision lets it order its own work, and saying "advisory, local view" keeps the account-wide limit, which includes manual orders, where it belongs: with the caller. A reserving read would be the dispatch permit by another name |
 | Session expiry | The 6 AM expiry is taken as IST, and a token expires at the next 06:00 IST strictly after its issue time: an issue at exactly 06:00:00 expires the next day, an issue before 06:00 expires that same morning (§2.2) | Kite's one sentence (`kite:user.md:115`) names no zone and says "the next day"; every documented Kite time is IST, and a caller that injects the issue time needs one boundary rule with no gap, so the next boundary after the instant is the reading the function implements |
 | Responses | `Response<T> { data: T, meta }` replaces the 0.2 envelope on every JSON endpoint; the `status` and `error_type` fields are gone and `data` is not optional (§2.18) | A success type with an `Option` inside makes every caller write a panic path or a fallback for a case the SDK promises cannot happen, and a fallback such as an empty order book is exactly the silent failure the crate exists to prevent. Fields that are constant on success are not data. Order rows keep every broker quantity and status field as reported so a caller can tell a partial fill from a terminal partially filled order; the SDK never collapses them |
 | Wire forms | Every mutation renders a `WireForm` before it is sent and sends exactly those bytes; the forms of the two session operations exist but never render their token or checksum: the marker `<redacted>` stands in for each (§2.1) | An application that shows a person a compiled order and later journals what was sent needs the two to be provably the same bytes, and the hash of the form gives that without a second entry point. The session forms are included so every mutation has one; their bodies necessarily carry the documented token fields, so they render redacted and expose their bytes only through the hash and the send |
