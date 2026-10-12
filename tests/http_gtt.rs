@@ -669,3 +669,70 @@ fn a_zero_last_price_is_accepted() {
     r.last_price = 0.0;
     assert_eq!(r.validate(), Ok(()));
 }
+
+// ---- wire forms --------------------------------------------------------
+
+fn sha(bytes: &[u8]) -> [u8; 32] {
+    use sha2::Digest;
+    sha2::Sha256::digest(bytes).into()
+}
+
+fn assert_sent_exactly(r: &RecordedRequest, wire: &manja::kite::connect::wire::WireForm) {
+    assert_eq!(r.method, wire.method().as_str());
+    assert_eq!(r.target, wire.path());
+    assert_eq!(r.header("content-type"), wire.content_type());
+    assert_eq!(sha(&r.body), wire.sha256());
+    assert_eq!(String::from_utf8(r.body.clone()).unwrap(), wire.to_string());
+}
+
+#[tokio::test]
+async fn gtt_mutations_send_exactly_their_wire_forms() {
+    use manja::kite::connect::wire::WireForm;
+    let h = HttpHarness::start(vec![
+        Reply::json(fixtures::json_body("gtt_place_order.json").unwrap()),
+        Reply::json(fixtures::json_body("gtt_modify_order.json").unwrap()),
+        Reply::json(fixtures::json_body("gtt_delete_order.json").unwrap()),
+    ])
+    .await;
+    let c = client(&h.base_url());
+    let two_leg = GttRequest::two_leg(
+        Exchange::NSE,
+        "INFY",
+        [702.0, 798.0],
+        750.0,
+        [buy(702.5), buy(798.5)],
+    );
+    let place = two_leg.wire().unwrap();
+    c.gtt().place_trigger(&two_leg).await.unwrap();
+    let modify = single().wire_modification(123).unwrap();
+    c.gtt().modify_trigger(123, &single()).await.unwrap();
+    let delete = WireForm::delete_trigger(123);
+    c.gtt().delete_trigger(123).await.unwrap();
+    let [r1, r2, r3] = h.requests().try_into().unwrap();
+    assert_sent_exactly(&r1, &place);
+    assert_sent_exactly(&r2, &modify);
+    assert_sent_exactly(&r3, &delete);
+    // The JSON-valued fields are inside the form body, percent-encoded as
+    // sent, and decode back to the documented condition and orders.
+    let fields = form(place.to_string().as_bytes());
+    assert_eq!(fields[0], ("type".to_string(), "two-leg".to_string()));
+    let condition: serde_json::Value = serde_json::from_str(&fields[1].1).unwrap();
+    assert_eq!(
+        condition["trigger_values"],
+        serde_json::json!([702.0, 798.0])
+    );
+    let orders: serde_json::Value = serde_json::from_str(&fields[2].1).unwrap();
+    assert_eq!(orders.as_array().unwrap().len(), 2);
+    assert_eq!(modify.path(), "/gtt/triggers/123");
+    assert_eq!(delete.body_len(), 0);
+    assert_eq!(delete.content_type(), None);
+    // Determinism, JSON fields included.
+    for _ in 0..100 {
+        assert_eq!(two_leg.wire().unwrap().sha256(), place.sha256());
+        assert_eq!(
+            single().wire_modification(123).unwrap().sha256(),
+            modify.sha256()
+        );
+    }
+    assert_ne!(place.sha256(), single().wire().unwrap().sha256());
+}

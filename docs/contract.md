@@ -76,7 +76,29 @@ a mark replaces the default in either direction. The SDK never decides which tra
 is control: it honours the mark and keeps the reserve (`B-HTTP-15`).
 Order placement, modification and conversion, and GTT placement and modification, take
 dedicated request types and are form-encoded (`kite:response-structure.md:2`); margin and charge calculations are JSON
-(`kite:margins.md:13`). Quote requests above the documented key limits (500 for
+(`kite:margins.md:13`).
+A mutation sends exactly the bytes its `wire()` returns. Every mutation has a wire form,
+`kite::connect::wire::WireForm`: the HTTP method, the endpoint template, the request
+path with its segments filled in, the content type and the exact form-encoded body.
+`PlaceOrderRequest::wire()`, `ModifyOrderRequest::wire(variety, &order_id)`,
+`PositionConversionRequest::wire()`, `HoldingsAuthorisationRequest::wire()`,
+`GttRequest::wire()` (placement) and `GttRequest::wire_modification(trigger_id)` validate
+the request first and return the form or the `Validation` error the call would return;
+the mutations without a request type come from `WireForm::cancel_order(variety,
+&order_id)`, `WireForm::delete_trigger(trigger_id)`, `WireForm::session_exchange(...)` and
+`WireForm::session_invalidation(...)`. The call builds the same form and copies its path,
+query, content type and body into the request, so `sha256(body as received by Kite) ==
+wire.sha256()` for every mutation; a mutation with no body (cancellation, GTT deletion,
+session invalidation, an entire-holdings authorisation) sends no `Content-Type` and
+hashes the empty body. `Display` renders the body as Kite receives it, for example
+`tradingsymbol=INFY&exchange=NSE&...`; `sha256()` is the raw digest and `sha256_hex()`
+its hex. A `WireForm` holds no credential type and no header: the `Authorization` header
+is attached at send time and is never part of it, and no accessor returns the body bytes;
+they leave the form only through `Display`, the hash and the send. The two session forms
+carry the documented `request_token` and `checksum` fields or `access_token` query
+(§2.2): the exchange form's `Display` and `Debug` print `<redacted>` for `request_token`
+and `checksum`; the invalidation form has no body, so its `Display` is empty, and its
+`Debug` prints the query with `access_token` as `<redacted>`. Quote requests above the documented key limits (500 for
 `/quote`, 1000 for OHLC and LTP, `kite:market-quotes.md:272-278`) are rejected before
 sending, never truncated.
 
@@ -86,8 +108,8 @@ sending, never truncated.
 
 | Operation | Contract |
 |---|---|
-| `exchange(&RequestToken, &ApiSecret)` | `POST /session/token` with `api_key`, `request_token` and `checksum` = SHA-256 hex of `api_key + request_token + api_secret` (`kite:user.md:97-99`). The secret is borrowed for the call and never sent, stored or logged. Returns a `UserSession` whose tokens are secret-wrapped |
-| `invalidate(&AccessToken)` | `DELETE /session/token` for the session's API key (`kite:user.md:295-310`). Takes no API secret |
+| `exchange(&RequestToken, &ApiSecret)` | `POST /session/token` with `api_key`, `request_token` and `checksum` = SHA-256 hex of `api_key + request_token + api_secret` (`kite:user.md:97-99`). The secret is borrowed for the call and never sent, stored or logged. Returns a `UserSession` whose tokens are secret-wrapped. The request is `WireForm::session_exchange(&api_key, &request_token, &api_secret)`, whose `Display` and `Debug` redact the token and the checksum (§2.1) |
+| `invalidate(&AccessToken)` | `DELETE /session/token` for the session's API key (`kite:user.md:295-310`). Takes no API secret. The request is `WireForm::session_invalidation(&api_key, &access_token)`: no body (so an empty `Display`), the two query parameters, the access token redacted in `Debug` |
 | Attempts | Exactly one transport attempt within the session deadline (`B-HTTP-11`). No retry after a 429, a lost response, a timeout or cancellation |
 | Side effects | None beyond the request: nothing is persisted, and no client has a token installed or cleared |
 
@@ -679,6 +701,7 @@ These choices are not dictated by the Kite documentation alone.
 | Ticker price scale | Currency derivatives (CDS) divide by 10 000 000; NSE, NFO, BSE, BFO, MCX, MCXSX and indices divide by 100. The BSE currency segment (BCD) is refused | The documentation gives 10 000 000 for currencies and 100 for everything else (`kite:websocket.md:89`); nothing establishes a separate BCD scale, and the segment cannot be read from the token, so the caller supplies it |
 | Handshake rejection | A 401 or 403 WebSocket handshake ends the ticker with `AuthRejected` | Retrying rejected credentials cannot succeed and would only repeat the rejection |
 | Quota enforcement | Every documented window is enforced locally by default (§3.6) | Exceeding them is a documented broker error (`kite:exceptions.md:39`) |
+| Wire forms | Every mutation renders a `WireForm` before it is sent and sends exactly those bytes; the forms of the two session operations exist but never render their token or checksum: the marker `<redacted>` stands in for each (§2.1) | An application that shows a person a compiled order and later journals what was sent needs the two to be provably the same bytes, and the hash of the form gives that without a second entry point. The session forms are included so every mutation has one; their bodies necessarily carry the documented token fields, so they render redacted and expose their bytes only through the hash and the send |
 | Priority lanes | Two caller-selected lanes per quota class with a control reserve (`B-HTTP-15`, §2.1, §3.6); order cancellation and GTT deletion default to `Control`, and the mark is made per call through `HTTPClient::with_priority` rather than as a parameter on every method | Cancellation and the reads that confirm it share one transport with polling, and an in-flight request cannot be recalled, so a reserve that `Standard` traffic may never take is the only honest form of priority. Which reads are urgent is known only to the application, so the mark is per call and the SDK never decides it. A derived client keeps every method's signature unchanged |
 | Oversized quote requests | Rejected before sending, never split or truncated | A split would return several snapshots taken at different times as one result |
 | Endpoint support | Holdings auctions and the order charges calculation stay supported | Both are documented read or calculation endpoints with official fixtures |

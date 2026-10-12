@@ -28,13 +28,11 @@
 //! in the SDK calls these operations implicitly: not ordinary requests, not
 //! the ticker's reconnects, not shutdown and not `Drop`.
 //!
-use secrecy::Secret;
-
 use crate::kite::connect::{
     client::HTTPClient,
     credentials::{AccessToken, ApiKey, ApiSecret, RequestToken},
     models::{KiteApiResponse, UserSession},
-    utils::create_checksum,
+    wire::WireForm,
 };
 use crate::kite::error::Result;
 
@@ -92,27 +90,16 @@ impl<'c> Session<'c> {
 
     /// Exchange a request token for an access token: one attempt.
     ///
-    /// The API secret is borrowed for the checksum only.
+    /// The API secret is borrowed for the checksum only. The request is
+    /// [`WireForm::session_exchange`], sent without an `Authorization`
+    /// header.
     pub async fn exchange(
         &self,
         request_token: &RequestToken,
         api_secret: &ApiSecret,
     ) -> Result<KiteApiResponse<UserSession>> {
-        // Operation-scoped: dropped (and zeroized) when this call ends.
-        let checksum = Secret::new(create_checksum(
-            self.api_key.as_str(),
-            request_token.expose_secret(),
-            api_secret.expose_secret(),
-        ));
-        use secrecy::ExposeSecret;
-        let pairs = vec![
-            ("api_key", self.api_key.as_str().to_string()),
-            ("request_token", request_token.expose_secret().to_string()),
-            ("checksum", checksum.expose_secret().clone()),
-        ];
-        self.client
-            .send_form_unauthenticated(reqwest::Method::POST, "/session/token", pairs)
-            .await
+        let wire = WireForm::session_exchange(&self.api_key, request_token, api_secret);
+        self.client.send_wire(Ok(wire), None, false).await
     }
 
     /// Invalidate the session of `access_token` for this API key: one
@@ -127,12 +114,7 @@ impl<'c> Session<'c> {
     /// # }
     /// ```
     pub async fn invalidate(&self, access_token: &AccessToken) -> Result<KiteApiResponse<bool>> {
-        let query = [
-            ("api_key", self.api_key.as_str()),
-            ("access_token", access_token.expose_secret()),
-        ];
-        self.client
-            .delete_unauthenticated("/session/token", &query)
-            .await
+        let wire = WireForm::session_invalidation(&self.api_key, access_token);
+        self.client.send_wire(Ok(wire), None, false).await
     }
 }

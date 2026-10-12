@@ -216,3 +216,51 @@ fn authorisation_is_a_standard_class_mutation() {
         "/portfolio/holdings/authorise"
     );
 }
+
+// ---- wire forms --------------------------------------------------------
+
+fn sha(bytes: &[u8]) -> [u8; 32] {
+    use sha2::Digest;
+    sha2::Sha256::digest(bytes).into()
+}
+
+#[tokio::test]
+async fn authorisation_sends_exactly_its_wire_form() {
+    let h = HttpHarness::start(vec![
+        Reply::json(fixtures::json_body("holdings_auth.json").unwrap()),
+        Reply::json(fixtures::json_body("holdings_auth.json").unwrap()),
+    ])
+    .await;
+    let c = client(&h.base_url());
+    let named = two_isins().wire().unwrap();
+    c.portfolio()
+        .authorise_holdings(&two_isins())
+        .await
+        .unwrap();
+    let all = HoldingsAuthorisationRequest::all().wire().unwrap();
+    c.portfolio()
+        .authorise_holdings(&HoldingsAuthorisationRequest::all())
+        .await
+        .unwrap();
+    let [r1, r2] = h.requests().try_into().unwrap();
+    for (r, wire) in [(&r1, &named), (&r2, &all)] {
+        assert_eq!(r.method, wire.method().as_str());
+        assert_eq!(r.target, wire.path());
+        assert_eq!(r.header("content-type"), wire.content_type());
+        assert_eq!(sha(&r.body), wire.sha256());
+        assert_eq!(String::from_utf8(r.body.clone()).unwrap(), wire.to_string());
+    }
+    assert_eq!(
+        named.to_string(),
+        "isin=INE002A01018&quantity=50&isin=INE009A01021&quantity=50"
+    );
+    assert_eq!(all.body_len(), 0);
+    assert_eq!(all.content_type(), None);
+    assert_ne!(named.sha256(), all.sha256());
+    assert!(
+        HoldingsAuthorisationRequest::all()
+            .with("bad", Quantity::new(1).unwrap())
+            .wire()
+            .is_err()
+    );
+}

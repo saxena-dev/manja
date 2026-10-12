@@ -21,6 +21,7 @@ use crate::kite::connect::{
     client::HTTPClient,
     models::{GttReceipt, GttRequest, GttTrigger, KiteApiResponse},
     scheduler::DispatchPermit,
+    wire::WireForm,
 };
 use crate::kite::error::Result;
 
@@ -74,7 +75,8 @@ impl<'c> Gtt<'c> {
     /// Place a GTT: `POST /gtt/triggers`, form-encoded.
     ///
     /// The request is validated first; an invalid one is a `Validation`
-    /// error and nothing is sent.
+    /// error and nothing is sent. The bytes sent are exactly those of
+    /// [`GttRequest::wire`].
     pub async fn place_trigger(&self, request: &GttRequest) -> Result<KiteApiResponse<GttReceipt>> {
         self.place(request, None).await
     }
@@ -94,19 +96,12 @@ impl<'c> Gtt<'c> {
         request: &GttRequest,
         permit: Option<DispatchPermit>,
     ) -> Result<KiteApiResponse<GttReceipt>> {
-        self.client
-            .send_form(
-                reqwest::Method::POST,
-                "/gtt/triggers",
-                request.validate(),
-                request.form_pairs(),
-                permit,
-            )
-            .await
+        self.client.send_wire(request.wire(), permit, true).await
     }
 
     /// Replace an active GTT: `PUT /gtt/triggers/{trigger_id}`, form-encoded
-    /// with the complete new trigger (`kite:gtt.md:373-393`).
+    /// with the complete new trigger (`kite:gtt.md:373-393`). The bytes sent
+    /// are exactly those of [`GttRequest::wire_modification`].
     pub async fn modify_trigger(
         &self,
         trigger_id: u64,
@@ -133,17 +128,12 @@ impl<'c> Gtt<'c> {
         permit: Option<DispatchPermit>,
     ) -> Result<KiteApiResponse<GttReceipt>> {
         self.client
-            .send_form(
-                reqwest::Method::PUT,
-                &format!("/gtt/triggers/{trigger_id}"),
-                request.validate(),
-                request.form_pairs(),
-                permit,
-            )
+            .send_wire(request.wire_modification(trigger_id), permit, true)
             .await
     }
 
-    /// Delete an active GTT: `DELETE /gtt/triggers/{trigger_id}`.
+    /// Delete an active GTT: `DELETE /gtt/triggers/{trigger_id}`. The request
+    /// is [`WireForm::delete_trigger`].
     pub async fn delete_trigger(&self, trigger_id: u64) -> Result<KiteApiResponse<GttReceipt>> {
         self.delete(trigger_id, None).await
     }
@@ -164,13 +154,7 @@ impl<'c> Gtt<'c> {
         permit: Option<DispatchPermit>,
     ) -> Result<KiteApiResponse<GttReceipt>> {
         self.client
-            .send_form(
-                reqwest::Method::DELETE,
-                &format!("/gtt/triggers/{trigger_id}"),
-                Ok(()),
-                Vec::new(),
-                permit,
-            )
+            .send_wire(Ok(WireForm::delete_trigger(trigger_id)), permit, true)
             .await
     }
 

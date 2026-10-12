@@ -529,3 +529,196 @@ async fn a_response_order_id_that_could_change_a_path_is_a_decode_error() {
         .unwrap_err();
     assert_eq!(err.as_http().unwrap().kind(), HttpErrorKind::Decode);
 }
+
+// ---- wire forms: the bytes sent are the bytes wire() renders -----------
+
+fn sha(bytes: &[u8]) -> [u8; 32] {
+    use sha2::Digest;
+    sha2::Sha256::digest(bytes).into()
+}
+
+/// The captured request is byte for byte the form, and the hashes agree.
+fn assert_sent_exactly(r: &RecordedRequest, wire: &manja::kite::connect::wire::WireForm) {
+    assert_eq!(r.method, wire.method().as_str());
+    assert_eq!(r.target, wire.path());
+    assert_eq!(r.header("content-type"), wire.content_type());
+    assert_eq!(r.body.len(), wire.body_len());
+    assert_eq!(sha(&r.body), wire.sha256());
+    let hex: String = sha(&r.body).iter().map(|b| format!("{b:02x}")).collect();
+    assert_eq!(hex, wire.sha256_hex());
+}
+
+#[tokio::test]
+async fn placement_sends_exactly_its_wire_form() {
+    let h = serve("order_response.json").await;
+    let request = limit_buy();
+    let wire = request.wire().unwrap();
+    client(&h.base_url())
+        .orders()
+        .place_order(&request)
+        .await
+        .unwrap();
+    let r = only(&h);
+    assert_sent_exactly(&r, &wire);
+    assert_eq!(String::from_utf8(r.body).unwrap(), wire.to_string());
+    assert_eq!(
+        wire.endpoint(),
+        manja::kite::obs::schema::Endpoint::OrdersVariety
+    );
+}
+
+#[tokio::test]
+async fn modification_sends_exactly_its_wire_form() {
+    let h = serve("order_modify.json").await;
+    let request = ModifyOrderRequest {
+        order_type: Some(OrderType::Limit),
+        price: Some(1021.5),
+        ..Default::default()
+    };
+    let wire = request
+        .wire(OrderVariety::Regular, &id("151220000000000"))
+        .unwrap();
+    client(&h.base_url())
+        .orders()
+        .modify_order(OrderVariety::Regular, &id("151220000000000"), &request)
+        .await
+        .unwrap();
+    let r = only(&h);
+    assert_sent_exactly(&r, &wire);
+    assert_eq!(wire.path(), "/orders/regular/151220000000000");
+    assert_eq!(wire.to_string(), "order_type=LIMIT&price=1021.5");
+}
+
+#[tokio::test]
+async fn cancellation_sends_exactly_its_wire_form_the_empty_body() {
+    use manja::kite::connect::wire::WireForm;
+    let h = serve("order_cancel.json").await;
+    let wire = WireForm::cancel_order(OrderVariety::Regular, &id("151220000000000"));
+    client(&h.base_url())
+        .orders()
+        .cancel_order(OrderVariety::Regular, &id("151220000000000"))
+        .await
+        .unwrap();
+    let r = only(&h);
+    assert_sent_exactly(&r, &wire);
+    assert_eq!(wire.body_len(), 0);
+    assert_eq!(wire.content_type(), None);
+    assert_eq!(wire.to_string(), "");
+    // SHA-256 of the empty string.
+    assert_eq!(
+        wire.sha256_hex(),
+        "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    );
+}
+
+#[tokio::test]
+async fn position_conversion_sends_exactly_its_wire_form() {
+    let h = serve("convert_position.json").await;
+    let request = PositionConversionRequest {
+        tradingsymbol: "INFY".into(),
+        exchange: Exchange::NSE,
+        transaction_type: TransactionType::BUY,
+        position_type: PositionType::Overnight,
+        quantity: Quantity::new(3).unwrap(),
+        old_product: ProductType::Normal,
+        new_product: ProductType::MarginIntradaySquareoff,
+    };
+    let wire = request.wire().unwrap();
+    let c = client(&h.base_url());
+    Portfolio::new(&c).convert_position(&request).await.unwrap();
+    let r = only(&h);
+    assert_sent_exactly(&r, &wire);
+    assert_eq!(String::from_utf8(r.body).unwrap(), wire.to_string());
+}
+
+#[test]
+fn wire_forms_are_deterministic() {
+    let request = limit_buy();
+    let first = request.wire().unwrap();
+    for _ in 0..100 {
+        let again = request.wire().unwrap();
+        assert_eq!(again.to_string(), first.to_string());
+        assert_eq!(again.sha256(), first.sha256());
+        assert_eq!(again.sha256_hex(), first.sha256_hex());
+        assert_eq!(again.path(), first.path());
+    }
+    // A clone renders the same bytes as the original.
+    let clone = request.clone();
+    assert_eq!(clone.wire().unwrap().sha256(), first.sha256());
+    // A different request renders different bytes.
+    let mut other = limit_buy();
+    other.price = Some(1021.75);
+    assert_ne!(other.wire().unwrap().sha256(), first.sha256());
+    let modify = ModifyOrderRequest {
+        price: Some(10.0),
+        ..Default::default()
+    };
+    let a = modify.wire(OrderVariety::Regular, &id("1")).unwrap();
+    let b = modify.wire(OrderVariety::Regular, &id("1")).unwrap();
+    assert_eq!((a.to_string(), a.sha256()), (b.to_string(), b.sha256()));
+}
+
+#[test]
+fn a_wire_form_renders_the_form_body_and_nothing_secret() {
+    let request = limit_buy();
+    let wire = request.wire().unwrap();
+    let shown = wire.to_string();
+    assert_eq!(
+        shown,
+        "tradingsymbol=INFY&exchange=NSE&transaction_type=BUY&order_type=LIMIT&quantity=1\
+         &product=CNC&validity=DAY&price=1500.5"
+    );
+    let debug = format!("{wire:?}");
+    for secret in ["api_key", "access_token", "Authorization", "token "] {
+        assert!(!shown.contains(secret), "{shown}");
+        assert!(!debug.contains(secret), "{debug}");
+    }
+    assert!(debug.contains(&shown), "Debug shows the same body");
+    assert!(debug.contains(&wire.sha256_hex()));
+    // The struct itself names no credential type.
+    let source = std::fs::read_to_string(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/src/kite/connect/wire.rs"
+    ))
+    .unwrap();
+    let fields = source
+        .split("pub struct WireForm {")
+        .nth(1)
+        .and_then(|s| s.split('}').next())
+        .unwrap();
+    for ty in [
+        "Credentials",
+        "AccessToken",
+        "ApiSecret",
+        "RequestToken",
+        "ApiKey",
+        "Secret",
+        "HeaderValue",
+    ] {
+        assert!(
+            !fields.contains(ty),
+            "WireForm field of type {ty}:\n{fields}"
+        );
+    }
+}
+
+#[test]
+fn an_invalid_request_has_no_wire_form() {
+    let mut request = limit_buy();
+    request.price = None;
+    let err = request.wire().unwrap_err();
+    assert_eq!(err.kind(), HttpErrorKind::Validation);
+    assert_eq!(err.stage(), TransportStage::NotStarted);
+    let modify = ModifyOrderRequest {
+        quantity: Some(Quantity::new(3).unwrap()),
+        ..Default::default()
+    };
+    // kite:orders.md:105-146: cover orders modify only price and trigger price.
+    assert_eq!(
+        modify
+            .wire(OrderVariety::Cover, &id("1"))
+            .unwrap_err()
+            .kind(),
+        HttpErrorKind::Validation
+    );
+}

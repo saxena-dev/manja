@@ -13,6 +13,8 @@
 //! - [`config`]: the API base URL and the runtime bounds.
 //! - [`scheduler`]: deadlines, retries and dispatch permits.
 //! - [`admission`]: local enforcement of Kite's rate limits.
+//! - [`wire`]: the exact bytes a mutation sends, inspectable before the
+//!   call and hashable after it.
 //!
 //! `credentials` and `models` are always available, because the ticker and
 //! the decoder use them too. Everything else needs the `http` feature.
@@ -38,3 +40,6 @@ pub mod scheduler;
 
 #[cfg(feature = "http")]
 mod utils;
+
+#[cfg(feature = "http")]
+pub mod wire;

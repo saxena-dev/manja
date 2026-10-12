@@ -303,3 +303,72 @@ async fn ordinary_calls_and_drop_never_touch_the_session_endpoint() {
     let targets: Vec<String> = h.requests().into_iter().map(|r| r.target).collect();
     assert_eq!(targets, ["/user/profile", "/user/margins"]);
 }
+
+// ---- wire forms --------------------------------------------------------
+
+fn sha(bytes: &[u8]) -> [u8; 32] {
+    use sha2::Digest;
+    sha2::Sha256::digest(bytes).into()
+}
+
+#[tokio::test]
+async fn session_operations_send_exactly_their_wire_forms_and_render_no_secret() {
+    use manja::kite::connect::wire::WireForm;
+    let h = HttpHarness::start(vec![
+        Reply::json(fixtures::json_body("generate_session.json").unwrap()),
+        Reply::json(fixtures::json_body("session_logout.json").unwrap()),
+    ])
+    .await;
+    let c = unauthenticated(&h.base_url());
+    let token = RequestToken::new(REQUEST_TOKEN).unwrap();
+    let secret = ApiSecret::new(SECRET).unwrap();
+    let exchange = WireForm::session_exchange(&key(), &token, &secret);
+    c.session(key()).exchange(&token, &secret).await.unwrap();
+    let access = AccessToken::new("target_token").unwrap();
+    let invalidate = WireForm::session_invalidation(&key(), &access);
+    c.session(key()).invalidate(&access).await.unwrap();
+    let [r1, r2] = h.requests().try_into().unwrap();
+
+    // Exchange: the captured body is the form's bytes, hash for hash.
+    assert_eq!(r1.method, "POST");
+    assert_eq!(r1.target, exchange.path());
+    assert_eq!(r1.header("content-type"), exchange.content_type());
+    assert_eq!(sha(&r1.body), exchange.sha256());
+    assert_eq!(
+        sha(
+            format!("api_key=test_api_key&request_token={REQUEST_TOKEN}&checksum={CHECKSUM}")
+                .as_bytes()
+        ),
+        exchange.sha256()
+    );
+    // Its rendering carries the field names but not the token or checksum.
+    let shown = exchange.to_string();
+    let debug = format!("{exchange:?}");
+    assert_eq!(
+        shown,
+        "api_key=test_api_key&request_token=<redacted>&checksum=<redacted>"
+    );
+    for s in [REQUEST_TOKEN, CHECKSUM, SECRET] {
+        assert!(!shown.contains(s), "{shown}");
+        assert!(!debug.contains(s), "{debug}");
+    }
+
+    // Invalidation: no body, the query is sent as the form renders it.
+    assert_eq!(r2.method, "DELETE");
+    assert_eq!(
+        r2.target,
+        "/session/token?api_key=test_api_key&access_token=target_token"
+    );
+    assert_eq!(invalidate.path(), "/session/token");
+    assert_eq!(invalidate.body_len(), 0);
+    assert_eq!(invalidate.content_type(), None);
+    assert_eq!(sha(&r2.body), invalidate.sha256());
+    assert_eq!(invalidate.to_string(), "");
+    let debug = format!("{invalidate:?}");
+    assert!(debug.contains("access_token=<redacted>"), "{debug}");
+    assert!(!debug.contains("target_token"), "{debug}");
+    assert_eq!(
+        exchange.sha256(),
+        WireForm::session_exchange(&key(), &token, &secret).sha256()
+    );
+}

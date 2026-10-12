@@ -29,6 +29,7 @@ use manja::kite::connect::models::{
     SipStatus, Trade, UserSession,
 };
 use manja::kite::connect::scheduler::{DispatchPermit, PermitTarget, SchedulerLimits};
+use manja::kite::connect::wire::WireForm;
 use manja::kite::decoder::adapter::{Adapter, AdapterError, Decoded, DecodedEvent, Versions};
 use manja::kite::decoder::framing::{Frame, FramingError, FramingLimits, Message, PacketFamily};
 use manja::kite::decoder::packets::{Depth, DepthEntry, Packet, PacketError};
@@ -160,6 +161,43 @@ async fn signatures(c: &HTTPClient, h: &TickerHandle) {
     let _: Result<String, ManjaError> = mf.get_instruments_csv().await;
     let _: Result<DispatchPermit, ManjaError> = c.admit(PermitTarget::PlaceOrder).await;
     let _: HttpDiagnostics = c.diagnostics();
+    // Wire forms of every mutation, with and without a request type.
+    let place = PlaceOrderRequest::new(
+        manja::kite::connect::models::OrderVariety::Regular,
+        Exchange::NSE,
+        "INFY",
+        manja::kite::connect::models::TransactionType::BUY,
+        manja::kite::connect::models::OrderType::Market,
+        Quantity::new(1).unwrap(),
+        manja::kite::connect::models::ProductType::CashAndCarry,
+    );
+    let wire: WireForm = place.wire().unwrap();
+    let _: (
+        manja::kite::obs::schema::Method,
+        manja::kite::obs::schema::Endpoint,
+        &str,
+        Option<&str>,
+        usize,
+    ) = (
+        wire.method(),
+        wire.endpoint(),
+        wire.path(),
+        wire.content_type(),
+        wire.body_len(),
+    );
+    let _: ([u8; 32], String, String) = (wire.sha256(), wire.sha256_hex(), wire.to_string());
+    let _: Result<WireForm, HttpError> = ModifyOrderRequest::default()
+        .wire(manja::kite::connect::models::OrderVariety::Regular, &id);
+    let _: Result<WireForm, HttpError> = gtt.wire();
+    let _: Result<WireForm, HttpError> = gtt.wire_modification(1);
+    let _: Result<WireForm, HttpError> = HoldingsAuthorisationRequest::all().wire();
+    let _: fn(&PositionConversionRequest) -> Result<WireForm, HttpError> =
+        PositionConversionRequest::wire;
+    let _: WireForm =
+        WireForm::cancel_order(manja::kite::connect::models::OrderVariety::Regular, &id);
+    let _: WireForm = WireForm::delete_trigger(1);
+    let _: fn(&ApiKey, &RequestToken, &ApiSecret) -> WireForm = WireForm::session_exchange;
+    let _: fn(&ApiKey, &AccessToken) -> WireForm = WireForm::session_invalidation;
     // Priority lanes: a marked client, and the lane on an admission grant.
     let control: HTTPClient = c.with_priority(Priority::Control);
     let _: Result<KiteApiResponse<Vec<Order>>, ManjaError> = control.orders().list_orders().await;

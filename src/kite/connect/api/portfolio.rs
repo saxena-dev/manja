@@ -98,7 +98,8 @@ impl<'c> Portfolio<'c> {
     /// `PUT /portfolio/positions`, form-encoded, one attempt.
     ///
     /// The request is validated first; an invalid one sends nothing. The
-    /// `true` result is the broker's response.
+    /// `true` result is the broker's response. The bytes sent are exactly
+    /// those of [`PositionConversionRequest::wire`].
     pub async fn convert_position(
         &self,
         request: &PositionConversionRequest,
@@ -121,15 +122,7 @@ impl<'c> Portfolio<'c> {
         request: &PositionConversionRequest,
         permit: Option<DispatchPermit>,
     ) -> Result<KiteApiResponse<bool>> {
-        self.client
-            .send_form(
-                reqwest::Method::PUT,
-                "/portfolio/positions",
-                request.validate(),
-                request.form_pairs(),
-                permit,
-            )
-            .await
+        self.client.send_wire(request.wire(), permit, true).await
     }
 
     /// Retrieve the list of auctions that are currently being held.
@@ -153,19 +146,12 @@ impl<'c> Portfolio<'c> {
     /// Send the user to [`HoldingsAuthorisation::portal_url`] to key in their
     /// demat PIN, then retry the order. The SDK opens no browser and does not
     /// retry anything. An ISIN that is not 12 ASCII uppercase letters or
-    /// digits is a `Validation` error, and nothing is sent.
+    /// digits is a `Validation` error, and nothing is sent. The bytes sent
+    /// are exactly those of [`HoldingsAuthorisationRequest::wire`].
     pub async fn authorise_holdings(
         &self,
         request: &HoldingsAuthorisationRequest,
     ) -> Result<KiteApiResponse<HoldingsAuthorisation>> {
-        self.client
-            .send_form(
-                reqwest::Method::POST,
-                "/portfolio/holdings/authorise",
-                request.validate(),
-                request.form_pairs(),
-                None,
-            )
-            .await
+        self.client.send_wire(request.wire(), None, true).await
     }
 }

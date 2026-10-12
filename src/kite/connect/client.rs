@@ -77,6 +77,7 @@ use crate::kite::{
         scheduler::{
             AttemptCtx, DispatchPermit, OpObs, OpSpec, PermitTarget, RetryClass, Scheduler,
         },
+        wire::WireForm,
     },
     error::{
         BrokerError, HttpError, HttpErrorKind, KiteApiException, ManjaError, Result,
@@ -651,44 +652,47 @@ impl HTTPClient {
             .await
     }
 
-    /// Send `pairs` form-encoded (`application/x-www-form-urlencoded`,
-    /// `kite:response-structure.md:2`) and decode the
-    /// response envelope. `validate` runs first: an invalid request, or a
-    /// body over `B-HTTP-09`, fails before admission and sends nothing.
-    pub(crate) async fn send_form<Model>(
+    /// Send a mutation's [`WireForm`] byte for byte and decode the response
+    /// envelope. A `wire` error (the request failed validation) and a body
+    /// over `B-HTTP-09` fail before admission and send nothing. With `auth`
+    /// the client's `Authorization` header is attached; the session
+    /// operations send none.
+    pub(crate) async fn send_wire<Model>(
         &self,
-        method: reqwest::Method,
-        path: &str,
-        validate: std::result::Result<(), crate::kite::connect::models::RequestError>,
-        pairs: Vec<(&'static str, String)>,
+        wire: std::result::Result<WireForm, HttpError>,
         permit: Option<DispatchPermit>,
+        auth: bool,
     ) -> Result<KiteApiResponse<Model>>
     where
         Model: DeserializeOwned,
     {
-        let (m, endpoint) = labels(&method, path);
-        let rejected = |detail: &str| {
-            self.reject(
-                HttpError::new(HttpErrorKind::Validation, m, endpoint, Stage::NotStarted)
-                    .with_detail(detail),
-            )
-        };
-        validate.map_err(|e| rejected(&e.to_string()))?;
-        let body = form_urlencode(&pairs);
-        if body.len() > self.transport.config.limits().request_body_bytes() {
-            return Err(rejected("the request body exceeds its bound"));
-        }
-        self.json(method, path, permit, true, |rb| {
-            if pairs.is_empty() {
-                // Nothing to send: no body and no content type.
-                rb
-            } else {
-                rb.header(
-                    reqwest::header::CONTENT_TYPE,
-                    "application/x-www-form-urlencoded",
+        let wire = wire.map_err(|e| self.reject(e))?;
+        if wire.body_len() > self.transport.config.limits().request_body_bytes() {
+            return Err(self.reject(
+                HttpError::new(
+                    HttpErrorKind::Validation,
+                    wire.method(),
+                    wire.endpoint(),
+                    Stage::NotStarted,
                 )
-                .body(body.clone())
-            }
+                .with_detail("the request body exceeds its bound"),
+            ));
+        }
+        let method = match wire.method() {
+            Method::Get => reqwest::Method::GET,
+            Method::Post => reqwest::Method::POST,
+            Method::Put => reqwest::Method::PUT,
+            Method::Delete => reqwest::Method::DELETE,
+        };
+        let target = wire.target();
+        let content_type = wire.content_type();
+        let body = wire.into_body();
+        self.json(method, &target, permit, auth, |rb| match content_type {
+            // Nothing to send: no body and no content type.
+            None => rb,
+            Some(content_type) => rb
+                .header(reqwest::header::CONTENT_TYPE, content_type)
+                .body(body.clone()),
         })
         .await
     }
@@ -724,45 +728,6 @@ impl HTTPClient {
         self.json(method, path, None, true, |rb| {
             rb.header(reqwest::header::CONTENT_TYPE, "application/json")
                 .body(body.clone())
-        })
-        .await
-    }
-
-    /// Form-encoded request without the client's `Authorization` header,
-    /// for the session operations.
-    pub(crate) async fn send_form_unauthenticated<Model>(
-        &self,
-        method: reqwest::Method,
-        path: &str,
-        pairs: Vec<(&'static str, String)>,
-    ) -> Result<KiteApiResponse<Model>>
-    where
-        Model: DeserializeOwned,
-    {
-        let body = form_urlencode(&pairs);
-        drop(pairs);
-        self.json(method, path, None, false, |rb| {
-            rb.header(
-                reqwest::header::CONTENT_TYPE,
-                "application/x-www-form-urlencoded",
-            )
-            .body(body.clone())
-        })
-        .await
-    }
-
-    /// DELETE with query parameters and without the client's
-    /// `Authorization` header, for session invalidation.
-    pub(crate) async fn delete_unauthenticated<Model>(
-        &self,
-        path: &str,
-        query: &[(&str, &str)],
-    ) -> Result<KiteApiResponse<Model>>
-    where
-        Model: DeserializeOwned,
-    {
-        self.json(reqwest::Method::DELETE, path, None, false, |rb| {
-            rb.query(query)
         })
         .await
     }
@@ -1146,33 +1111,6 @@ pub(crate) fn credentials_from_session(session: &UserSession) -> Result<Credenti
         ApiKey::new(session.api_key.expose_secret().as_str())?,
         AccessToken::new(session.access_token.expose_secret().as_str())?,
     ))
-}
-
-/// Encode form fields as `application/x-www-form-urlencoded`: ASCII letters,
-/// digits and `*-._` are kept, a space becomes `+`, and every other byte is
-/// percent-encoded.
-pub(crate) fn form_urlencode(pairs: &[(&str, String)]) -> String {
-    fn enc(out: &mut String, s: &str) {
-        for b in s.bytes() {
-            match b {
-                b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'*' | b'-' | b'.' | b'_' => {
-                    out.push(b as char)
-                }
-                b' ' => out.push('+'),
-                _ => out.push_str(&format!("%{b:02X}")),
-            }
-        }
-    }
-    let mut out = String::new();
-    for (i, (k, v)) in pairs.iter().enumerate() {
-        if i > 0 {
-            out.push('&');
-        }
-        enc(&mut out, k);
-        out.push('=');
-        enc(&mut out, v);
-    }
-    out
 }
 
 /// The rate class of a request and, for a modification, its order ID.

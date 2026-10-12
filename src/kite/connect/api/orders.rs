@@ -27,6 +27,7 @@ use crate::kite::connect::{
         Row, Rows, Trade,
     },
     scheduler::DispatchPermit,
+    wire::WireForm,
 };
 use crate::kite::error::Result;
 use crate::kite::protocol::OrderId;
@@ -74,7 +75,8 @@ impl<'c> Orders<'c> {
     /// Place an order: `POST /orders/{variety}`, form-encoded.
     ///
     /// The request is validated first; an invalid one is a `Validation`
-    /// error and nothing is sent.
+    /// error and nothing is sent. The bytes sent are exactly those of
+    /// [`PlaceOrderRequest::wire`].
     pub async fn place_order(
         &self,
         request: &PlaceOrderRequest,
@@ -97,19 +99,12 @@ impl<'c> Orders<'c> {
         request: &PlaceOrderRequest,
         permit: Option<DispatchPermit>,
     ) -> Result<KiteApiResponse<OrderReceipt>> {
-        self.client
-            .send_form(
-                reqwest::Method::POST,
-                &format!("/orders/{}", request.variety),
-                request.validate(),
-                request.form_pairs(),
-                permit,
-            )
-            .await
+        self.client.send_wire(request.wire(), permit, true).await
     }
 
     /// Modify an open or pending order: `PUT /orders/{variety}/{order_id}`,
-    /// form-encoded, sending only the fields that are set.
+    /// form-encoded, sending only the fields that are set. The bytes sent
+    /// are exactly those of [`ModifyOrderRequest::wire`].
     pub async fn modify_order(
         &self,
         variety: OrderVariety,
@@ -139,13 +134,7 @@ impl<'c> Orders<'c> {
         permit: Option<DispatchPermit>,
     ) -> Result<KiteApiResponse<OrderReceipt>> {
         self.client
-            .send_form(
-                reqwest::Method::PUT,
-                &format!("/orders/{variety}/{order_id}"),
-                request.validate(variety),
-                request.form_pairs(),
-                permit,
-            )
+            .send_wire(request.wire(variety, order_id), permit, true)
             .await
     }
 
@@ -154,7 +143,7 @@ impl<'c> Orders<'c> {
     /// Only the `Authorization` header authenticates the request; neither
     /// the API key nor the access token is placed in the URL
     /// (`kite:orders.md:147-162`). The receipt acknowledges the request, not a
-    /// confirmed cancellation.
+    /// confirmed cancellation. The request is [`WireForm::cancel_order`].
     pub async fn cancel_order(
         &self,
         variety: OrderVariety,
@@ -181,13 +170,7 @@ impl<'c> Orders<'c> {
         permit: Option<DispatchPermit>,
     ) -> Result<KiteApiResponse<OrderReceipt>> {
         self.client
-            .send_form(
-                reqwest::Method::DELETE,
-                &format!("/orders/{variety}/{order_id}"),
-                Ok(()),
-                Vec::new(),
-                permit,
-            )
+            .send_wire(Ok(WireForm::cancel_order(variety, order_id)), permit, true)
             .await
     }
 
