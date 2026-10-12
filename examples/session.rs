@@ -38,8 +38,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 .session(ApiKey::new(key)?)
                 .exchange(&RequestToken::new(token)?, &ApiSecret::new(secret.trim())?)
                 .await?
-                .data
-                .expect("data");
+                .data;
             // The tokens are secret-wrapped; exporting them is explicit.
             let _credentials = session.credentials()?;
             println!("exchanged a session for {}", session.user_id);
@@ -77,8 +76,7 @@ async fn local() -> Result<(), Box<dyn std::error::Error>> {
             &ApiSecret::new("api_secret")?,
         )
         .await?
-        .data
-        .expect("data");
+        .data;
     println!(
         "exchanged: user {} ({:?})",
         session.user_id, session.user_type

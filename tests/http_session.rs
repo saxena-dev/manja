@@ -71,8 +71,7 @@ async fn exchange_needs_no_access_token_and_sends_only_the_documented_fields() {
         )
         .await
         .unwrap()
-        .data
-        .unwrap();
+        .data;
     let r = only(&h);
     assert_eq!(
         (r.method.as_str(), r.target.as_str()),
@@ -145,8 +144,7 @@ async fn invalidation_takes_the_target_token_and_no_secret() {
         .invalidate(&AccessToken::new("target_token").unwrap())
         .await
         .unwrap()
-        .data
-        .unwrap();
+        .data;
     assert!(invalidated);
     let r = only(&h);
     assert_eq!(
@@ -265,8 +263,7 @@ async fn returned_tokens_are_secret_wrapped_and_exported_intentionally() {
         )
         .await
         .unwrap()
-        .data
-        .unwrap();
+        .data;
     let rendered = format!("{session:?}");
     for sentinel in [
         "SENTINELaccess0001",

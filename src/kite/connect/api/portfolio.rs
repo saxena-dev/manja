@@ -13,8 +13,8 @@
 use crate::kite::connect::{
     client::HTTPClient,
     models::{
-        Auction, Holding, HoldingsAuthorisation, HoldingsAuthorisationRequest, KiteApiResponse,
-        PositionConversionRequest, Positions,
+        Auction, Holding, HoldingsAuthorisation, HoldingsAuthorisationRequest,
+        PositionConversionRequest, Positions, Response,
     },
     scheduler::DispatchPermit,
 };
@@ -38,8 +38,8 @@ use crate::kite::error::Result;
 /// # async fn run() -> Result<(), Box<dyn std::error::Error>> {
 /// let client = HTTPClient::new(Config::default())?
 ///     .with_credentials(Credentials::new("api_key", "access_token")?);
-/// let holdings = client.portfolio().get_holdings().await?.data.unwrap_or_default();
-/// let positions = client.portfolio().get_positions().await?.data.expect("data");
+/// let holdings = client.portfolio().get_holdings().await?.data;
+/// let positions = client.portfolio().get_positions().await?.data;
 /// println!("{} holdings, {} net positions", holdings.len(), positions.net.len());
 /// # Ok(()) }
 /// ```
@@ -73,7 +73,7 @@ impl<'c> Portfolio<'c> {
     /// Underneath it all, instruments in the holdings reside in the user's
     /// DEMAT account, as settled by exchanges and clearing institutions.
     ///
-    pub async fn get_holdings(&self) -> Result<KiteApiResponse<Vec<Holding>>> {
+    pub async fn get_holdings(&self) -> Result<Response<Vec<Holding>>> {
         self.client.get("/portfolio/holdings").await
     }
 
@@ -90,7 +90,7 @@ impl<'c> Portfolio<'c> {
     /// of the buying and selling activity for that particular day. This is
     /// useful for computing intraday profits and losses for trading strategies.
     ///
-    pub async fn get_positions(&self) -> Result<KiteApiResponse<Positions>> {
+    pub async fn get_positions(&self) -> Result<Response<Positions>> {
         self.client.get("/portfolio/positions").await
     }
 
@@ -103,7 +103,7 @@ impl<'c> Portfolio<'c> {
     pub async fn convert_position(
         &self,
         request: &PositionConversionRequest,
-    ) -> Result<KiteApiResponse<bool>> {
+    ) -> Result<Response<bool>> {
         self.convert(request, None).await
     }
 
@@ -113,7 +113,7 @@ impl<'c> Portfolio<'c> {
         &self,
         request: &PositionConversionRequest,
         permit: DispatchPermit,
-    ) -> Result<KiteApiResponse<bool>> {
+    ) -> Result<Response<bool>> {
         self.convert(request, Some(permit)).await
     }
 
@@ -121,7 +121,7 @@ impl<'c> Portfolio<'c> {
         &self,
         request: &PositionConversionRequest,
         permit: Option<DispatchPermit>,
-    ) -> Result<KiteApiResponse<bool>> {
+    ) -> Result<Response<bool>> {
         self.client.send_wire(request.wire(), permit, true).await
     }
 
@@ -133,7 +133,7 @@ impl<'c> Portfolio<'c> {
     /// the quantity of the security being offered. Only the stocks that
     /// you hold in your demat account will be shown in the auctions list.
     ///
-    pub async fn get_auctions(&self) -> Result<KiteApiResponse<Vec<Auction>>> {
+    pub async fn get_auctions(&self) -> Result<Response<Vec<Auction>>> {
         self.client.get("/portfolio/holdings/auctions").await
     }
 
@@ -151,7 +151,7 @@ impl<'c> Portfolio<'c> {
     pub async fn authorise_holdings(
         &self,
         request: &HoldingsAuthorisationRequest,
-    ) -> Result<KiteApiResponse<HoldingsAuthorisation>> {
+    ) -> Result<Response<HoldingsAuthorisation>> {
         self.client.send_wire(request.wire(), None, true).await
     }
 }

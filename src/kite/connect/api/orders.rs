@@ -23,8 +23,8 @@
 use crate::kite::connect::{
     client::{HTTPClient, RowPolicy},
     models::{
-        KiteApiResponse, ModifyOrderRequest, Order, OrderReceipt, OrderVariety, PlaceOrderRequest,
-        Row, Rows, Trade,
+        ModifyOrderRequest, Order, OrderReceipt, OrderVariety, PlaceOrderRequest, Response, Row,
+        Rows, Trade,
     },
     scheduler::DispatchPermit,
     wire::WireForm,
@@ -53,9 +53,9 @@ use crate::kite::protocol::OrderId;
 /// # async fn run() -> Result<(), Box<dyn std::error::Error>> {
 /// let client = HTTPClient::new(Config::default())?
 ///     .with_credentials(Credentials::new("api_key", "access_token")?);
-/// for order in client.orders().list_orders().await?.data.unwrap_or_default() {
+/// for order in client.orders().list_orders().await?.data {
 ///     let history = client.orders().get_order_history(&order.order_id).await?;
-///     println!("{}: {} states", order.order_id, history.data.unwrap_or_default().len());
+///     println!("{}: {} states", order.order_id, history.data.len());
 /// }
 /// # Ok(()) }
 /// ```
@@ -77,10 +77,7 @@ impl<'c> Orders<'c> {
     /// The request is validated first; an invalid one is a `Validation`
     /// error and nothing is sent. The bytes sent are exactly those of
     /// [`PlaceOrderRequest::wire`].
-    pub async fn place_order(
-        &self,
-        request: &PlaceOrderRequest,
-    ) -> Result<KiteApiResponse<OrderReceipt>> {
+    pub async fn place_order(&self, request: &PlaceOrderRequest) -> Result<Response<OrderReceipt>> {
         self.place(request, None).await
     }
 
@@ -90,7 +87,7 @@ impl<'c> Orders<'c> {
         &self,
         request: &PlaceOrderRequest,
         permit: DispatchPermit,
-    ) -> Result<KiteApiResponse<OrderReceipt>> {
+    ) -> Result<Response<OrderReceipt>> {
         self.place(request, Some(permit)).await
     }
 
@@ -98,7 +95,7 @@ impl<'c> Orders<'c> {
         &self,
         request: &PlaceOrderRequest,
         permit: Option<DispatchPermit>,
-    ) -> Result<KiteApiResponse<OrderReceipt>> {
+    ) -> Result<Response<OrderReceipt>> {
         self.client.send_wire(request.wire(), permit, true).await
     }
 
@@ -110,7 +107,7 @@ impl<'c> Orders<'c> {
         variety: OrderVariety,
         order_id: &OrderId,
         request: &ModifyOrderRequest,
-    ) -> Result<KiteApiResponse<OrderReceipt>> {
+    ) -> Result<Response<OrderReceipt>> {
         self.modify(variety, order_id, request, None).await
     }
 
@@ -122,7 +119,7 @@ impl<'c> Orders<'c> {
         order_id: &OrderId,
         request: &ModifyOrderRequest,
         permit: DispatchPermit,
-    ) -> Result<KiteApiResponse<OrderReceipt>> {
+    ) -> Result<Response<OrderReceipt>> {
         self.modify(variety, order_id, request, Some(permit)).await
     }
 
@@ -132,7 +129,7 @@ impl<'c> Orders<'c> {
         order_id: &OrderId,
         request: &ModifyOrderRequest,
         permit: Option<DispatchPermit>,
-    ) -> Result<KiteApiResponse<OrderReceipt>> {
+    ) -> Result<Response<OrderReceipt>> {
         self.client
             .send_wire(request.wire(variety, order_id), permit, true)
             .await
@@ -148,7 +145,7 @@ impl<'c> Orders<'c> {
         &self,
         variety: OrderVariety,
         order_id: &OrderId,
-    ) -> Result<KiteApiResponse<OrderReceipt>> {
+    ) -> Result<Response<OrderReceipt>> {
         self.cancel(variety, order_id, None).await
     }
 
@@ -159,7 +156,7 @@ impl<'c> Orders<'c> {
         variety: OrderVariety,
         order_id: &OrderId,
         permit: DispatchPermit,
-    ) -> Result<KiteApiResponse<OrderReceipt>> {
+    ) -> Result<Response<OrderReceipt>> {
         self.cancel(variety, order_id, Some(permit)).await
     }
 
@@ -168,7 +165,7 @@ impl<'c> Orders<'c> {
         variety: OrderVariety,
         order_id: &OrderId,
         permit: Option<DispatchPermit>,
-    ) -> Result<KiteApiResponse<OrderReceipt>> {
+    ) -> Result<Response<OrderReceipt>> {
         self.client
             .send_wire(Ok(WireForm::cancel_order(variety, order_id)), permit, true)
             .await
@@ -185,7 +182,7 @@ impl<'c> Orders<'c> {
     /// Strict: if any order does not decode, the whole response is a
     /// `Decode` error whose detail gives the rejected count and the first
     /// index. [`Self::list_orders_with_rejections`] returns the other rows.
-    pub async fn list_orders(&self) -> Result<KiteApiResponse<Vec<Order>>> {
+    pub async fn list_orders(&self) -> Result<Response<Vec<Order>>> {
         strict(self.client.get_rows("/orders", RowPolicy::Strict).await?)
     }
 
@@ -197,17 +194,14 @@ impl<'c> Orders<'c> {
     /// [`Rows::items`] empty although the broker sent orders; check
     /// [`Rows::is_complete`] or use [`Rows::into_complete`] to tell that
     /// apart from an empty order book.
-    pub async fn list_orders_with_rejections(&self) -> Result<KiteApiResponse<Rows<Order>>> {
+    pub async fn list_orders_with_rejections(&self) -> Result<Response<Rows<Order>>> {
         self.client.get_rows("/orders", RowPolicy::Tolerant).await
     }
 
     /// The history of one order: `GET /orders/{order_id}`.
     ///
     /// Strict, like [`Self::list_orders`].
-    pub async fn get_order_history(
-        &self,
-        order_id: &OrderId,
-    ) -> Result<KiteApiResponse<Vec<Order>>> {
+    pub async fn get_order_history(&self, order_id: &OrderId) -> Result<Response<Vec<Order>>> {
         strict(
             self.client
                 .get_rows(&format!("/orders/{order_id}"), RowPolicy::Strict)
@@ -222,7 +216,7 @@ impl<'c> Orders<'c> {
     pub async fn get_order_history_with_rejections(
         &self,
         order_id: &OrderId,
-    ) -> Result<KiteApiResponse<Rows<Order>>> {
+    ) -> Result<Response<Rows<Order>>> {
         self.client
             .get_rows(&format!("/orders/{order_id}"), RowPolicy::Tolerant)
             .await
@@ -231,24 +225,21 @@ impl<'c> Orders<'c> {
     /// Every executed trade of the day: `GET /trades`.
     ///
     /// Strict, like [`Self::list_orders`].
-    pub async fn list_trades(&self) -> Result<KiteApiResponse<Vec<Trade>>> {
+    pub async fn list_trades(&self) -> Result<Response<Vec<Trade>>> {
         strict(self.client.get_rows("/trades", RowPolicy::Strict).await?)
     }
 
     /// Every executed trade of the day, row by row: `GET /trades`.
     ///
     /// May be partial, like [`Self::list_orders_with_rejections`].
-    pub async fn list_trades_with_rejections(&self) -> Result<KiteApiResponse<Rows<Trade>>> {
+    pub async fn list_trades_with_rejections(&self) -> Result<Response<Rows<Trade>>> {
         self.client.get_rows("/trades", RowPolicy::Tolerant).await
     }
 
     /// The trades of one order: `GET /orders/{order_id}/trades`.
     ///
     /// Strict, like [`Self::list_orders`].
-    pub async fn get_order_trades(
-        &self,
-        order_id: &OrderId,
-    ) -> Result<KiteApiResponse<Vec<Trade>>> {
+    pub async fn get_order_trades(&self, order_id: &OrderId) -> Result<Response<Vec<Trade>>> {
         strict(
             self.client
                 .get_rows(&format!("/orders/{order_id}/trades"), RowPolicy::Strict)
@@ -262,7 +253,7 @@ impl<'c> Orders<'c> {
     pub async fn get_order_trades_with_rejections(
         &self,
         order_id: &OrderId,
-    ) -> Result<KiteApiResponse<Rows<Trade>>> {
+    ) -> Result<Response<Rows<Trade>>> {
         self.client
             .get_rows(&format!("/orders/{order_id}/trades"), RowPolicy::Tolerant)
             .await
@@ -272,23 +263,18 @@ impl<'c> Orders<'c> {
 /// The rows of a strict response as a plain list. Strict decoding has already
 /// failed the operation if any row was rejected, so every row here decoded;
 /// the debug assertion guards that invariant against a future change.
-fn strict<T>(response: KiteApiResponse<Rows<T>>) -> Result<KiteApiResponse<Vec<T>>> {
-    Ok(KiteApiResponse {
-        status: response.status,
-        data: response.data.map(|rows| {
-            debug_assert!(
-                rows.is_complete(),
-                "strict decoding returned a rejected row"
-            );
-            rows.rows
-                .into_iter()
-                .filter_map(|row| match row {
-                    Row::Decoded(t) => Some(t),
-                    Row::Rejected(_) => None,
-                })
-                .collect()
-        }),
-        message: response.message,
-        error_type: response.error_type,
-    })
+fn strict<T>(response: Response<Rows<T>>) -> Result<Response<Vec<T>>> {
+    Ok(response.map(|rows| {
+        debug_assert!(
+            rows.is_complete(),
+            "strict decoding returned a rejected row"
+        );
+        rows.rows
+            .into_iter()
+            .filter_map(|row| match row {
+                Row::Decoded(t) => Some(t),
+                Row::Rejected(_) => None,
+            })
+            .collect()
+    }))
 }

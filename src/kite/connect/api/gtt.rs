@@ -19,7 +19,7 @@
 //!
 use crate::kite::connect::{
     client::HTTPClient,
-    models::{GttReceipt, GttRequest, GttTrigger, KiteApiResponse},
+    models::{GttReceipt, GttRequest, GttTrigger, Response},
     scheduler::DispatchPermit,
     wire::WireForm,
 };
@@ -55,7 +55,7 @@ use crate::kite::error::Result;
 /// // Buy if INFY falls to 702. The trigger value comes first, then the
 /// // instrument's current last price.
 /// let request = GttRequest::single(Exchange::NSE, "INFY", 702.0, 798.0, order);
-/// let receipt = client.gtt().place_trigger(&request).await?.data.expect("data");
+/// let receipt = client.gtt().place_trigger(&request).await?.data;
 /// println!("trigger {}", receipt.trigger_id);
 /// # Ok(()) }
 /// ```
@@ -77,7 +77,7 @@ impl<'c> Gtt<'c> {
     /// The request is validated first; an invalid one is a `Validation`
     /// error and nothing is sent. The bytes sent are exactly those of
     /// [`GttRequest::wire`].
-    pub async fn place_trigger(&self, request: &GttRequest) -> Result<KiteApiResponse<GttReceipt>> {
+    pub async fn place_trigger(&self, request: &GttRequest) -> Result<Response<GttReceipt>> {
         self.place(request, None).await
     }
 
@@ -87,7 +87,7 @@ impl<'c> Gtt<'c> {
         &self,
         request: &GttRequest,
         permit: DispatchPermit,
-    ) -> Result<KiteApiResponse<GttReceipt>> {
+    ) -> Result<Response<GttReceipt>> {
         self.place(request, Some(permit)).await
     }
 
@@ -95,7 +95,7 @@ impl<'c> Gtt<'c> {
         &self,
         request: &GttRequest,
         permit: Option<DispatchPermit>,
-    ) -> Result<KiteApiResponse<GttReceipt>> {
+    ) -> Result<Response<GttReceipt>> {
         self.client.send_wire(request.wire(), permit, true).await
     }
 
@@ -106,7 +106,7 @@ impl<'c> Gtt<'c> {
         &self,
         trigger_id: u64,
         request: &GttRequest,
-    ) -> Result<KiteApiResponse<GttReceipt>> {
+    ) -> Result<Response<GttReceipt>> {
         self.modify(trigger_id, request, None).await
     }
 
@@ -117,7 +117,7 @@ impl<'c> Gtt<'c> {
         trigger_id: u64,
         request: &GttRequest,
         permit: DispatchPermit,
-    ) -> Result<KiteApiResponse<GttReceipt>> {
+    ) -> Result<Response<GttReceipt>> {
         self.modify(trigger_id, request, Some(permit)).await
     }
 
@@ -126,7 +126,7 @@ impl<'c> Gtt<'c> {
         trigger_id: u64,
         request: &GttRequest,
         permit: Option<DispatchPermit>,
-    ) -> Result<KiteApiResponse<GttReceipt>> {
+    ) -> Result<Response<GttReceipt>> {
         self.client
             .send_wire(request.wire_modification(trigger_id), permit, true)
             .await
@@ -134,7 +134,7 @@ impl<'c> Gtt<'c> {
 
     /// Delete an active GTT: `DELETE /gtt/triggers/{trigger_id}`. The request
     /// is [`WireForm::delete_trigger`].
-    pub async fn delete_trigger(&self, trigger_id: u64) -> Result<KiteApiResponse<GttReceipt>> {
+    pub async fn delete_trigger(&self, trigger_id: u64) -> Result<Response<GttReceipt>> {
         self.delete(trigger_id, None).await
     }
 
@@ -144,7 +144,7 @@ impl<'c> Gtt<'c> {
         &self,
         trigger_id: u64,
         permit: DispatchPermit,
-    ) -> Result<KiteApiResponse<GttReceipt>> {
+    ) -> Result<Response<GttReceipt>> {
         self.delete(trigger_id, Some(permit)).await
     }
 
@@ -152,7 +152,7 @@ impl<'c> Gtt<'c> {
         &self,
         trigger_id: u64,
         permit: Option<DispatchPermit>,
-    ) -> Result<KiteApiResponse<GttReceipt>> {
+    ) -> Result<Response<GttReceipt>> {
         self.client
             .send_wire(Ok(WireForm::delete_trigger(trigger_id)), permit, true)
             .await
@@ -162,13 +162,13 @@ impl<'c> Gtt<'c> {
 
     /// Active GTTs, and GTTs in other states from the previous 7 days:
     /// `GET /gtt/triggers` (`kite:gtt.md:169-172`).
-    pub async fn list_triggers(&self) -> Result<KiteApiResponse<Vec<GttTrigger>>> {
+    pub async fn list_triggers(&self) -> Result<Response<Vec<GttTrigger>>> {
         self.client.get("/gtt/triggers").await
     }
 
     /// One GTT, whatever its age or state: `GET /gtt/triggers/{trigger_id}`
     /// (`kite:gtt.md:281-284`).
-    pub async fn get_trigger(&self, trigger_id: u64) -> Result<KiteApiResponse<GttTrigger>> {
+    pub async fn get_trigger(&self, trigger_id: u64) -> Result<Response<GttTrigger>> {
         self.client
             .get(&format!("/gtt/triggers/{trigger_id}"))
             .await

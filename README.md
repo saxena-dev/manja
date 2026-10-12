@@ -103,8 +103,7 @@ async fn log_in(request_token: &str, api_secret: &str) -> Result<(), Box<dyn std
         .session(ApiKey::new("your_api_key")?)
         .exchange(&RequestToken::new(request_token)?, &ApiSecret::new(api_secret)?)
         .await?
-        .data
-        .expect("a successful exchange carries the session");
+        .data;
 
     // The API key and access token, ready for every other call.
     let credentials = session.credentials()?;
@@ -131,20 +130,20 @@ use manja::kite::connect::credentials::Credentials;
 async fn account(credentials: Credentials) -> Result<(), Box<dyn std::error::Error>> {
     let client = HTTPClient::new(Config::default())?.with_credentials(credentials);
 
-    let profile = client.user().profile().await?.data.expect("data");
+    let profile = client.user().profile().await?.data;
     println!("hello, {}", profile.user_name);
 
-    let holdings = client.portfolio().get_holdings().await?.data.unwrap_or_default();
-    let positions = client.portfolio().get_positions().await?.data.expect("data");
+    let holdings = client.portfolio().get_holdings().await?.data;
+    let positions = client.portfolio().get_positions().await?.data;
     println!("{} holdings, {} open positions", holdings.len(), positions.net.len());
     Ok(())
 }
 ```
 
-Every JSON call returns a `KiteApiResponse`, Kite's own envelope. When the call
-succeeds, its `data` is always present, so `expect` documents a guarantee rather than a
-hope. For lists, `unwrap_or_default()` reads just as well, and an empty list is a
-perfectly good fallback.
+Every JSON call returns a `Response`: its `data` is the endpoint's value itself, never
+an `Option`, because a call only succeeds when Kite answered with a success envelope
+and data of the expected shape. Its `meta` carries the facts of the call: Kite's
+optional message, the HTTP status, the operation ID and the attempt number.
 
 An `HTTPClient` is cheap to clone. Clones share one connection pool and one set of rate
 limits, so create it once and hand clones to the tasks that need it.
@@ -177,11 +176,11 @@ async fn buy(client: &HTTPClient) -> Result<(), Box<dyn std::error::Error>> {
     order.tag = Some("rebalance42".into());
 
     match client.orders().place_order(&order).await {
-        Ok(receipt) => println!("accepted as {}", receipt.data.expect("data").order_id),
+        Ok(receipt) => println!("accepted as {}", receipt.data.order_id),
         Err(err) if err.as_http().is_some_and(|e| e.may_have_reached_broker()) => {
             // The request left the process, so the order may exist. Check the
             // order book before deciding to place it again.
-            let book = client.orders().list_orders().await?.data.unwrap_or_default();
+            let book = client.orders().list_orders().await?.data;
             let placed = book.iter().any(|o| o.tag.as_deref() == Some("rebalance42"));
             println!("order was placed: {placed}");
         }
@@ -296,7 +295,7 @@ use manja::kite::error::HttpErrorKind;
 
 async fn holdings(client: &HTTPClient) {
     match client.portfolio().get_holdings().await {
-        Ok(response) => println!("{} holdings", response.data.unwrap_or_default().len()),
+        Ok(response) => println!("{} holdings", response.data.len()),
         Err(err) => match err.as_http() {
             Some(e) if e.kind() == HttpErrorKind::AuthRejected => {
                 // The access token expired or was invalidated: log in again.

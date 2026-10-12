@@ -185,8 +185,7 @@ async fn no_seeded_value_reaches_any_telemetry_sink() {
         )
         .await
         .unwrap()
-        .data
-        .unwrap();
+        .data;
     c.session(ApiKey::new(API_KEY).unwrap())
         .invalidate(&AccessToken::new(ACCESS).unwrap())
         .await

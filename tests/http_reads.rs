@@ -58,13 +58,7 @@ fn ist(s: &str) -> DateTime<FixedOffset> {
 #[tokio::test]
 async fn profile() {
     let h = serve("profile.json").await;
-    let p = client(&h.base_url())
-        .user()
-        .profile()
-        .await
-        .unwrap()
-        .data
-        .unwrap();
+    let p = client(&h.base_url()).user().profile().await.unwrap().data;
     assert_get(&only_request(&h), "/user/profile");
     assert_eq!(p.user_id, "AB1234");
     assert_eq!(p.user_type, "individual");
@@ -81,13 +75,7 @@ async fn profile() {
 #[tokio::test]
 async fn margins_all_and_by_segment() {
     let h = serve("margins.json").await;
-    let m = client(&h.base_url())
-        .user()
-        .margins()
-        .await
-        .unwrap()
-        .data
-        .unwrap();
+    let m = client(&h.base_url()).user().margins().await.unwrap().data;
     assert_get(&only_request(&h), "/user/margins");
     let equity = m.equity.unwrap();
     assert!(equity.enabled);
@@ -111,8 +99,7 @@ async fn margins_all_and_by_segment() {
         .margins_by_segment(SegmentKind::Commodity)
         .await
         .unwrap()
-        .data
-        .unwrap();
+        .data;
     assert_get(&only_request(&h), "/user/margins/commodity");
     assert!(seg.enabled);
 }
@@ -124,7 +111,7 @@ async fn order_book_parses_documented_timestamps() {
     // entirely.
     let h = serve("orders.json").await;
     let c = client(&h.base_url());
-    let orders = c.orders().list_orders().await.unwrap().data.unwrap();
+    let orders = c.orders().list_orders().await.unwrap().data;
     assert_get(&only_request(&h), "/orders");
     assert_eq!(orders.len(), 10);
     let o = &orders[0];
@@ -171,8 +158,7 @@ async fn order_history_preserves_an_undocumented_status() {
         .get_order_history(&OrderId::new("171229000724687").unwrap())
         .await
         .unwrap()
-        .data
-        .unwrap();
+        .data;
     assert_get(&only_request(&h), "/orders/171229000724687");
     assert_eq!(history.len(), 8);
     assert_eq!(
@@ -197,7 +183,7 @@ async fn order_history_preserves_an_undocumented_status() {
 async fn trade_book_and_order_trades() {
     let h = serve("trades.json").await;
     let c = client(&h.base_url());
-    let trades = c.orders().list_trades().await.unwrap().data.unwrap();
+    let trades = c.orders().list_trades().await.unwrap().data;
     assert_get(&only_request(&h), "/trades");
     assert_eq!(trades.len(), 4);
     let t = &trades[0];
@@ -218,8 +204,7 @@ async fn trade_book_and_order_trades() {
         .get_order_trades(&OrderId::new("200000000000000").unwrap())
         .await
         .unwrap()
-        .data
-        .unwrap();
+        .data;
     assert_get(&only_request(&h), "/orders/200000000000000/trades");
     assert_eq!(trades.len(), 1);
     assert_eq!(trades[0].exchange, Inbound::Known(Exchange::MCX));
@@ -229,12 +214,7 @@ async fn trade_book_and_order_trades() {
 async fn holdings() {
     let h = serve("holdings.json").await;
     let c = client(&h.base_url());
-    let holdings = Portfolio::new(&c)
-        .get_holdings()
-        .await
-        .unwrap()
-        .data
-        .unwrap();
+    let holdings = Portfolio::new(&c).get_holdings().await.unwrap().data;
     assert_get(&only_request(&h), "/portfolio/holdings");
     assert_eq!(holdings.len(), 2);
     let a = &holdings[0];
@@ -251,12 +231,7 @@ async fn holdings() {
 async fn positions_are_the_net_and_day_object() {
     let h = serve("positions.json").await;
     let c = client(&h.base_url());
-    let p = Portfolio::new(&c)
-        .get_positions()
-        .await
-        .unwrap()
-        .data
-        .unwrap();
+    let p = Portfolio::new(&c).get_positions().await.unwrap().data;
     assert_get(&only_request(&h), "/portfolio/positions");
     assert!(!p.net.is_empty() && !p.day.is_empty());
     let first = &p.net[0];
@@ -277,12 +252,7 @@ async fn positions_are_the_net_and_day_object() {
 async fn holdings_auctions() {
     let h = serve("auctions_list.json").await;
     let c = client(&h.base_url());
-    let auctions = Portfolio::new(&c)
-        .get_auctions()
-        .await
-        .unwrap()
-        .data
-        .unwrap();
+    let auctions = Portfolio::new(&c).get_auctions().await.unwrap().data;
     assert_get(&only_request(&h), "/portfolio/holdings/auctions");
     assert_eq!(auctions.len(), 3);
     assert_eq!(auctions[0].tradingsymbol, "ASHOKLEY");
@@ -344,4 +314,36 @@ fn acknowledgements_carry_only_the_order_id() {
     let ack: manja::kite::connect::models::OrderReceipt =
         serde_json::from_value(doc["data"].clone()).unwrap();
     assert_eq!(ack.order_id, "151220000000000");
+}
+
+// ---- response meta -----------------------------------------------------
+
+#[tokio::test]
+async fn every_response_carries_the_facts_of_its_call() {
+    let h = HttpHarness::start(vec![
+        Reply::json(fixtures::json_body("profile.json").unwrap()),
+        Reply::json(fixtures::json_body("orders.json").unwrap()),
+    ])
+    .await;
+    let c = client(&h.base_url());
+    let profile = c.user().profile().await.unwrap();
+    let book = c.orders().list_orders().await.unwrap();
+    for meta in [&profile.meta, &book.meta] {
+        assert_eq!(meta.http_status, 200);
+        assert_eq!(meta.attempt, 1, "a first-try success");
+        assert_eq!(meta.message, None, "neither fixture carries a message");
+    }
+    assert!(
+        book.meta.operation_id > profile.meta.operation_id,
+        "operation IDs are distinct and increasing: {} then {}",
+        profile.meta.operation_id,
+        book.meta.operation_id
+    );
+    // The data is the value itself; nothing to unwrap.
+    assert_eq!(profile.data.user_id, "AB1234");
+    assert_eq!(book.data.len(), 10);
+    // `map` keeps the meta.
+    let count = book.map(|orders| orders.len());
+    assert_eq!(count.data, 10);
+    assert_eq!(count.meta.http_status, 200);
 }

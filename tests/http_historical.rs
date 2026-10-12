@@ -108,8 +108,7 @@ async fn minute_candles_decode_from_the_official_sample() {
         .get_historical(&acc_minutes())
         .await
         .unwrap()
-        .data
-        .unwrap();
+        .data;
     let r = only(&h);
     assert_eq!(r.method, "GET");
     let (path, query) = split(&r.target);
@@ -162,8 +161,7 @@ async fn open_interest_is_requested_and_decoded() {
         .get_historical(&request)
         .await
         .unwrap()
-        .data
-        .unwrap();
+        .data;
     let (path, query) = split(&only(&h).target);
     assert_eq!(path, "/instruments/historical/12517890/minute");
     assert_eq!(
@@ -318,8 +316,7 @@ async fn a_transient_failure_is_retried() {
         .get_historical(&acc_minutes())
         .await
         .unwrap()
-        .data
-        .unwrap();
+        .data;
     assert_eq!(data.candles.len(), 6);
     assert_eq!(h.requests().len(), 2);
 }

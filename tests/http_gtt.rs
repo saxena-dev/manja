@@ -115,8 +115,7 @@ async fn placement_is_form_encoded_with_json_condition_and_orders() {
         .place_trigger(&single())
         .await
         .unwrap()
-        .data
-        .unwrap();
+        .data;
     assert_eq!(receipt.trigger_id, 123);
     let r = only(&h);
     assert_eq!(
@@ -159,8 +158,7 @@ async fn modification_replaces_the_trigger_by_id() {
         .modify_trigger(123, &request)
         .await
         .unwrap()
-        .data
-        .unwrap();
+        .data;
     assert_eq!(receipt.trigger_id, 123);
     let r = only(&h);
     assert_eq!(
@@ -180,8 +178,7 @@ async fn deletion_sends_no_body() {
         .delete_trigger(123)
         .await
         .unwrap()
-        .data
-        .unwrap();
+        .data;
     assert_eq!(receipt.trigger_id, 123);
     let r = only(&h);
     assert_eq!(
@@ -200,8 +197,7 @@ async fn the_trigger_list_decodes_both_documented_triggers() {
         .list_triggers()
         .await
         .unwrap()
-        .data
-        .unwrap();
+        .data;
     assert_eq!(only(&h).target, "/gtt/triggers");
     assert_eq!(triggers.len(), 2);
 
@@ -272,8 +268,7 @@ async fn one_trigger_is_fetched_by_id() {
         .get_trigger(123)
         .await
         .unwrap()
-        .data
-        .unwrap();
+        .data;
     assert_eq!(only(&h).target, "/gtt/triggers/123");
     assert_eq!(t.id, 123);
     assert_eq!(t.trigger_type, Inbound::Known(GttType::TwoLeg));
@@ -297,8 +292,7 @@ async fn an_unknown_status_is_preserved() {
         .get_trigger(123)
         .await
         .unwrap()
-        .data
-        .unwrap();
+        .data;
     assert!(t.status.is_unknown());
     assert_eq!(t.status.as_wire(), "paused");
 }
@@ -400,8 +394,7 @@ async fn reads_retry_a_transient_failure() {
         .list_triggers()
         .await
         .unwrap()
-        .data
-        .unwrap();
+        .data;
     assert_eq!(triggers.len(), 2);
     assert_eq!(h.requests().len(), 2);
 }
@@ -587,7 +580,7 @@ async fn a_two_leg_placement_sends_both_values_and_both_orders() {
 async fn a_fetched_trigger_converts_into_a_request_for_modification() {
     let get = serve("gtt_get_order.json").await;
     let c = client(&get.base_url());
-    let trigger = c.gtt().get_trigger(123).await.unwrap().data.unwrap();
+    let trigger = c.gtt().get_trigger(123).await.unwrap().data;
     let mut request = GttRequest::from_trigger(&trigger).unwrap();
     assert_eq!(request.trigger_type, GttType::TwoLeg);
     assert_eq!(request.exchange, Exchange::NSE);
@@ -655,8 +648,7 @@ async fn a_trigger_a_request_cannot_carry_does_not_convert() {
             .get_trigger(123)
             .await
             .unwrap()
-            .data
-            .unwrap();
+            .data;
         let err = GttRequest::from_trigger(&trigger).unwrap_err();
         assert_eq!(err.field, field);
     }

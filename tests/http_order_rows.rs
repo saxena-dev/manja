@@ -94,16 +94,10 @@ async fn every_official_list_decodes_the_same_under_both_policies() {
 
     let h = serve(fixtures::json_body("orders.json").unwrap()).await;
     let c = client(&h.base_url(), &obs);
-    let strict = c.orders().list_orders().await.unwrap().data.unwrap();
+    let strict = c.orders().list_orders().await.unwrap().data;
     let h = serve(fixtures::json_body("orders.json").unwrap()).await;
     let c = client(&h.base_url(), &obs);
-    let rows = c
-        .orders()
-        .list_orders_with_rejections()
-        .await
-        .unwrap()
-        .data
-        .unwrap();
+    let rows = c.orders().list_orders_with_rejections().await.unwrap().data;
     assert!(rows.is_complete());
     assert_eq!(rows.into_complete().unwrap(), strict);
     assert_eq!(strict.len(), 10);
@@ -114,16 +108,14 @@ async fn every_official_list_decodes_the_same_under_both_policies() {
         .get_order_history(&id)
         .await
         .unwrap()
-        .data
-        .unwrap();
+        .data;
     let h = serve(fixtures::json_body("order_info.json").unwrap()).await;
     let rows = client(&h.base_url(), &obs)
         .orders()
         .get_order_history_with_rejections(&id)
         .await
         .unwrap()
-        .data
-        .unwrap();
+        .data;
     assert_eq!(rows.into_complete().unwrap(), strict);
 
     let h = serve(fixtures::json_body("trades.json").unwrap()).await;
@@ -132,16 +124,14 @@ async fn every_official_list_decodes_the_same_under_both_policies() {
         .list_trades()
         .await
         .unwrap()
-        .data
-        .unwrap();
+        .data;
     let h = serve(fixtures::json_body("trades.json").unwrap()).await;
     let rows = client(&h.base_url(), &obs)
         .orders()
         .list_trades_with_rejections()
         .await
         .unwrap()
-        .data
-        .unwrap();
+        .data;
     assert_eq!(rows.into_complete().unwrap(), strict);
 
     let h = serve(fixtures::json_body("order_trades.json").unwrap()).await;
@@ -150,16 +140,14 @@ async fn every_official_list_decodes_the_same_under_both_policies() {
         .get_order_trades(&tid)
         .await
         .unwrap()
-        .data
-        .unwrap();
+        .data;
     let h = serve(fixtures::json_body("order_trades.json").unwrap()).await;
     let rows = client(&h.base_url(), &obs)
         .orders()
         .get_order_trades_with_rejections(&tid)
         .await
         .unwrap()
-        .data
-        .unwrap();
+        .data;
     assert_eq!(rows.into_complete().unwrap(), strict);
 }
 
@@ -187,8 +175,7 @@ async fn one_bad_order_is_rejected_in_place_or_fails_the_strict_list() {
             .list_orders_with_rejections()
             .await
             .unwrap()
-            .data
-            .unwrap();
+            .data;
         assert_one_rejection(rows, 10, 3, &seed);
 
         let h = serve(body).await;
@@ -228,8 +215,7 @@ async fn one_bad_trade_is_rejected_in_place_or_fails_the_strict_list() {
             .list_trades_with_rejections()
             .await
             .unwrap()
-            .data
-            .unwrap();
+            .data;
         assert_one_rejection(rows, 4, 1, &seed);
 
         let h = serve(body).await;
@@ -308,8 +294,7 @@ async fn rejected_rows_are_counted_once_per_response_under_both_policies() {
         .list_orders_with_rejections()
         .await
         .unwrap()
-        .data
-        .unwrap();
+        .data;
     assert_eq!(rows.rejected().map(|e| e.index).collect::<Vec<_>>(), [1, 6]);
     assert_eq!(counted(), 2);
 
@@ -353,36 +338,22 @@ async fn call(c: &HTTPClient, list: List, tolerant: bool) -> Result<usize, Manja
     let id = OrderId::new("171229000724687").unwrap();
     let o = c.orders();
     Ok(match (list, tolerant) {
-        (List::Orders, false) => o.list_orders().await?.data.unwrap().len(),
-        (List::Orders, true) => o
-            .list_orders_with_rejections()
-            .await?
-            .data
-            .unwrap()
-            .rows
-            .len(),
-        (List::History, false) => o.get_order_history(&id).await?.data.unwrap().len(),
+        (List::Orders, false) => o.list_orders().await?.data.len(),
+        (List::Orders, true) => o.list_orders_with_rejections().await?.data.rows.len(),
+        (List::History, false) => o.get_order_history(&id).await?.data.len(),
         (List::History, true) => o
             .get_order_history_with_rejections(&id)
             .await?
             .data
-            .unwrap()
             .rows
             .len(),
-        (List::Trades, false) => o.list_trades().await?.data.unwrap().len(),
-        (List::Trades, true) => o
-            .list_trades_with_rejections()
-            .await?
-            .data
-            .unwrap()
-            .rows
-            .len(),
-        (List::OrderTrades, false) => o.get_order_trades(&id).await?.data.unwrap().len(),
+        (List::Trades, false) => o.list_trades().await?.data.len(),
+        (List::Trades, true) => o.list_trades_with_rejections().await?.data.rows.len(),
+        (List::OrderTrades, false) => o.get_order_trades(&id).await?.data.len(),
         (List::OrderTrades, true) => o
             .get_order_trades_with_rejections(&id)
             .await?
             .data
-            .unwrap()
             .rows
             .len(),
     })
@@ -517,8 +488,7 @@ async fn one_bad_row_in_a_history_or_order_trades_list_is_handled_the_same_way()
         .get_order_history_with_rejections(&id)
         .await
         .unwrap()
-        .data
-        .unwrap();
+        .data;
     assert_one_rejection(rows, total, 1, "SEEDprice");
     let h = serve(history).await;
     let err = client(&h.base_url(), &obs)
@@ -548,8 +518,7 @@ async fn one_bad_row_in_a_history_or_order_trades_list_is_handled_the_same_way()
         .get_order_trades_with_rejections(&id)
         .await
         .unwrap()
-        .data
-        .unwrap();
+        .data;
     assert_one_rejection(rows, total, 0, "SEEDid");
     let h = serve(trades).await;
     let err = client(&h.base_url(), &obs)
@@ -562,4 +531,77 @@ async fn one_bad_row_in_a_history_or_order_trades_list_is_handled_the_same_way()
         format!("1 of {total} rows rejected; first at index 0")
     );
     assert!(!format!("{err}").contains("SEEDid"));
+}
+
+// ---- broker state arrives unchanged -------------------------------------
+
+/// `orders.json` with `data[index]`'s fields replaced by `fields`.
+fn with_row_fields(index: usize, fields: &[(&str, Value)]) -> String {
+    let mut v: Value = serde_json::from_str(&fixtures::json_body("orders.json").unwrap()).unwrap();
+    for (field, value) in fields {
+        v["data"][index][*field] = value.clone();
+    }
+    serde_json::to_string(&v).unwrap()
+}
+
+#[tokio::test]
+async fn a_partial_fill_round_trips_every_quantity_field_and_its_status() {
+    use manja::kite::connect::models::OrderStatus;
+    use manja::kite::protocol::Inbound;
+    // Supplemental, derived from orders.json row 1 (COMPLETE, 1 filled):
+    // an OPEN order with 3 of 10 filled, and the same row with a status no
+    // documented table lists.
+    let partial = with_row_fields(
+        1,
+        &[
+            ("status", Value::from("OPEN")),
+            ("quantity", Value::from(10)),
+            ("filled_quantity", Value::from(3)),
+            ("pending_quantity", Value::from(7)),
+            ("cancelled_quantity", Value::from(0)),
+        ],
+    );
+    let undocumented = with_row_fields(
+        1,
+        &[
+            ("status", Value::from("HALF FILLED")),
+            ("quantity", Value::from(10)),
+            ("filled_quantity", Value::from(3)),
+            ("pending_quantity", Value::from(7)),
+            ("cancelled_quantity", Value::from(0)),
+        ],
+    );
+    for (body, tolerant) in [
+        (partial.clone(), false),
+        (partial, true),
+        (undocumented.clone(), false),
+        (undocumented, true),
+    ] {
+        let h = serve(body.clone()).await;
+        let (_rec, obs) = recording();
+        let c = client(&h.base_url(), &obs);
+        let row = if tolerant {
+            c.orders()
+                .list_orders_with_rejections()
+                .await
+                .unwrap()
+                .data
+                .into_complete()
+                .unwrap()
+                .remove(1)
+        } else {
+            c.orders().list_orders().await.unwrap().data.remove(1)
+        };
+        assert_eq!(row.quantity, 10);
+        assert_eq!(row.filled_quantity, 3);
+        assert_eq!(row.pending_quantity, 7);
+        assert_eq!(row.cancelled_quantity, 0);
+        if body.contains("HALF FILLED") {
+            assert!(row.status.is_unknown(), "an undocumented status is kept");
+            assert_eq!(row.status.as_wire(), "HALF FILLED");
+            assert!(OrderStatus::try_from(row.status.clone()).is_err());
+        } else {
+            assert_eq!(row.status, Inbound::Known(OrderStatus::Open));
+        }
+    }
 }

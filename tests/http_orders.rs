@@ -92,8 +92,7 @@ async fn placement_is_form_encoded_and_acknowledged() {
         .place_order(&market_buy())
         .await
         .unwrap()
-        .data
-        .unwrap();
+        .data;
     assert_eq!(ack.order_id, "151220000000000");
     let r = only(&h);
     assert_eq!(
@@ -127,8 +126,7 @@ async fn modification_sends_only_the_set_fields() {
         .modify_order(OrderVariety::Regular, &id("151220000000000"), &request)
         .await
         .unwrap()
-        .data
-        .unwrap();
+        .data;
     assert_eq!(ack.order_id, "151220000000000");
     let r = only(&h);
     assert_eq!(
@@ -149,8 +147,7 @@ async fn cancellation_puts_no_credential_in_the_url() {
         .cancel_order(OrderVariety::Regular, &id("151220000000000"))
         .await
         .unwrap()
-        .data
-        .unwrap();
+        .data;
     assert_eq!(ack.order_id, "151220000000000");
     let r = only(&h);
     assert_eq!(
@@ -184,8 +181,7 @@ async fn position_conversion_is_form_encoded() {
         .convert_position(&request)
         .await
         .unwrap()
-        .data
-        .unwrap();
+        .data;
     assert!(converted);
     let r = only(&h);
     assert_eq!(
@@ -417,8 +413,7 @@ async fn a_sliced_placement_reports_every_slice_including_failures() {
         .place_order(&request)
         .await
         .unwrap()
-        .data
-        .unwrap();
+        .data;
     assert_eq!(receipt.order_id, "1914227164488687616");
     assert_eq!(receipt.slices.len(), 4);
     assert!(
@@ -460,8 +455,7 @@ async fn a_sliced_placement_reports_every_slice_including_failures() {
         .place_order(&request)
         .await
         .unwrap()
-        .data
-        .unwrap();
+        .data;
     assert_eq!(same, receipt);
 
     // A plain placement has no slices.
@@ -471,8 +465,7 @@ async fn a_sliced_placement_reports_every_slice_including_failures() {
         .place_order(&market_buy())
         .await
         .unwrap()
-        .data
-        .unwrap();
+        .data;
     assert!(plain.slices.is_empty() && !plain.has_failed_slices());
 
     // A slice with neither an order ID nor an error is evidence, not
@@ -495,8 +488,7 @@ async fn an_order_id_from_the_order_book_goes_straight_back_into_a_modification(
         .list_orders()
         .await
         .unwrap()
-        .data
-        .unwrap();
+        .data;
     // The ID is already an OrderId: no parsing or string conversion.
     let target = &orders[0].order_id;
     let h = serve("order_modify.json").await;
@@ -509,8 +501,7 @@ async fn an_order_id_from_the_order_book_goes_straight_back_into_a_modification(
         .modify_order(OrderVariety::Regular, target, &request)
         .await
         .unwrap()
-        .data
-        .unwrap();
+        .data;
     assert_eq!(ack.order_id, "151220000000000");
     assert_eq!(only(&h).target, format!("/orders/regular/{target}"));
 }
@@ -721,4 +712,37 @@ fn an_invalid_request_has_no_wire_form() {
             .kind(),
         HttpErrorKind::Validation
     );
+}
+
+// ---- response meta -----------------------------------------------------
+
+#[tokio::test]
+async fn a_receipt_carries_the_message_the_broker_sent() {
+    // Supplemental, derived from order_response.json: no official sample
+    // carries an envelope-level `message`, so one is added to the receipt.
+    let mut body: serde_json::Value =
+        serde_json::from_str(&fixtures::json_body("order_response.json").unwrap()).unwrap();
+    body["message"] = serde_json::Value::from("Order placed");
+    let h = HttpHarness::start(vec![Reply::json(body.to_string())]).await;
+    let response = client(&h.base_url())
+        .orders()
+        .place_order(&market_buy())
+        .await
+        .unwrap();
+    assert_eq!(response.meta.message.as_deref(), Some("Order placed"));
+    assert_eq!(response.meta.http_status, 200);
+    assert_eq!(response.meta.attempt, 1);
+    assert!(
+        response.meta.operation_id >= 1,
+        "the operation counter starts at 1"
+    );
+    assert_eq!(response.data.order_id, "151220000000000");
+    // A receipt without a message says so.
+    let h = serve("order_response.json").await;
+    let response = client(&h.base_url())
+        .orders()
+        .place_order(&market_buy())
+        .await
+        .unwrap();
+    assert_eq!(response.meta.message, None);
 }

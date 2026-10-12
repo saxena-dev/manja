@@ -60,7 +60,8 @@ alone, `ticker` with `decoder`, `http` with `ticker`, all three, and the default
 Not supported: alerts, placing or changing mutual fund orders and SIPs, the holdings
 summary, the full profile, the trigger range, and receiving postbacks over HTTP.
 
-Every JSON endpoint is decoded into its documented response type, and success requires
+Every JSON endpoint is decoded into its documented response type and returned as a
+`Response<T>` with the facts of the call (§2.18), and success requires
 a 2xx status plus a `status: "success"` envelope (`kite:response-structure.md:15-28`). The
 mutual fund SIP list is documented without a `status` (`kite:mutual-funds.md:219-221`),
 so for that endpoint alone an absent `status` is accepted; any `status` other than
@@ -108,8 +109,8 @@ sending, never truncated.
 
 | Operation | Contract |
 |---|---|
-| `exchange(&RequestToken, &ApiSecret)` | `POST /session/token` with `api_key`, `request_token` and `checksum` = SHA-256 hex of `api_key + request_token + api_secret` (`kite:user.md:97-99`). The secret is borrowed for the call and never sent, stored or logged. Returns a `UserSession` whose tokens are secret-wrapped. The request is `WireForm::session_exchange(&api_key, &request_token, &api_secret)`, whose `Display` and `Debug` redact the token and the checksum (§2.1) |
-| `invalidate(&AccessToken)` | `DELETE /session/token` for the session's API key (`kite:user.md:295-310`). Takes no API secret. The request is `WireForm::session_invalidation(&api_key, &access_token)`: no body (so an empty `Display`), the two query parameters, the access token redacted in `Debug` |
+| `exchange(&RequestToken, &ApiSecret)` | `POST /session/token` with `api_key`, `request_token` and `checksum` = SHA-256 hex of `api_key + request_token + api_secret` (`kite:user.md:97-99`). The secret is borrowed for the call and never sent, stored or logged. Returns a `Response<UserSession>` whose tokens are secret-wrapped. The request is `WireForm::session_exchange(&api_key, &request_token, &api_secret)`, whose `Display` and `Debug` redact the token and the checksum (§2.1) |
+| `invalidate(&AccessToken)` | `DELETE /session/token` for the session's API key (`kite:user.md:295-310`). Takes no API secret and returns the broker's `Response<bool>`. The request is `WireForm::session_invalidation(&api_key, &access_token)`: no body (so an empty `Display`), the two query parameters, the access token redacted in `Debug` |
 | Attempts | Exactly one transport attempt within the session deadline (`B-HTTP-11`). No retry after a 429, a lost response, a timeout or cancellation |
 | Side effects | None beyond the request: nothing is persisted, and no client has a token installed or cleared |
 
@@ -432,6 +433,35 @@ holdings and GTT lists, stay strict. The order ID in an
 `OrderChargesRequest` is not an `OrderId`: the documentation allows any string there
 (`kite:margins.md:395`), and it travels in the JSON body, never in a path.
 
+### 2.18 Responses
+
+Every JSON endpoint returns `Response<T> { data: T, meta: ResponseMeta }`
+(`kite::connect::models`). The CSV instrument lists return `String` or `Vec<Instrument>`
+and `Vec<MfInstrument>` as §2.1 and §2.14 say.
+
+| Field | Contract |
+|---|---|
+| `data: T` | The endpoint's documented type, the value itself. A call returns `Ok` only when Kite answered with a 2xx status, a `status: "success"` envelope and data of the expected shape (§2.1), so there is no `Option` and nothing to unwrap; every failure, including an error envelope, is a `ManjaError` (§2.4) |
+| `meta.message: Option<String>` | Kite's optional `message` from the envelope, as received; `None` when the envelope has none |
+| `meta.http_status: u16` | The HTTP status of the attempt that produced the response |
+| `meta.operation_id: u64` | The operation's ID: the `operation_id` field of its `manja.http.operation` span (§4.2), unique within the client's observability scope |
+| `meta.attempt: u32` | The number of the attempt that produced the response: 1 for a first try, 2 after one retry; the same numbering as `HttpError::attempt` |
+
+`Response::map(f)` applies `f` to the data and keeps the meta. `Response<T>` has exactly
+these two public fields; `ResponseMeta` is `#[non_exhaustive]` with public fields, so a
+later release can add the client's source identity and the send and receive stamps
+without a second break. Both serialize. The 0.2 envelope `KiteApiResponse`, with its
+`status`, `Option<T>` data and `error_type`, no longer exists: `status` was always
+`"success"` and `error_type` always `None` on a returned value, so neither was data
+(`migration.md` §7).
+
+Broker state arrives unchanged. An order row keeps every field reservation logic depends
+on exactly as the broker reports it: `status`, `filled_quantity`, `pending_quantity` and
+`cancelled_quantity`, with a status outside the documented tables preserved as
+`Inbound::Unknown` carrying its wire text, never mapped to a documented one. The SDK does
+not tell a partial fill of an open order from a terminal partially filled order; it
+reports the fields that let the caller do so.
+
 ---
 
 ## 3. Runtime bounds
@@ -701,6 +731,7 @@ These choices are not dictated by the Kite documentation alone.
 | Ticker price scale | Currency derivatives (CDS) divide by 10 000 000; NSE, NFO, BSE, BFO, MCX, MCXSX and indices divide by 100. The BSE currency segment (BCD) is refused | The documentation gives 10 000 000 for currencies and 100 for everything else (`kite:websocket.md:89`); nothing establishes a separate BCD scale, and the segment cannot be read from the token, so the caller supplies it |
 | Handshake rejection | A 401 or 403 WebSocket handshake ends the ticker with `AuthRejected` | Retrying rejected credentials cannot succeed and would only repeat the rejection |
 | Quota enforcement | Every documented window is enforced locally by default (§3.6) | Exceeding them is a documented broker error (`kite:exceptions.md:39`) |
+| Responses | `Response<T> { data: T, meta }` replaces the 0.2 envelope on every JSON endpoint; the `status` and `error_type` fields are gone and `data` is not optional (§2.18) | A success type with an `Option` inside makes every caller write a panic path or a fallback for a case the SDK promises cannot happen, and a fallback such as an empty order book is exactly the silent failure the crate exists to prevent. Fields that are constant on success are not data. Order rows keep every broker quantity and status field as reported so a caller can tell a partial fill from a terminal partially filled order; the SDK never collapses them |
 | Wire forms | Every mutation renders a `WireForm` before it is sent and sends exactly those bytes; the forms of the two session operations exist but never render their token or checksum: the marker `<redacted>` stands in for each (§2.1) | An application that shows a person a compiled order and later journals what was sent needs the two to be provably the same bytes, and the hash of the form gives that without a second entry point. The session forms are included so every mutation has one; their bodies necessarily carry the documented token fields, so they render redacted and expose their bytes only through the hash and the send |
 | Priority lanes | Two caller-selected lanes per quota class with a control reserve (`B-HTTP-15`, §2.1, §3.6); order cancellation and GTT deletion default to `Control`, and the mark is made per call through `HTTPClient::with_priority` rather than as a parameter on every method | Cancellation and the reads that confirm it share one transport with polling, and an in-flight request cannot be recalled, so a reserve that `Standard` traffic may never take is the only honest form of priority. Which reads are urgent is known only to the application, so the mark is per call and the SDK never decides it. A derived client keeps every method's signature unchanged |
 | Oversized quote requests | Rejected before sending, never split or truncated | A split would return several snapshots taken at different times as one result |

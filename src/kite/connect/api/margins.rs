@@ -19,8 +19,8 @@
 use crate::kite::connect::{
     client::HTTPClient,
     models::{
-        BasketMargin, KiteApiResponse, OrderCharges, OrderChargesRequest, OrderMargin,
-        OrderMarginRequest, RequestError,
+        BasketMargin, OrderCharges, OrderChargesRequest, OrderMargin, OrderMarginRequest,
+        RequestError, Response,
     },
 };
 use crate::kite::error::Result;
@@ -66,7 +66,7 @@ fn non_empty<T>(items: &[T]) -> std::result::Result<(), RequestError> {
 ///     price: 0.0,
 ///     trigger_price: 0.0,
 /// };
-/// for margin in client.margins().orders(&[order]).await?.data.unwrap_or_default() {
+/// for margin in client.margins().orders(&[order]).await?.data {
 ///     println!("{}: total {}", margin.tradingsymbol, margin.total);
 /// }
 /// # Ok(()) }
@@ -88,7 +88,7 @@ impl<'c> Margins<'c> {
     pub async fn orders(
         &self,
         orders: &[OrderMarginRequest],
-    ) -> Result<KiteApiResponse<Vec<OrderMargin>>> {
+    ) -> Result<Response<Vec<OrderMargin>>> {
         let valid = non_empty(orders).and_then(|_| orders.iter().try_for_each(|o| o.validate()));
         self.client
             .send_json(reqwest::Method::POST, "/margins/orders", valid, orders)
@@ -101,7 +101,7 @@ impl<'c> Margins<'c> {
         &self,
         orders: &[OrderMarginRequest],
         consider_positions: bool,
-    ) -> Result<KiteApiResponse<BasketMargin>> {
+    ) -> Result<Response<BasketMargin>> {
         let valid = non_empty(orders).and_then(|_| orders.iter().try_for_each(|o| o.validate()));
         self.client
             .send_json(
@@ -145,7 +145,7 @@ impl<'c> Margins<'c> {
 ///     quantity: Quantity::new(1)?,
 ///     average_price: 1500.0,
 /// };
-/// for charged in client.charges().orders(&[order]).await?.data.unwrap_or_default() {
+/// for charged in client.charges().orders(&[order]).await?.data {
 ///     println!("{}: {} in charges", charged.tradingsymbol, charged.charges.total);
 /// }
 /// # Ok(()) }
@@ -166,7 +166,7 @@ impl<'c> Charges<'c> {
     pub async fn orders(
         &self,
         orders: &[OrderChargesRequest],
-    ) -> Result<KiteApiResponse<Vec<OrderCharges>>> {
+    ) -> Result<Response<Vec<OrderCharges>>> {
         let valid = non_empty(orders).and_then(|_| orders.iter().try_for_each(|o| o.validate()));
         self.client
             .send_json(reqwest::Method::POST, "/charges/orders", valid, orders)

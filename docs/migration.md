@@ -163,3 +163,9 @@ change and consolidated when the release is cut.
 | Item | Change |
 |---|---|
 | Admission of `Standard`-class reads and other `Standard`-lane traffic | By default the `Standard` class now admits 8 `Standard`-lane requests per second, keeping 2 per second for the `Control` lane (`B-HTTP-15`). Order cancellation and GTT deletion take the `Control` lane by default and are no longer queued behind a full second of polling. A caller that needs the previous single-lane behaviour sets `AdmissionLimits::default().with_control_reserve(RateClass::Standard, 0)`; one whose own polling must not displace its urgent reads marks those calls with `with_priority(Priority::Control)`. The class total is unchanged at the documented 10 per second |
+
+### 7.3 Intentional breaks
+
+| ID | Change | What to do |
+|---|---|---|
+| `BR-15` | Every JSON endpoint returns `Response<T> { data: T, meta: ResponseMeta }` instead of `KiteApiResponse<T>`. `data` is the value itself, never `Option`; the `status` and `error_type` fields are gone, since both were constant on every returned value; Kite's optional `message` moves to `meta.message`, next to the HTTP status, the operation ID and the attempt number (`contract.md` §2.18) | Drop the unwrap. Before: `let profile = client.user().profile().await?.data.expect("data");` and `let book = client.orders().list_orders().await?.data.unwrap_or_default();`. After: `let profile = client.user().profile().await?.data;` and `let book = client.orders().list_orders().await?.data;`. Code that read `response.message` reads `response.meta.message`; code that checked `response.status == "success"` deletes the check, which could never fail |

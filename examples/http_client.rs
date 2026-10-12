@@ -44,34 +44,22 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let client = HTTPClient::with_observability(Config::new(base), obs)?
         .with_credentials(Credentials::new("api_key", "access_token")?);
 
-    let profile = client.user().profile().await?.data.expect("data");
+    let profile = client.user().profile().await?.data;
     println!("profile: {} ({})", profile.user_name, profile.user_id);
     let margins = client.user().margins().await?;
-    println!("margins envelope status: {}", margins.status);
-    let holdings = client
-        .portfolio()
-        .get_holdings()
-        .await?
-        .data
-        .unwrap_or_default();
+    println!(
+        "margins: operation {} answered {} on attempt {}",
+        margins.meta.operation_id, margins.meta.http_status, margins.meta.attempt
+    );
+    let holdings = client.portfolio().get_holdings().await?.data;
     println!("holdings: {}", holdings.len());
-    let positions = client
-        .portfolio()
-        .get_positions()
-        .await?
-        .data
-        .expect("data");
+    let positions = client.portfolio().get_positions().await?.data;
     println!(
         "positions: {} net, {} day",
         positions.net.len(),
         positions.day.len()
     );
-    let orders = client
-        .orders()
-        .list_orders()
-        .await?
-        .data
-        .unwrap_or_default();
+    let orders = client.orders().list_orders().await?.data;
     println!("orders in the book: {}", orders.len());
 
     // Orders: a validated wire request. `Quantity` refuses zero.
@@ -93,8 +81,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .orders()
         .place_order_with_permit(&request, permit)
         .await?
-        .data
-        .expect("data");
+        .data;
     // A receipt means the broker accepted the request, not that it filled.
     println!("order accepted: {}", receipt.order_id);
 
@@ -103,8 +90,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .market()
         .get_quotes::<FullQuote>(&["NSE:INFY", "NSE:TCS"])
         .await?
-        .data
-        .expect("data");
+        .data;
     println!(
         "quotes: received {:?}, missing {:?}",
         quotes.received.keys().collect::<Vec<_>>(),

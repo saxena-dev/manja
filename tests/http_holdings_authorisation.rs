@@ -52,8 +52,7 @@ async fn named_holdings_are_sent_as_isin_and_quantity_pairs() {
         .authorise_holdings(&two_isins())
         .await
         .unwrap()
-        .data
-        .unwrap();
+        .data;
     assert_eq!(auth.request_id, "na8QgCeQm05UHG6NL9sAGRzdfSF64UdB");
     let r = only(&h);
     assert_eq!(

@@ -31,7 +31,7 @@
 use crate::kite::connect::{
     client::HTTPClient,
     credentials::{AccessToken, ApiKey, ApiSecret, RequestToken},
-    models::{KiteApiResponse, UserSession},
+    models::{Response, UserSession},
     wire::WireForm,
 };
 use crate::kite::error::Result;
@@ -60,8 +60,7 @@ use crate::kite::error::Result;
 ///     .session(ApiKey::new("api_key")?)
 ///     .exchange(&RequestToken::new("request_token")?, &ApiSecret::new("api_secret")?)
 ///     .await?
-///     .data
-///     .expect("data");
+///     .data;
 /// let credentials = session.credentials()?;
 ///
 /// // At the end of the day, retire the access token.
@@ -97,7 +96,7 @@ impl<'c> Session<'c> {
         &self,
         request_token: &RequestToken,
         api_secret: &ApiSecret,
-    ) -> Result<KiteApiResponse<UserSession>> {
+    ) -> Result<Response<UserSession>> {
         let wire = WireForm::session_exchange(&self.api_key, request_token, api_secret);
         self.client.send_wire(Ok(wire), None, false).await
     }
@@ -113,7 +112,7 @@ impl<'c> Session<'c> {
     /// s.invalidate(&t, &x).await;
     /// # }
     /// ```
-    pub async fn invalidate(&self, access_token: &AccessToken) -> Result<KiteApiResponse<bool>> {
+    pub async fn invalidate(&self, access_token: &AccessToken) -> Result<Response<bool>> {
         let wire = WireForm::session_invalidation(&self.api_key, access_token);
         self.client.send_wire(Ok(wire), None, false).await
     }

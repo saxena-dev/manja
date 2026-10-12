@@ -22,11 +22,11 @@ use manja::kite::connect::models::{
     Candle, CandleInterval, DividendType, Exchange, FullQuote, GttCondition, GttOrder,
     GttOrderOutcome, GttOrderRequest, GttOrderResult, GttReceipt, GttRequest, GttStatus,
     GttTrigger, GttType, HistoricalData, HistoricalRequest, Holding, HoldingsAuthorisation,
-    HoldingsAuthorisationRequest, Instrument, KiteApiResponse, LTPQuote, MfHolding, MfInstrument,
-    MfOrder, MfOrderStatus, MfOrderVariety, MfPlan, MfPurchaseType, MfSip, ModifyOrderRequest,
-    OHLCQuote, Order, OrderReceipt, PlaceOrderRequest, Position, PositionConversionRequest,
-    Positions, QuoteMode, Quotes, RequestError, Row, RowError, Rows, SchemeType, SipFrequency,
-    SipStatus, Trade, UserSession,
+    HoldingsAuthorisationRequest, Instrument, LTPQuote, MfHolding, MfInstrument, MfOrder,
+    MfOrderStatus, MfOrderVariety, MfPlan, MfPurchaseType, MfSip, ModifyOrderRequest, OHLCQuote,
+    Order, OrderReceipt, PlaceOrderRequest, Position, PositionConversionRequest, Positions,
+    QuoteMode, Quotes, RequestError, Response, ResponseMeta, Row, RowError, Rows, SchemeType,
+    SipFrequency, SipStatus, Trade, UserSession,
 };
 use manja::kite::connect::scheduler::{DispatchPermit, PermitTarget, SchedulerLimits};
 use manja::kite::connect::wire::WireForm;
@@ -78,23 +78,32 @@ fn old_call_shapes(mut c: HTTPClient) {
 
 // Signatures of the main async operations, by type.
 async fn signatures(c: &HTTPClient, h: &TickerHandle) {
-    let _: Result<KiteApiResponse<Vec<Order>>, ManjaError> = c.orders().list_orders().await;
+    let _: Result<Response<Vec<Order>>, ManjaError> = c.orders().list_orders().await;
+    if let Ok(book) = c.orders().list_orders().await {
+        let meta: ResponseMeta = book.meta.clone();
+        let _: (Option<String>, u16, u64, u32) = (
+            meta.message,
+            meta.http_status,
+            meta.operation_id,
+            meta.attempt,
+        );
+        let _: Response<usize> = book.map(|orders| orders.len());
+    }
     let id: OrderId = "151220000000000".parse().unwrap();
-    let _: Result<KiteApiResponse<Vec<Order>>, ManjaError> =
-        c.orders().get_order_history(&id).await;
-    let _: Result<KiteApiResponse<Vec<Trade>>, ManjaError> = c.orders().get_order_trades(&id).await;
-    let _: Result<KiteApiResponse<OrderReceipt>, ManjaError> = c
+    let _: Result<Response<Vec<Order>>, ManjaError> = c.orders().get_order_history(&id).await;
+    let _: Result<Response<Vec<Trade>>, ManjaError> = c.orders().get_order_trades(&id).await;
+    let _: Result<Response<OrderReceipt>, ManjaError> = c
         .orders()
         .cancel_order(manja::kite::connect::models::OrderVariety::Regular, &id)
         .await;
     let _: Result<OrderId, OrderIdError> = OrderId::new("1");
-    let _: Result<KiteApiResponse<Rows<Order>>, ManjaError> =
+    let _: Result<Response<Rows<Order>>, ManjaError> =
         c.orders().list_orders_with_rejections().await;
-    let _: Result<KiteApiResponse<Rows<Order>>, ManjaError> =
+    let _: Result<Response<Rows<Order>>, ManjaError> =
         c.orders().get_order_history_with_rejections(&id).await;
-    let _: Result<KiteApiResponse<Rows<Trade>>, ManjaError> =
+    let _: Result<Response<Rows<Trade>>, ManjaError> =
         c.orders().list_trades_with_rejections().await;
-    let _: Result<KiteApiResponse<Rows<Trade>>, ManjaError> =
+    let _: Result<Response<Rows<Trade>>, ManjaError> =
         c.orders().get_order_trades_with_rejections(&id).await;
     let _: fn(&RowError) -> usize = |e| e.index;
     let _: fn(Row<Trade>) -> Option<Trade> = |r| match r {
@@ -104,8 +113,8 @@ async fn signatures(c: &HTTPClient, h: &TickerHandle) {
     let _ = PermitTarget::ModifyOrder {
         order_id: id.clone(),
     };
-    let _: Result<KiteApiResponse<Vec<Holding>>, ManjaError> = c.portfolio().get_holdings().await;
-    let _: Result<KiteApiResponse<Positions>, ManjaError> = c.portfolio().get_positions().await;
+    let _: Result<Response<Vec<Holding>>, ManjaError> = c.portfolio().get_holdings().await;
+    let _: Result<Response<Positions>, ManjaError> = c.portfolio().get_positions().await;
     let gtt: GttRequest = GttRequest::single(
         Exchange::NSE,
         "INFY",
@@ -120,43 +129,42 @@ async fn signatures(c: &HTTPClient, h: &TickerHandle) {
     );
     let _: Result<(), RequestError> = gtt.validate();
     let _: fn(&GttTrigger) -> Result<GttRequest, RequestError> = GttRequest::from_trigger;
-    let _: Result<KiteApiResponse<GttReceipt>, ManjaError> = c.gtt().place_trigger(&gtt).await;
-    let _: Result<KiteApiResponse<GttReceipt>, ManjaError> = c.gtt().modify_trigger(1, &gtt).await;
-    let _: Result<KiteApiResponse<GttReceipt>, ManjaError> = c.gtt().delete_trigger(1).await;
+    let _: Result<Response<GttReceipt>, ManjaError> = c.gtt().place_trigger(&gtt).await;
+    let _: Result<Response<GttReceipt>, ManjaError> = c.gtt().modify_trigger(1, &gtt).await;
+    let _: Result<Response<GttReceipt>, ManjaError> = c.gtt().delete_trigger(1).await;
     if let Ok(p) = c.admit(PermitTarget::PlaceGtt).await {
-        let _: Result<KiteApiResponse<GttReceipt>, ManjaError> =
+        let _: Result<Response<GttReceipt>, ManjaError> =
             c.gtt().place_trigger_with_permit(&gtt, p).await;
     }
     if let Ok(p) = c.admit(PermitTarget::ModifyGtt).await {
-        let _: Result<KiteApiResponse<GttReceipt>, ManjaError> =
+        let _: Result<Response<GttReceipt>, ManjaError> =
             c.gtt().modify_trigger_with_permit(1, &gtt, p).await;
     }
     if let Ok(p) = c.admit(PermitTarget::DeleteGtt).await {
-        let _: Result<KiteApiResponse<GttReceipt>, ManjaError> =
+        let _: Result<Response<GttReceipt>, ManjaError> =
             c.gtt().delete_trigger_with_permit(1, p).await;
     }
-    let _: Result<KiteApiResponse<Vec<GttTrigger>>, ManjaError> = c.gtt().list_triggers().await;
-    let _: Result<KiteApiResponse<GttTrigger>, ManjaError> = c.gtt().get_trigger(1).await;
-    let _: Result<KiteApiResponse<Quotes<LTPQuote>>, ManjaError> =
+    let _: Result<Response<Vec<GttTrigger>>, ManjaError> = c.gtt().list_triggers().await;
+    let _: Result<Response<GttTrigger>, ManjaError> = c.gtt().get_trigger(1).await;
+    let _: Result<Response<Quotes<LTPQuote>>, ManjaError> =
         c.market().get_quotes::<LTPQuote>(&["NSE:INFY"]).await;
     let _: Result<Vec<Instrument>, ManjaError> = c.market().get_instruments_all().await;
     let at = chrono::DateTime::parse_from_rfc3339("2017-12-15T09:15:00+05:30").unwrap();
     let history = HistoricalRequest::new(InstrumentToken::new(5633), CandleInterval::Day, at, at);
-    let _: Result<KiteApiResponse<HistoricalData>, ManjaError> =
-        c.market().get_historical(&history).await;
+    let _: Result<Response<HistoricalData>, ManjaError> = c.market().get_historical(&history).await;
     let _: fn(&HistoricalData) -> &Vec<Candle> = |d| &d.candles;
-    let _: Result<KiteApiResponse<HoldingsAuthorisation>, ManjaError> = c
+    let _: Result<Response<HoldingsAuthorisation>, ManjaError> = c
         .portfolio()
         .authorise_holdings(&HoldingsAuthorisationRequest::all())
         .await;
     let _: fn(&HoldingsAuthorisation, &ApiKey) -> String = HoldingsAuthorisation::portal_url;
     let _: fn(&HttpError) -> bool = HttpError::requires_holdings_authorisation;
     let mf = c.mutual_funds();
-    let _: Result<KiteApiResponse<Vec<MfOrder>>, ManjaError> = mf.list_orders().await;
-    let _: Result<KiteApiResponse<MfOrder>, ManjaError> =
+    let _: Result<Response<Vec<MfOrder>>, ManjaError> = mf.list_orders().await;
+    let _: Result<Response<MfOrder>, ManjaError> =
         mf.get_order(&"1".parse::<MfOrderId>().unwrap()).await;
-    let _: Result<KiteApiResponse<Vec<MfSip>>, ManjaError> = mf.list_sips().await;
-    let _: Result<KiteApiResponse<Vec<MfHolding>>, ManjaError> = mf.list_holdings().await;
+    let _: Result<Response<Vec<MfSip>>, ManjaError> = mf.list_sips().await;
+    let _: Result<Response<Vec<MfHolding>>, ManjaError> = mf.list_holdings().await;
     let _: Result<Vec<MfInstrument>, ManjaError> = mf.get_instruments().await;
     let _: Result<String, ManjaError> = mf.get_instruments_csv().await;
     let _: Result<DispatchPermit, ManjaError> = c.admit(PermitTarget::PlaceOrder).await;
@@ -200,7 +208,7 @@ async fn signatures(c: &HTTPClient, h: &TickerHandle) {
     let _: fn(&ApiKey, &AccessToken) -> WireForm = WireForm::session_invalidation;
     // Priority lanes: a marked client, and the lane on an admission grant.
     let control: HTTPClient = c.with_priority(Priority::Control);
-    let _: Result<KiteApiResponse<Vec<Order>>, ManjaError> = control.orders().list_orders().await;
+    let _: Result<Response<Vec<Order>>, ManjaError> = control.orders().list_orders().await;
     let _: Result<AdmissionLimits, manja::kite::connect::admission::QuotaError> =
         AdmissionLimits::default().with_control_reserve(RateClass::Standard, 2);
     let _: fn(&AdmissionLimits, RateClass) -> u32 = AdmissionLimits::control_reserve;

@@ -48,7 +48,7 @@
 //!
 //! // HTTP: create one client and share clones of it.
 //! let client = HTTPClient::new(Config::default())?.with_credentials(credentials.clone());
-//! let profile = client.user().profile().await?.data.expect("data");
+//! let profile = client.user().profile().await?.data;
 //! println!("logged in as {}", profile.user_name);
 //!
 //! // Ticker: one background task owns the connection; you hold the handle.

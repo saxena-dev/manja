@@ -73,7 +73,7 @@ use crate::kite::{
         api::{Charges, Gtt, Margins, Market, MutualFunds, Orders, Portfolio, Session, User},
         config::Config,
         credentials::{AccessToken, ApiKey, Credentials},
-        models::{KiteApiResponse, Row, RowError, Rows, UserSession},
+        models::{Response, ResponseMeta, Row, RowError, Rows, UserSession},
         scheduler::{
             AttemptCtx, DispatchPermit, OpObs, OpSpec, PermitTarget, RetryClass, Scheduler,
         },
@@ -197,7 +197,7 @@ pub struct HttpDiagnostics {
 /// let client = HTTPClient::new(Config::default())?
 ///     .with_credentials(Credentials::new("api_key", "access_token")?);
 ///
-/// let holdings = client.portfolio().get_holdings().await?.data.unwrap_or_default();
+/// let holdings = client.portfolio().get_holdings().await?.data;
 /// println!("{} holdings", holdings.len());
 /// # Ok(()) }
 /// ```
@@ -624,13 +624,15 @@ impl HTTPClient {
             None,
             true,
             |rb| rb,
-            |status, body| classify_text(status, body, m, endpoint).and_then(|t| parse(&t)),
+            |facts, body| {
+                classify_text(facts.http_status, body, m, endpoint).and_then(|t| parse(&t))
+            },
         )
         .await
     }
 
     /// GET `path` and decode the response envelope.
-    pub(crate) async fn get<Model>(&self, path: &str) -> Result<KiteApiResponse<Model>>
+    pub(crate) async fn get<Model>(&self, path: &str) -> Result<Response<Model>>
     where
         Model: DeserializeOwned,
     {
@@ -643,7 +645,7 @@ impl HTTPClient {
         &self,
         path: &str,
         query: &Q,
-    ) -> Result<KiteApiResponse<Model>>
+    ) -> Result<Response<Model>>
     where
         Q: Serialize + ?Sized,
         Model: DeserializeOwned,
@@ -662,7 +664,7 @@ impl HTTPClient {
         wire: std::result::Result<WireForm, HttpError>,
         permit: Option<DispatchPermit>,
         auth: bool,
-    ) -> Result<KiteApiResponse<Model>>
+    ) -> Result<Response<Model>>
     where
         Model: DeserializeOwned,
     {
@@ -707,7 +709,7 @@ impl HTTPClient {
         path: &str,
         validate: std::result::Result<(), crate::kite::connect::models::RequestError>,
         body: &T,
-    ) -> Result<KiteApiResponse<Model>>
+    ) -> Result<Response<Model>>
     where
         Model: DeserializeOwned,
         T: Serialize + ?Sized,
@@ -788,7 +790,7 @@ impl HTTPClient {
         &self,
         path: &str,
         policy: RowPolicy,
-    ) -> Result<KiteApiResponse<Rows<T>>>
+    ) -> Result<Response<Rows<T>>>
     where
         T: DeserializeOwned,
     {
@@ -801,14 +803,14 @@ impl HTTPClient {
             None,
             true,
             |rb| rb,
-            |status, body| {
+            |facts, body| {
+                let status = facts.http_status;
                 let envelope = classify_json::<Value>(status, body, m, endpoint)?;
                 let decode = |detail: String| {
                     http_error(HttpErrorKind::Decode, status, m, endpoint).with_detail(&detail)
                 };
-                let elements: Vec<Value> =
-                    serde_json::from_value(envelope.data.unwrap_or(Value::Null))
-                        .map_err(|e| decode(payload_mismatch(&e)))?;
+                let elements: Vec<Value> = serde_json::from_value(envelope.data)
+                    .map_err(|e| decode(payload_mismatch(&e)))?;
                 let total = elements.len();
                 let rows: Vec<Row<T>> = elements
                     .into_iter()
@@ -839,12 +841,11 @@ impl HTTPClient {
                         "{rejected} of {total} rows rejected; first at index {first}"
                     )));
                 }
-                Ok(KiteApiResponse {
-                    status: envelope.status,
-                    data: Some(rows),
+                Ok(Envelope {
+                    data: rows,
                     message: envelope.message,
-                    error_type: None,
-                })
+                }
+                .into_response(facts))
             },
         )
         .await
@@ -857,7 +858,7 @@ impl HTTPClient {
         permit: Option<DispatchPermit>,
         auth: bool,
         build: B,
-    ) -> Result<KiteApiResponse<Model>>
+    ) -> Result<Response<Model>>
     where
         Model: DeserializeOwned,
         B: Fn(reqwest::RequestBuilder) -> reqwest::RequestBuilder,
@@ -870,14 +871,18 @@ impl HTTPClient {
             permit,
             auth,
             build,
-            |status, body| classify_json(status, body, m, endpoint),
+            |facts, body| {
+                classify_json(facts.http_status, body, m, endpoint)
+                    .map(|envelope| envelope.into_response(facts))
+            },
         )
         .await
     }
 
     /// Run one logical operation inside its span: every attempt's response
-    /// is classified by `classify`, so the scheduler and the attempt
-    /// accounting see the final result of each attempt.
+    /// is classified by `classify`, with the facts of that attempt, so the
+    /// scheduler and the attempt accounting see the final result of each
+    /// attempt.
     #[allow(clippy::too_many_arguments)]
     async fn operation<T, B, C>(
         &self,
@@ -891,7 +896,7 @@ impl HTTPClient {
     ) -> Result<T>
     where
         B: Fn(reqwest::RequestBuilder) -> reqwest::RequestBuilder,
-        C: Fn(u16, &[u8]) -> std::result::Result<T, HttpError>,
+        C: Fn(AttemptFacts, &[u8]) -> std::result::Result<T, HttpError>,
     {
         let (m, endpoint) = labels(&method, path);
         let guard = self.guard(m, endpoint);
@@ -919,7 +924,7 @@ impl HTTPClient {
     ) -> std::result::Result<T, HttpError>
     where
         B: Fn(reqwest::RequestBuilder) -> reqwest::RequestBuilder,
-        C: Fn(u16, &[u8]) -> std::result::Result<T, HttpError>,
+        C: Fn(AttemptFacts, &[u8]) -> std::result::Result<T, HttpError>,
     {
         let (m, endpoint) = (guard.method, guard.endpoint);
         let (_, order_id) = rate_key(m, endpoint, path);
@@ -959,7 +964,12 @@ impl HTTPClient {
                             op_dispatched,
                         )
                         .await?;
-                    classify(status, &body).map_err(|e| e.with_attempt(number))
+                    let facts = AttemptFacts {
+                        operation_id: guard.operation_id,
+                        attempt: number,
+                        http_status: status,
+                    };
+                    classify(facts, &body).map_err(|e| e.with_attempt(number))
                 },
             )
             .await
@@ -1232,7 +1242,7 @@ pub(crate) fn classify_json<T: DeserializeOwned>(
     body: &[u8],
     method: Method,
     endpoint: Endpoint,
-) -> std::result::Result<KiteApiResponse<T>, HttpError> {
+) -> std::result::Result<Envelope<T>, HttpError> {
     let parsed: std::result::Result<Value, _> = serde_json::from_slice(body);
     if !(200..300).contains(&status) {
         return Err(match parsed {
@@ -1264,15 +1274,43 @@ pub(crate) fn classify_json<T: DeserializeOwned>(
         Some(d) => d.clone(),
     };
     let data: T = serde_json::from_value(data).map_err(|e| decode(payload_mismatch(&e)))?;
-    Ok(KiteApiResponse {
-        status: "success".to_string(),
-        data: Some(data),
+    Ok(Envelope {
+        data,
         message: obj
             .get("message")
             .and_then(Value::as_str)
             .map(str::to_string),
-        error_type: None,
     })
+}
+
+/// A classified success envelope: the data and Kite's optional message. The
+/// operation path turns it into a [`Response`] with the call's facts.
+#[derive(Debug)]
+pub(crate) struct Envelope<T> {
+    pub(crate) data: T,
+    pub(crate) message: Option<String>,
+}
+
+/// The facts of one attempt's response, handed to the classifier.
+#[derive(Clone, Copy)]
+pub(crate) struct AttemptFacts {
+    pub(crate) operation_id: u64,
+    pub(crate) attempt: u32,
+    pub(crate) http_status: u16,
+}
+
+impl<T> Envelope<T> {
+    fn into_response(self, facts: AttemptFacts) -> Response<T> {
+        Response {
+            data: self.data,
+            meta: ResponseMeta {
+                message: self.message,
+                http_status: facts.http_status,
+                operation_id: facts.operation_id,
+                attempt: facts.attempt,
+            },
+        }
+    }
 }
 
 /// Total classification of a text (CSV) response.

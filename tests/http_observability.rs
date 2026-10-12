@@ -598,14 +598,10 @@ async fn scripted(obs: Observability) -> (Vec<String>, usize) {
     .await;
     let c = client(&h.base_url(), &obs);
     let mut out = vec![
-        format!("{:?}", c.user().profile().await.map(|r| r.data.is_some())),
+        format!("{:?}", c.user().profile().await.map(|r| r.data.user_id)),
         format!(
             "{:?}",
-            c.clone()
-                .orders()
-                .list_orders()
-                .await
-                .map(|r| r.data.map(|d| d.len()))
+            c.clone().orders().list_orders().await.map(|r| r.data.len())
         ),
         format!(
             "{:?}",
@@ -627,7 +623,7 @@ async fn scripted(obs: Observability) -> (Vec<String>, usize) {
                     &ApiSecret::new(SECRET).unwrap(),
                 )
                 .await
-                .map(|r| r.data.map(|s| s.user_id))
+                .map(|r| r.data.user_id)
         ),
     ];
     out.push(format!(
@@ -718,4 +714,28 @@ async fn the_operation_span_records_the_priority_lane() {
     for a in cap.named(ADMISSION) {
         assert_eq!(a.field("priority"), None);
     }
+}
+
+// ---- response meta agrees with the span ----------------------------------
+
+#[tokio::test]
+async fn the_response_meta_names_the_operation_and_the_attempt_that_answered() {
+    let cap = Capture::default();
+    let _g = cap.install();
+    let (_rec, obs) = recording();
+    let h = HttpHarness::start(vec![
+        server_error(),
+        Reply::json(fixtures::json_body("orders.json").unwrap()),
+    ])
+    .await;
+    let c = client(&h.base_url(), &obs);
+    let response = c.orders().list_orders().await.unwrap();
+    assert_eq!(response.meta.attempt, 2, "the second attempt answered");
+    assert_eq!(response.meta.http_status, 200);
+    let [op] = cap.named(OP).try_into().unwrap();
+    assert_eq!(
+        op.field("operation_id"),
+        Some(response.meta.operation_id.to_string().as_str()),
+        "the meta's operation ID is the span's"
+    );
 }
