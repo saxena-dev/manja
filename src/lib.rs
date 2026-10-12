@@ -94,9 +94,10 @@
 //!   the session calls) makes exactly one attempt. Reads and margin and
 //!   charge calculations retry transient failures on their own.
 //! - **Rate limits are enforced locally**, at the rates Kite documents. A
-//!   request waits briefly for capacity (`B-HTTP-06`, 5 seconds by default)
-//!   and is refused with an `Admission` error rather than sent to be
-//!   rejected by Kite.
+//!   read waits briefly for capacity (`B-HTTP-06`, 5 seconds by default); an
+//!   order call never waits and is admitted at once or refused with a hint.
+//!   Either way a call is refused with an `Admission` error rather than sent
+//!   to be rejected by Kite.
 //! - **Everything is bounded.** Queues, bodies, payloads and waits have
 //!   documented defaults and limits, and exceeding one is an explicit error.
 //! - **Unknown values are preserved** as unknown, never coerced into a known

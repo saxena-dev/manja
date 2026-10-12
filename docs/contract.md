@@ -135,7 +135,7 @@ like every observability label domain (§4.1), is `#[non_exhaustive]`; the stabl
 |---|---|
 | `Validation` | the request failed local validation; nothing was sent |
 | `Configuration` | the client or request could not be built; nothing was sent |
-| `Admission` | admission capacity was unavailable before transport started |
+| `Admission` | admission capacity was unavailable before transport started. A mutation or session operation never waits for it: with a window full it is refused at once and the error carries `retry_after()`, the time until the lane's next slot; with the daily ceiling spent it carries `resets_at()`, the next 00:00 IST; the 25-per-order modification limit (`kite:exceptions.md:58`) has no recovery that day. `admission_cause()` names the cause (`window_full`, `daily_ceiling`, `modification_ceiling`, `no_standard_capacity`, `waiters_full`, `wait_expired`), for a read's exhausted wait too, including the `Deadline` error a read gets when the operation deadline expires during its admission wait. The SDK never waits a hint out; the caller decides |
 | `Deadline` | the operation deadline expired |
 | `Transport` | the transport failed or timed out |
 | `HttpStatus` | a non-success status without a broker error envelope |
@@ -486,7 +486,7 @@ cannot be changed.
 | `B-HTTP-03` | Attempts for reads and calculations | 3 | 1 to 5 | |
 | `B-HTTP-04` | Attempts for mutations and session operations | 1 | fixed | |
 | `B-HTTP-05` | Retry backoff, initial delay / cap; multiplier 2, full jitter | 250 ms / 5 s | 10 ms to 5 s / 10 ms to 30 s | cap ≥ initial; never past `B-HTTP-01` |
-| `B-HTTP-06` | Admission wait | 5 s | 1 ms to 60 s | |
+| `B-HTTP-06` | Admission wait, for the read and calculation classes only | 5 s | 1 ms to 60 s | A mutation or session operation never waits: it is admitted now or refused with a hint (§2.4, §3.6) |
 | `B-HTTP-07` | Admission waiters per budget scope | 256 | 1 to 4 096 | when full, an `Admission` error |
 | `B-HTTP-08` | Response body: JSON / instrument CSV | 4 MiB / 64 MiB | 64 KiB to 64 MiB / 1 MiB to 256 MiB | when exceeded, a `Decode` error with the status kept |
 | `B-HTTP-09` | Request body | 1 MiB | 1 KiB to 8 MiB | when exceeded, a `Validation` error before admission |
@@ -570,8 +570,13 @@ in all, and a `Control` request is admitted while the reserved slots are free wh
 `Standard` traffic has done. Both lanes draw from the same windows and ceilings: a
 `Control` request counts against the class rate, the daily order ceiling and the
 per-order modification limit like any other, so the lanes together never exceed the
-documented rate. A lane whose share is full waits like any other request, under
-`B-HTTP-06`. The reserve is a local view: it cannot keep capacity from other processes
+documented rate. A read or calculation whose lane share is full waits for its slot under
+`B-HTTP-06`. A mutation or session operation is admitted synchronously: if every window of
+its class has a free slot on its lane it starts at once, and otherwise the call is refused
+before transport with an `Admission` error carrying the exact time until the lane's next
+slot, the instant the daily ceiling resets, or the per-order modification ceiling (§2.4).
+There is no wait and no option to wait: a refusal is affirmative evidence that nothing
+was sent, and the hint is accurate to the instant the wait would have ended. The reserve is a local view: it cannot keep capacity from other processes
 or the Kite app.
 
 Capacity is readable. `Admission::headroom(class)` returns a `Headroom` snapshot:
@@ -621,12 +626,13 @@ Additions within version 1:
 | `manja_http_rejected_rows_total` (§2.16) | a new counter of list rows that did not decode, labelled by `endpoint` only |
 | `DecodeDiagnosticKind::InvalidField` (§4.5) | one more diagnostic kind |
 | `priority` field on `manja.http.operation` and the `priority` domain `standard`, `control` (§2.1, §4.2, §4.3) | a span field and a domain; no metric gains a label, so no series bound changes |
+| `admission_cause` field on `manja.http.operation`, the `admission_cause` domain, and the `admission_result` value `refused` (§2.4, §4.2, §4.3) | a span field, a domain and one more value of an existing label domain: the `manja_http_admission_wait_seconds` series bound grows from 16 to 20 (§4.4) |
 
 ### 4.2 Spans
 
 | Span | Level | Fields |
 |---|---|---|
-| `manja.http.operation` | DEBUG | `operation_id`, `method`, `endpoint`, `quota_class`, `priority`, `deadline_ms`, `result`, `stage` |
+| `manja.http.operation` | DEBUG | `operation_id`, `method`, `endpoint`, `quota_class`, `priority`, `deadline_ms`, `result`, `stage`, `admission_cause` |
 | `manja.http.admission` | DEBUG | `operation_id`, `quota_class`, `wait_ms`, `admission_result` |
 | `manja.http.attempt` | DEBUG | `operation_id`, `attempt`, `method`, `endpoint`, `http_status`, `error_class`, `stage` |
 | `manja.ticker.connection` | DEBUG | `feed_id`, `connection_epoch`, `reason`, `result` |
@@ -651,7 +657,8 @@ or query parameters to Kite requests.
 | `result` (HTTP operation) | `ok`, `http_status`, `broker_error`, `auth_rejected`, `transport_error`, `timeout`, `deadline`, `admission_rejected`, `cancelled`, `decode_error`, `validation` |
 | `result` (HTTP attempt) | `ok`, `http_status`, `broker_error`, `auth_rejected`, `transport_error`, `timeout`, `cancelled`, `decode_error` |
 | `error_class` | `http_429`, `http_5xx`, `transport_error`, `timeout` |
-| `admission_result` | `granted`, `rejected`, `cancelled`, `deadline` |
+| `admission_result` | `granted`, `rejected`, `cancelled`, `deadline`, `refused` (a mutation or session operation refused without waiting) |
+| `admission_cause` | `window_full`, `daily_ceiling`, `modification_ceiling`, `no_standard_capacity`, `waiters_full`, `wait_expired` (why admission did not grant, §2.4; recorded on the operation span when it ends with an `Admission` error, or with a `Deadline` error because the operation deadline expired while a read or calculation waited for admission, where the cause is `wait_expired`) |
 | `priority` | `standard`, `control` (the operation's admission lane, §2.1; a span field, not a metric label) |
 | `transport` | `http`, `ticker` |
 | `result` (ticker connection) | `ok`, `auth_rejected`, `http_status`, `transport_error`, `timeout`, `cancelled` |
@@ -679,7 +686,7 @@ are never labels.
 | `manja_http_attempt_duration_seconds` | histogram, s | `method`, `endpoint`, `result` | 992 |
 | `manja_http_in_flight` | gauge, attempts | `quota_class` | 4 |
 | `manja_http_admission_waiters` | gauge, waiters | `quota_class` | 4 |
-| `manja_http_admission_wait_seconds` | histogram, s | `quota_class`, `admission_result` | 16 |
+| `manja_http_admission_wait_seconds` | histogram, s | `quota_class`, `admission_result` | 20 |
 | `manja_http_retries_total` | counter, retries | `method`, `endpoint`, `error_class` | 496 |
 | `manja_http_rejected_rows_total` | counter, rows | `endpoint` | 31 |
 | `manja_auth_rejections_total` | counter, rejections | `transport` | 2 |
@@ -751,6 +758,7 @@ These choices are not dictated by the Kite documentation alone.
 | Ticker price scale | Currency derivatives (CDS) divide by 10 000 000; NSE, NFO, BSE, BFO, MCX, MCXSX and indices divide by 100. The BSE currency segment (BCD) is refused | The documentation gives 10 000 000 for currencies and 100 for everything else (`kite:websocket.md:89`); nothing establishes a separate BCD scale, and the segment cannot be read from the token, so the caller supplies it |
 | Handshake rejection | A 401 or 403 WebSocket handshake ends the ticker with `AuthRejected` | Retrying rejected credentials cannot succeed and would only repeat the rejection |
 | Quota enforcement | Every documented window is enforced locally by default (§3.6) | Exceeding them is a documented broker error (`kite:exceptions.md:39`) |
+| No wait for mutations | A mutation or session operation is admitted now or refused with a hint; only reads and calculations wait under `B-HTTP-06` (§2.4, §3.2, §3.6) | A wait between a caller's decision and the socket write makes that decision stale by construction, and a caller whose dispatch gate is serialised with other work cannot afford a call that sleeps. An immediate refusal is affirmative evidence that nothing was sent, and with the exact hint the caller can schedule better than a blind wait. Reads lose nothing by waiting, so they keep the bound |
 | Headroom | Admission capacity is readable as an advisory, local-view snapshot per class and lane, plus the modifications an order has left; a spent daily ceiling zeroes both lanes and announces no next slot, and a lane the reserve covers announces none either (§3.6) | A caller that can only learn capacity by being refused pays a refusal for every full window. A snapshot that agrees with the next decision lets it order its own work, and saying "advisory, local view" keeps the account-wide limit, which includes manual orders, where it belongs: with the caller. A reserving read would be the dispatch permit by another name |
 | Session expiry | The 6 AM expiry is taken as IST, and a token expires at the next 06:00 IST strictly after its issue time: an issue at exactly 06:00:00 expires the next day, an issue before 06:00 expires that same morning (§2.2) | Kite's one sentence (`kite:user.md:115`) names no zone and says "the next day"; every documented Kite time is IST, and a caller that injects the issue time needs one boundary rule with no gap, so the next boundary after the instant is the reading the function implements |
 | Responses | `Response<T> { data: T, meta }` replaces the 0.2 envelope on every JSON endpoint; the `status` and `error_type` fields are gone and `data` is not optional (§2.18) | A success type with an `Option` inside makes every caller write a panic path or a fallback for a case the SDK promises cannot happen, and a fallback such as an empty order book is exactly the silent failure the crate exists to prevent. Fields that are constant on success are not data. Order rows keep every broker quantity and status field as reported so a caller can tell a partial fill from a terminal partially filled order; the SDK never collapses them |

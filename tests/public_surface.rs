@@ -227,6 +227,27 @@ async fn signatures(c: &HTTPClient, h: &TickerHandle) {
         let _: AdmissionError = AdmissionError::NoStandardCapacity;
         grant.consume();
     }
+    // Synchronous admission and the refusal facts an error carries.
+    if let Err(e) = c
+        .admission()
+        .try_acquire(Priority::Standard, RateClass::OrderPlacement, None)
+    {
+        let _: (
+            manja::kite::obs::schema::AdmissionCause,
+            Option<std::time::Duration>,
+            Option<chrono::DateTime<chrono::FixedOffset>>,
+        ) = (e.cause(), e.retry_after(), e.resets_at());
+        let _ = matches!(
+            e,
+            AdmissionError::Refused { .. }
+                | AdmissionError::DailyCeilingReached { .. }
+                | AdmissionError::ModificationCeiling
+        );
+    }
+    let _: fn(&HttpError) -> Option<std::time::Duration> = HttpError::retry_after;
+    let _: fn(&HttpError) -> Option<chrono::DateTime<chrono::FixedOffset>> = HttpError::resets_at;
+    let _: fn(&HttpError) -> Option<manja::kite::obs::schema::AdmissionCause> =
+        HttpError::admission_cause;
     // Headroom is a plain, copyable snapshot; both readers take the checked ID.
     let room: Headroom = c.admission().headroom(RateClass::OrderPlacement);
     let copy = room;

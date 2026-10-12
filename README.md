@@ -343,8 +343,9 @@ dropping the future that sent it does not withdraw it; `desired_revision` in
 ## Rate limits, retries and deadlines
 
 You don't need to configure anything to stay within Kite's documented limits. By
-default every request class is admitted at its documented rate, a request waits up to 5
-seconds for capacity, a read makes up to three attempts with jittered backoff between
+default every request class is admitted at its documented rate, a read waits up to 5
+seconds for capacity while an order call is sent at once or refused with a hint (it never
+queues behind your own polling), a read makes up to three attempts with jittered backoff between
 them, and each operation has 30 seconds to finish (15 for the session calls). The daily
 order limit and the per-order modification limit never wait: once spent, they refuse
 the request straight away. Two requests per second of the standard class, and none of

@@ -135,6 +135,15 @@ async fn eleven_control_calls_in_one_second_refuse_the_eleventh() {
         Duration::ZERO,
         "control may use the whole rate"
     );
+    // Synchronous admission on the Control lane: refused at once with the
+    // exact time until the first grant ages out (the D7 hand-over).
+    assert_eq!(
+        a.try_acquire(Priority::Control, RateClass::Standard, None)
+            .unwrap_err(),
+        AdmissionError::Refused {
+            retry_after: Duration::from_secs(1)
+        }
+    );
     let err = a
         .acquire_with_priority(Priority::Control, RateClass::Standard, None, WAIT)
         .await
@@ -153,6 +162,13 @@ async fn eleven_control_calls_in_one_second_refuse_the_eleventh() {
             .await
             .is_err(),
         "at 998 ms the slot is still 2 ms away, beyond the 1 ms wait bound"
+    );
+    assert_eq!(
+        a.try_acquire(Priority::Control, RateClass::Standard, None)
+            .unwrap_err()
+            .retry_after(),
+        Some(Duration::from_millis(2)),
+        "the hint tracks the remaining time exactly"
     );
     tokio::time::advance(Duration::from_millis(2)).await;
     admit(&a, Priority::Control, RateClass::Standard).await;
@@ -211,12 +227,12 @@ async fn the_reserve_scales_with_the_window_period_and_skips_ceilings() {
     for _ in 0..9 {
         admit(&a, Priority::Control, RateClass::OrderPlacement).await;
     }
-    assert_eq!(
+    assert!(matches!(
         a.acquire_with_priority(Priority::Control, RateClass::OrderPlacement, None, WAIT)
             .await
             .unwrap_err(),
-        AdmissionError::DailyCeilingReached
-    );
+        AdmissionError::DailyCeilingReached { .. }
+    ));
 }
 
 #[test]
@@ -514,12 +530,12 @@ async fn day_remaining_counts_placements_down_to_the_ceiling() {
             day_remaining: Some(0),
         }
     );
-    assert_eq!(
+    assert!(matches!(
         a.acquire_with_priority(Priority::Control, RateClass::OrderPlacement, None, WAIT)
             .await
             .unwrap_err(),
-        AdmissionError::DailyCeilingReached
-    );
+        AdmissionError::DailyCeilingReached { .. }
+    ));
 }
 
 #[tokio::test(start_paused = true)]
@@ -582,4 +598,252 @@ async fn two_modifications_through_the_client_leave_twenty_three() {
     let h = client.admission().headroom(RateClass::OrderModification);
     assert_eq!(h.standard_now, 8, "two of the second's ten slots are used");
     assert_eq!(h.day_remaining, None);
+}
+
+// ---- mutations never wait: admitted now or refused ----------------------
+
+use manja::kite::connect::models::{
+    Exchange, OrderType as PlaceOrderType, PlaceOrderRequest, ProductType, TransactionType,
+};
+use manja::kite::obs::schema::AdmissionCause;
+use manja::kite::protocol::Quantity;
+
+fn market_buy() -> PlaceOrderRequest {
+    PlaceOrderRequest::new(
+        OrderVariety::Regular,
+        Exchange::NSE,
+        "INFY",
+        TransactionType::BUY,
+        PlaceOrderType::Market,
+        Quantity::new(1).unwrap(),
+        ProductType::CashAndCarry,
+    )
+}
+
+/// A client on `harness` whose admission scope reads the IST day from a
+/// fixed wall clock, so a daily ceiling resets at a known instant.
+struct FixedClock(i64);
+
+impl manja::kite::connect::admission::WallClock for FixedClock {
+    fn unix_seconds(&self) -> i64 {
+        self.0
+    }
+}
+
+// 2026-09-23 10:00:00 IST, as the admission unit tests use.
+const MORNING: i64 = 1_790_137_800;
+
+fn mutation_client(base: &str, profile: QuotaProfile) -> HTTPClient {
+    let admission = Admission::with_clock(
+        profile,
+        AdmissionLimits::default(),
+        std::sync::Arc::new(FixedClock(MORNING)),
+    );
+    HTTPClient::builder(Config::new(base))
+        .admission(admission)
+        .credentials(Credentials::new("k", "t").unwrap())
+        .build()
+        .unwrap()
+}
+
+#[tokio::test]
+async fn a_saturated_placement_window_refuses_at_once_with_an_accurate_hint() {
+    let receipt = fixtures::json_body("order_response.json").unwrap();
+    let harness = HttpHarness::start((0..11).map(|_| Reply::json(receipt.clone())).collect()).await;
+    let client = mutation_client(&harness.base_url(), QuotaProfile::kite_v3());
+    let start = tokio::time::Instant::now();
+    for _ in 0..10 {
+        client.orders().place_order(&market_buy()).await.unwrap();
+    }
+    assert_eq!(harness.requests().len(), 10);
+    // The eleventh is refused now, with no wait and nothing on the wire.
+    // The clock is paused around the call: a refusal awaits no timer, so no
+    // paused time passes (the loopback server needs the real clock
+    // otherwise).
+    tokio::time::pause();
+    let before = tokio::time::Instant::now();
+    let err = client
+        .orders()
+        .place_order(&market_buy())
+        .await
+        .unwrap_err();
+    assert_eq!(before.elapsed(), Duration::ZERO, "no timer was awaited");
+    tokio::time::resume();
+    let e = err.as_http().unwrap();
+    assert_eq!(e.kind(), HttpErrorKind::Admission);
+    assert_eq!(e.stage(), TransportStage::NotStarted);
+    assert!(!e.may_have_reached_broker());
+    assert_eq!(e.admission_cause(), Some(AdmissionCause::WindowFull));
+    assert_eq!(e.resets_at(), None);
+    let hint = e.retry_after().expect("a full window carries retry_after");
+    // The hint is the time until the first grant ages out of the window:
+    // at most a second, and at least a second less the time already spent.
+    assert!(
+        hint > Duration::ZERO && hint <= Duration::from_secs(1),
+        "{hint:?}"
+    );
+    assert!(
+        hint + start.elapsed() >= Duration::from_secs(1),
+        "{hint:?} after {:?}",
+        start.elapsed()
+    );
+    assert_eq!(harness.requests().len(), 10, "the refusal sent nothing");
+    // Waiting out the hint makes the next placement admit and send (the
+    // exact instant is pinned at the Admission level below).
+    tokio::time::sleep(hint).await;
+    client.orders().place_order(&market_buy()).await.unwrap();
+    assert_eq!(harness.requests().len(), 11);
+}
+
+#[tokio::test(start_paused = true)]
+async fn try_acquire_refuses_with_the_instant_the_wait_path_would_sleep_to() {
+    let a = scope(AdmissionLimits::default());
+    let start = tokio::time::Instant::now();
+    for _ in 0..10 {
+        a.try_acquire(Priority::Standard, RateClass::OrderPlacement, None)
+            .unwrap()
+            .consume();
+    }
+    let err = a
+        .try_acquire(Priority::Standard, RateClass::OrderPlacement, None)
+        .unwrap_err();
+    assert_eq!(
+        err,
+        AdmissionError::Refused {
+            retry_after: Duration::from_secs(1)
+        }
+    );
+    assert_eq!(err.cause(), AdmissionCause::WindowFull);
+    assert_eq!(start.elapsed(), Duration::ZERO, "try_acquire never waits");
+    assert_eq!(a.waiters(), 0, "and counts no waiter");
+    // One millisecond short of the hint the lane is still full; at the hint
+    // it admits, which is exactly where the wait path would have woken.
+    tokio::time::advance(Duration::from_millis(999)).await;
+    assert_eq!(
+        a.try_acquire(Priority::Standard, RateClass::OrderPlacement, None)
+            .unwrap_err()
+            .retry_after(),
+        Some(Duration::from_millis(1))
+    );
+    tokio::time::advance(Duration::from_millis(1)).await;
+    a.try_acquire(Priority::Standard, RateClass::OrderPlacement, None)
+        .unwrap()
+        .consume();
+}
+
+#[tokio::test]
+async fn a_read_in_the_same_scope_still_waits_for_its_slot() {
+    let orders = fixtures::json_body("orders.json").unwrap();
+    let harness = HttpHarness::start((0..9).map(|_| Reply::json(orders.clone())).collect()).await;
+    let client = mutation_client(&harness.base_url(), QuotaProfile::kite_v3());
+    let start = tokio::time::Instant::now();
+    // Eight Standard-lane reads fill the Standard class; the ninth waits
+    // under B-HTTP-06 and is sent once the first slot frees.
+    for _ in 0..8 {
+        client.orders().list_orders().await.unwrap();
+    }
+    let orders = client.orders();
+    let ninth = tokio::time::timeout(Duration::from_millis(100), orders.list_orders()).await;
+    assert!(ninth.is_err(), "the ninth read waits rather than refusing");
+    assert_eq!(harness.requests().len(), 8);
+    // Once the first slot frees the read is sent: it waited, it was not
+    // refused.
+    client.orders().list_orders().await.unwrap();
+    assert_eq!(harness.requests().len(), 9);
+    assert!(
+        start.elapsed() >= Duration::from_secs(1),
+        "{:?}",
+        start.elapsed()
+    );
+}
+
+#[tokio::test]
+async fn a_daily_ceiling_refusal_carries_when_it_resets() {
+    let receipt = fixtures::json_body("order_response.json").unwrap();
+    let harness =
+        HttpHarness::start(vec![Reply::json(receipt.clone()), Reply::json(receipt)]).await;
+    let profile = QuotaProfile::kite_v3()
+        .with_version("t")
+        .with_daily_order_ceiling(2)
+        .unwrap();
+    let client = mutation_client(&harness.base_url(), profile);
+    for _ in 0..2 {
+        client.orders().place_order(&market_buy()).await.unwrap();
+    }
+    tokio::time::pause();
+    let before = tokio::time::Instant::now();
+    let err = client
+        .orders()
+        .place_order(&market_buy())
+        .await
+        .unwrap_err();
+    assert_eq!(before.elapsed(), Duration::ZERO, "no timer was awaited");
+    tokio::time::resume();
+    let e = err.as_http().unwrap();
+    assert_eq!(e.kind(), HttpErrorKind::Admission);
+    assert_eq!(e.stage(), TransportStage::NotStarted);
+    assert_eq!(e.admission_cause(), Some(AdmissionCause::DailyCeiling));
+    assert_eq!(e.retry_after(), None, "no window frees a ceiling");
+    // The next 00:00 IST after 2026-09-23 10:00 IST.
+    assert_eq!(
+        e.resets_at().unwrap().to_rfc3339(),
+        "2026-09-24T00:00:00+05:30"
+    );
+    assert_eq!(harness.requests().len(), 2);
+}
+
+#[tokio::test(start_paused = true)]
+async fn the_twenty_sixth_modification_of_an_order_is_a_modification_ceiling() {
+    let a = scope(AdmissionLimits::default());
+    let order = OrderId::new("151220000000000").unwrap();
+    for n in 0..25 {
+        // Ten per second: step the clock every ten, so only the per-order
+        // limit can refuse.
+        if n > 0 && n % 10 == 0 {
+            tokio::time::advance(Duration::from_secs(1)).await;
+        }
+        a.try_acquire(
+            Priority::Standard,
+            RateClass::OrderModification,
+            Some(order.as_str()),
+        )
+        .unwrap()
+        .consume();
+    }
+    tokio::time::advance(Duration::from_secs(1)).await;
+    let err = a
+        .try_acquire(
+            Priority::Standard,
+            RateClass::OrderModification,
+            Some(order.as_str()),
+        )
+        .unwrap_err();
+    assert_eq!(err, AdmissionError::ModificationCeiling);
+    assert_eq!(err.cause(), AdmissionCause::ModificationCeiling);
+    assert_eq!((err.retry_after(), err.resets_at()), (None, None));
+    assert_eq!(a.modifications_remaining(&order), 0);
+    // Through the client the same refusal arrives as an Admission error.
+    let modify = fixtures::json_body("order_modify.json").unwrap();
+    let harness = HttpHarness::start(vec![Reply::json(modify)]).await;
+    let client = HTTPClient::builder(Config::new(&*harness.base_url()))
+        .admission(a.clone())
+        .credentials(Credentials::new("k", "t").unwrap())
+        .build()
+        .unwrap();
+    let request = ModifyOrderRequest {
+        order_type: Some(OrderType::Market),
+        ..Default::default()
+    };
+    let err = client
+        .orders()
+        .modify_order(OrderVariety::Regular, &order, &request)
+        .await
+        .unwrap_err();
+    let e = err.as_http().unwrap();
+    assert_eq!(e.kind(), HttpErrorKind::Admission);
+    assert_eq!(
+        e.admission_cause(),
+        Some(AdmissionCause::ModificationCeiling)
+    );
+    assert!(harness.requests().is_empty());
 }

@@ -249,16 +249,38 @@ domain!(
 );
 
 domain!(
-    /// Outcome of one admission wait.
+    /// Outcome of one admission.
     AdmissionResult {
         /// Capacity granted.
         Granted => "granted",
-        /// Rejected: waiter bound or wait bound reached.
+        /// Rejected: waiter bound or wait bound reached, or a ceiling, while
+        /// a read or calculation waited.
         Rejected => "rejected",
         /// The waiting operation was cancelled.
         Cancelled => "cancelled",
         /// The operation deadline expired while waiting.
         Deadline => "deadline",
+        /// A mutation or session operation was refused without waiting.
+        Refused => "refused",
+    }
+);
+
+domain!(
+    /// Why admission did not grant capacity (`admission_cause` span field).
+    AdmissionCause {
+        /// A window of the class was full; the error carries `retry_after`.
+        WindowFull => "window_full",
+        /// The daily order ceiling is spent; the error carries `resets_at`.
+        DailyCeiling => "daily_ceiling",
+        /// The order's modifications for the day are spent.
+        ModificationCeiling => "modification_ceiling",
+        /// The control reserve covers a window's rate, so the `Standard`
+        /// lane can never be admitted in the class.
+        NoStandardCapacity => "no_standard_capacity",
+        /// The scope's waiter bound was reached.
+        WaitersFull => "waiters_full",
+        /// The wait bound elapsed without capacity.
+        WaitExpired => "wait_expired",
     }
 );
 
@@ -572,6 +594,7 @@ pub const SPANS: &[SpanSpec] = &[
             "deadline_ms",
             "result",
             "stage",
+            "admission_cause",
         ],
     },
     SpanSpec {
@@ -678,6 +701,7 @@ pub fn catalogue_text() -> String {
         "result.http_attempt" => HttpAttemptResult,
         "error_class" => RetryCause,
         "admission_result" => AdmissionResult,
+        "admission_cause" => AdmissionCause,
         "priority" => PriorityLabel,
         "transport" => TransportLabel,
         "result.ticker_connection" => ConnectionResult,
@@ -708,7 +732,7 @@ mod tests {
             (I::HttpAttemptDuration, 992),
             (I::HttpInFlight, 4),
             (I::HttpAdmissionWaiters, 4),
-            (I::HttpAdmissionWait, 16),
+            (I::HttpAdmissionWait, 20),
             (I::HttpRetriesTotal, 496),
             (I::HttpRejectedRowsTotal, 31),
             (I::AuthRejectionsTotal, 2),

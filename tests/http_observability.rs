@@ -739,3 +739,66 @@ async fn the_response_meta_names_the_operation_and_the_attempt_that_answered() {
         "the meta's operation ID is the span's"
     );
 }
+
+// ---- a refused mutation names its cause on the spans ---------------------
+
+#[tokio::test]
+async fn a_refused_mutation_records_refused_and_the_cause() {
+    use manja::kite::connect::models::{
+        Exchange, OrderType, OrderVariety, PlaceOrderRequest, ProductType, TransactionType,
+    };
+    use manja::kite::protocol::Quantity;
+    let cap = Capture::default();
+    let _g = cap.install();
+    let (rec, obs) = recording();
+    // Placements admit one per second here, so the second is refused.
+    let profile = QuotaProfile::kite_v3()
+        .with_version("one-placement")
+        .with_windows(
+            manja::kite::connect::admission::RateClass::OrderPlacement,
+            vec![manja::kite::connect::admission::Window::new(
+                1,
+                Duration::from_secs(60),
+            )],
+        )
+        .unwrap();
+    let receipt = fixtures::json_body("order_response.json").unwrap();
+    let h = HttpHarness::start(vec![Reply::json(receipt)]).await;
+    let c = HTTPClient::builder(config(&h.base_url(), fast()))
+        .observability(obs.clone())
+        .admission(Admission::new(profile, AdmissionLimits::default()))
+        .credentials(Credentials::new("test_api_key", "test_access_token").unwrap())
+        .build()
+        .unwrap();
+    let order = PlaceOrderRequest::new(
+        OrderVariety::Regular,
+        Exchange::NSE,
+        "INFY",
+        TransactionType::BUY,
+        OrderType::Market,
+        Quantity::new(1).unwrap(),
+        ProductType::CashAndCarry,
+    );
+    c.orders().place_order(&order).await.unwrap();
+    let err = c.orders().place_order(&order).await.unwrap_err();
+    assert!(err.as_http().unwrap().retry_after().is_some());
+    assert_eq!(h.requests().len(), 1);
+
+    let ops = cap.named(OP);
+    assert_eq!(ops.len(), 2);
+    assert_eq!(ops[0].field("result"), Some("ok"));
+    assert_eq!(ops[0].field("admission_cause"), None);
+    assert_eq!(ops[1].field("result"), Some("admission_rejected"));
+    assert_eq!(ops[1].field("stage"), Some("not_started"));
+    assert_eq!(ops[1].field("admission_cause"), Some("window_full"));
+    let admissions = cap.named(ADMISSION);
+    assert_eq!(admissions.len(), 2);
+    assert_eq!(admissions[0].field("admission_result"), Some("granted"));
+    assert_eq!(admissions[1].field("admission_result"), Some("refused"));
+    assert_eq!(admissions[1].parent, Some(ops[1].id));
+    assert_eq!(
+        rec.histogram(Instrument::HttpAdmissionWait, &["mut", "refused"])
+            .0,
+        1
+    );
+}

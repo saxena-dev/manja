@@ -26,7 +26,7 @@ use std::fmt;
 
 use crate::kite::connect::credentials::CredentialError;
 use crate::kite::obs::diagnostics::BoundedText;
-use crate::kite::obs::schema::{Endpoint, Method};
+use crate::kite::obs::schema::{AdmissionCause, Endpoint, Method};
 use crate::kite::protocol::Inbound;
 use crate::kite::protocol::enums::wire_enum;
 
@@ -210,6 +210,9 @@ struct HttpErrorInner {
     timed_out: bool,
     retry: Option<RetryInfo>,
     detail: Option<BoundedText>,
+    admission_cause: Option<AdmissionCause>,
+    retry_after: Option<std::time::Duration>,
+    resets_at: Option<chrono::DateTime<chrono::FixedOffset>>,
     source: Option<Box<dyn std::error::Error + Send + Sync>>,
 }
 
@@ -232,8 +235,23 @@ impl HttpError {
             timed_out: false,
             retry: None,
             detail: None,
+            admission_cause: None,
+            retry_after: None,
+            resets_at: None,
             source: None,
         }))
+    }
+
+    pub(crate) fn with_admission(
+        mut self,
+        cause: AdmissionCause,
+        retry_after: Option<std::time::Duration>,
+        resets_at: Option<chrono::DateTime<chrono::FixedOffset>>,
+    ) -> Self {
+        self.0.admission_cause = Some(cause);
+        self.0.retry_after = retry_after;
+        self.0.resets_at = resets_at;
+        self
     }
 
     pub(crate) fn with_status(mut self, status: u16) -> Self {
@@ -328,6 +346,26 @@ impl HttpError {
     /// Retry metadata, when a retry policy applied.
     pub fn retry(&self) -> Option<RetryInfo> {
         self.0.retry
+    }
+
+    /// Why admission did not grant capacity, for an [`HttpErrorKind::Admission`]
+    /// error (and a `Deadline` error that expired while a read waited for
+    /// admission); `None` for every other kind.
+    pub fn admission_cause(&self) -> Option<AdmissionCause> {
+        self.0.admission_cause
+    }
+
+    /// For a mutation or session operation refused because a window was
+    /// full: the time until the lane's next slot, as of the refusal. The
+    /// SDK does not wait it out; the caller decides.
+    pub fn retry_after(&self) -> Option<std::time::Duration> {
+        self.0.retry_after
+    }
+
+    /// For a placement refused by the daily ceiling: when the IST day turns
+    /// and the ceiling resets. There is no earlier recovery.
+    pub fn resets_at(&self) -> Option<chrono::DateTime<chrono::FixedOffset>> {
+        self.0.resets_at
     }
 
     /// A bounded, sanitized description, such as why a body failed to

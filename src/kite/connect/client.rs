@@ -291,6 +291,9 @@ impl OpGuard<'_> {
         match &result {
             Ok(_) => self.complete(HttpOperationResult::Ok, Stage::ResponseReceived),
             Err(e) => {
+                if let Some(cause) = e.admission_cause() {
+                    self.span.record("admission_cause", cause.as_str());
+                }
                 self.complete(operation_result(e), e.stage());
                 self.transport.record(HttpFailure {
                     method: e.method(),
@@ -750,6 +753,7 @@ impl HTTPClient {
             deadline_ms = deadline.as_millis().min(u64::MAX as u128) as u64,
             result = tracing::field::Empty,
             stage = tracing::field::Empty,
+            admission_cause = tracing::field::Empty,
         );
         OpGuard {
             transport: &self.transport,

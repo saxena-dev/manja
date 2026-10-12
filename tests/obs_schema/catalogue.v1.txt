@@ -8,7 +8,7 @@ metric manja_http_attempts_total counter unit=attempts labels=[method,endpoint,r
 metric manja_http_attempt_duration_seconds histogram unit=seconds labels=[method,endpoint,result] series_bound=992
 metric manja_http_in_flight gauge unit=attempts labels=[quota_class] series_bound=4
 metric manja_http_admission_waiters gauge unit=waiters labels=[quota_class] series_bound=4
-metric manja_http_admission_wait_seconds histogram unit=seconds labels=[quota_class,admission_result] series_bound=16
+metric manja_http_admission_wait_seconds histogram unit=seconds labels=[quota_class,admission_result] series_bound=20
 metric manja_http_retries_total counter unit=retries labels=[method,endpoint,error_class] series_bound=496
 metric manja_http_rejected_rows_total counter unit=rows labels=[endpoint] series_bound=31
 metric manja_auth_rejections_total counter unit=rejections labels=[transport] series_bound=2
@@ -28,7 +28,7 @@ metric manja_decode_duration_seconds histogram unit=seconds labels=[source_mode,
 metric manja_ticker_shutdown_duration_seconds histogram unit=seconds labels=[result] series_bound=4
 metric manja_telemetry_dropped_records_total counter unit=records labels=[] series_bound=1
 
-span manja.http.operation level=DEBUG fields=[operation_id,method,endpoint,quota_class,priority,deadline_ms,result,stage]
+span manja.http.operation level=DEBUG fields=[operation_id,method,endpoint,quota_class,priority,deadline_ms,result,stage,admission_cause]
 span manja.http.admission level=DEBUG fields=[operation_id,quota_class,wait_ms,admission_result]
 span manja.http.attempt level=DEBUG fields=[operation_id,attempt,method,endpoint,http_status,error_class,stage]
 span manja.ticker.connection level=DEBUG fields=[feed_id,connection_epoch,reason,result]
@@ -43,7 +43,8 @@ domain quota_class [read,calc,mut,sess]
 domain result.http_operation [ok,http_status,broker_error,auth_rejected,transport_error,timeout,deadline,admission_rejected,cancelled,decode_error,validation]
 domain result.http_attempt [ok,http_status,broker_error,auth_rejected,transport_error,timeout,cancelled,decode_error]
 domain error_class [http_429,http_5xx,transport_error,timeout]
-domain admission_result [granted,rejected,cancelled,deadline]
+domain admission_result [granted,rejected,cancelled,deadline,refused]
+domain admission_cause [window_full,daily_ceiling,modification_ceiling,no_standard_capacity,waiters_full,wait_expired]
 domain priority [standard,control]
 domain transport [http,ticker]
 domain result.ticker_connection [ok,auth_rejected,http_status,transport_error,timeout,cancelled]

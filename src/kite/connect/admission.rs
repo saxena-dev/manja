@@ -49,9 +49,10 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
+use chrono::{DateTime, FixedOffset, TimeZone};
 use tokio::time::Instant;
 
-use crate::kite::obs::schema::{Endpoint, Method, PriorityLabel};
+use crate::kite::obs::schema::{AdmissionCause, Endpoint, Method, PriorityLabel};
 use crate::kite::protocol::OrderId;
 
 /// Version of the default quota profile: the documentation page it encodes,
@@ -507,6 +508,14 @@ fn lane_frees_at(log: &VecDeque<(u64, Instant)>, share: u32, period: Duration) -
 }
 
 /// Why admission did not grant capacity.
+///
+/// A synchronous admission ([`Admission::try_acquire`], which every mutation
+/// and session operation uses) refuses with `Refused` when a window is full,
+/// carrying the exact time until the lane's next slot. A waiting admission
+/// ([`Admission::acquire`], the read and calculation classes) reports
+/// `WaitersFull` or `WaitExpired` instead. The ceilings refuse both the same
+/// way: `DailyCeilingReached` carries the instant the IST day turns and the
+/// count resets; `ModificationCeiling` has no recovery that day.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum AdmissionError {
@@ -514,26 +523,78 @@ pub enum AdmissionError {
     WaitersFull,
     /// Capacity did not become available within the wait bound.
     WaitExpired,
+    /// A window of the class is full and the admission does not wait: the
+    /// lane's next slot frees in `retry_after`.
+    Refused {
+        /// Time until the lane next has a slot, as of the refusal.
+        retry_after: Duration,
+    },
     /// The daily placement ceiling of the IST day is exhausted.
-    DailyCeilingReached,
-    /// The order's modification limit for the IST day is exhausted.
-    ModificationLimitReached,
+    DailyCeilingReached {
+        /// When the IST day turns and the count resets: the next 00:00
+        /// +05:30 after the scope's clock reading.
+        resets_at: DateTime<FixedOffset>,
+    },
+    /// The order's modification limit for the IST day is exhausted
+    /// (`kite:exceptions.md:58`). There is no recovery that day.
+    ModificationCeiling,
     /// The class's control reserve (`B-HTTP-15`) is at or above one of its
     /// window rates, so the `Standard` lane can never be admitted in it.
     NoStandardCapacity,
 }
 
+impl AdmissionError {
+    /// The cause, as the `admission_cause` span field names it.
+    pub fn cause(&self) -> AdmissionCause {
+        match self {
+            Self::WaitersFull => AdmissionCause::WaitersFull,
+            Self::WaitExpired => AdmissionCause::WaitExpired,
+            Self::Refused { .. } => AdmissionCause::WindowFull,
+            Self::DailyCeilingReached { .. } => AdmissionCause::DailyCeiling,
+            Self::ModificationCeiling => AdmissionCause::ModificationCeiling,
+            Self::NoStandardCapacity => AdmissionCause::NoStandardCapacity,
+        }
+    }
+
+    /// Time until the lane next has a slot, for a `Refused` error.
+    pub fn retry_after(&self) -> Option<Duration> {
+        match self {
+            Self::Refused { retry_after } => Some(*retry_after),
+            _ => None,
+        }
+    }
+
+    /// When the daily ceiling resets, for a `DailyCeilingReached` error.
+    pub fn resets_at(&self) -> Option<DateTime<FixedOffset>> {
+        match self {
+            Self::DailyCeilingReached { resets_at } => Some(*resets_at),
+            _ => None,
+        }
+    }
+}
+
 impl fmt::Display for AdmissionError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(match self {
-            Self::WaitersFull => "the admission waiter bound is reached",
-            Self::WaitExpired => "no admission capacity within the wait bound",
-            Self::DailyCeilingReached => "the daily order ceiling is reached",
-            Self::ModificationLimitReached => "the order's modification limit is reached",
-            Self::NoStandardCapacity => {
-                "the control reserve (B-HTTP-15) leaves the class no standard capacity"
+        match self {
+            Self::WaitersFull => f.write_str("the admission waiter bound is reached"),
+            Self::WaitExpired => f.write_str("no admission capacity within the wait bound"),
+            Self::Refused { retry_after } => write!(
+                f,
+                "admission refused: the window is full for another {} ms",
+                retry_after.as_millis()
+            ),
+            Self::DailyCeilingReached { resets_at } => write!(
+                f,
+                "the daily order ceiling is reached; it resets at {}",
+                resets_at.to_rfc3339()
+            ),
+            Self::ModificationCeiling => {
+                f.write_str("the order's modification limit for the day is reached")
             }
-        })
+            Self::NoStandardCapacity => {
+                f.write_str("the control reserve (B-HTTP-15) leaves the class no standard capacity")
+            }
+        }
     }
 }
 
@@ -709,6 +770,54 @@ impl Admission {
 
     fn ist_day(&self) -> i64 {
         (self.0.clock.unix_seconds() + IST_OFFSET_SECONDS).div_euclid(86_400)
+    }
+
+    /// The next 00:00 IST after the scope's clock reading, when the day
+    /// counters reset, at offset +05:30.
+    fn day_resets_at(&self) -> DateTime<FixedOffset> {
+        let next_midnight_unix = (self.ist_day() + 1) * 86_400 - IST_OFFSET_SECONDS;
+        let ist = FixedOffset::east_opt(crate::kite::protocol::IST_OFFSET_SECONDS)
+            .expect("+05:30 is a valid offset");
+        ist.timestamp_opt(next_midnight_unix, 0)
+            .single()
+            .expect("a fixed offset maps every instant")
+    }
+
+    /// Admit now or refuse: the synchronous admission every mutation and
+    /// session operation uses. Capacity in every window of `class` on the
+    /// lane `priority` grants at once; a full window refuses with
+    /// [`AdmissionError::Refused`] and the exact time until the lane's next
+    /// slot, the daily ceiling with the instant it resets, the per-order
+    /// limit with [`AdmissionError::ModificationCeiling`]. This never waits
+    /// and counts no waiter; the caller decides what to do with the hint.
+    ///
+    /// ```
+    /// use manja::kite::connect::admission::{Admission, AdmissionError, Priority, RateClass};
+    ///
+    /// let admission = Admission::default();
+    /// let grant = admission
+    ///     .try_acquire(Priority::Standard, RateClass::Quote, None)
+    ///     .unwrap();
+    /// grant.consume();
+    /// // Quotes admit one per second: the next is refused, not queued.
+    /// let err = admission
+    ///     .try_acquire(Priority::Standard, RateClass::Quote, None)
+    ///     .unwrap_err();
+    /// assert!(matches!(err, AdmissionError::Refused { .. }));
+    /// assert!(err.retry_after().unwrap() <= std::time::Duration::from_secs(1));
+    /// ```
+    pub fn try_acquire(
+        &self,
+        priority: Priority,
+        class: RateClass,
+        order_id: Option<&str>,
+    ) -> Result<AdmissionGrant, AdmissionError> {
+        match self.try_grant(priority, class, order_id)? {
+            Ok(grant) => Ok(grant),
+            Err(ready_at) => Err(AdmissionError::Refused {
+                retry_after: ready_at.saturating_duration_since(Instant::now()),
+            }),
+        }
     }
 
     /// The state, locked, with the day counters reset when the IST day has
@@ -889,7 +998,9 @@ impl Admission {
             RateClass::OrderPlacement
                 if state.day.placements >= self.0.profile.daily_order_ceiling =>
             {
-                return Err(AdmissionError::DailyCeilingReached);
+                return Err(AdmissionError::DailyCeilingReached {
+                    resets_at: self.day_resets_at(),
+                });
             }
             RateClass::OrderModification => {
                 if let Some(id) = order_id {
@@ -900,7 +1011,7 @@ impl Admission {
                     if used >= self.0.profile.modifications_per_order
                         || (untracked && tracked >= self.0.profile.daily_order_ceiling as usize)
                     {
-                        return Err(AdmissionError::ModificationLimitReached);
+                        return Err(AdmissionError::ModificationCeiling);
                     }
                 }
             }
@@ -1197,12 +1308,12 @@ mod tests {
                 .unwrap()
                 .consume();
         }
-        assert_eq!(
+        assert!(matches!(
             a.acquire(RateClass::OrderPlacement, None, WAIT)
                 .await
                 .unwrap_err(),
-            AdmissionError::DailyCeilingReached
-        );
+            AdmissionError::DailyCeilingReached { .. }
+        ));
         // 23:59:59 IST is still the same day.
         clock.0.store(MORNING + 14 * 3600 - 1, Ordering::Relaxed);
         assert!(
@@ -1231,7 +1342,7 @@ mod tests {
             a.acquire(RateClass::OrderModification, Some("A"), WAIT)
                 .await
                 .unwrap_err(),
-            AdmissionError::ModificationLimitReached
+            AdmissionError::ModificationCeiling
         );
         a.acquire(RateClass::OrderModification, Some("B"), WAIT)
             .await

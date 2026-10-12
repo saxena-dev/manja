@@ -580,15 +580,26 @@ impl Drop for AdmissionWatch<'_> {
     }
 }
 
-// Wait for admission under an [`AdmissionWatch`].
+/// How an operation's class is admitted.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum AdmissionMode {
+    /// Wait up to the bound for capacity: the read and calculation classes.
+    Wait {
+        wait: Duration,
+        deadline_bound: bool,
+    },
+    /// Admit now or refuse, never waiting: mutations and session operations.
+    Synchronous,
+}
+
+// Admit under an [`AdmissionWatch`]: waiting or synchronous by `mode`.
 #[allow(clippy::too_many_arguments)]
 async fn acquire_observed(
     admission: &Admission,
     priority: Priority,
     rate: RateClass,
     order_id: Option<&str>,
-    wait: Duration,
-    deadline_bound: bool,
+    mode: AdmissionMode,
     quota: QuotaClass,
     ctx: Option<&OpObs<'_>>,
     obs: &Observability,
@@ -601,14 +612,29 @@ async fn acquire_observed(
         ctx.map(|c| c.waiting),
     );
     let span = watch.span.clone();
-    let result = admission
-        .acquire_with_priority(priority, rate, order_id, wait)
-        .instrument(span)
-        .await;
-    watch.finish(match &result {
-        Ok(_) => AdmissionResult::Granted,
-        Err(AdmissionError::WaitExpired) if deadline_bound => AdmissionResult::Deadline,
-        Err(_) => AdmissionResult::Rejected,
+    let result = match mode {
+        AdmissionMode::Wait { wait, .. } => {
+            admission
+                .acquire_with_priority(priority, rate, order_id, wait)
+                .instrument(span)
+                .await
+        }
+        AdmissionMode::Synchronous => {
+            let _entered = span.enter();
+            admission.try_acquire(priority, rate, order_id)
+        }
+    };
+    watch.finish(match (&result, mode) {
+        (Ok(_), _) => AdmissionResult::Granted,
+        (Err(_), AdmissionMode::Synchronous) => AdmissionResult::Refused,
+        (
+            Err(AdmissionError::WaitExpired),
+            AdmissionMode::Wait {
+                deadline_bound: true,
+                ..
+            },
+        ) => AdmissionResult::Deadline,
+        (Err(_), _) => AdmissionResult::Rejected,
     });
     result
 }
@@ -713,16 +739,15 @@ impl Scheduler {
         obs: &Observability,
     ) -> Result<DispatchPermit, HttpError> {
         let (method, endpoint) = target.operation();
-        let wait = admission.limits().wait();
         let quota = RetryClass::of(method, endpoint).quota_class();
         let rate = RateClass::of(method, endpoint);
+        // Every permit target is a mutation: admitted now or refused.
         let grant = acquire_observed(
             admission,
             priority,
             rate,
             target.order_id(),
-            wait,
-            false,
+            AdmissionMode::Synchronous,
             quota,
             None,
             obs,
@@ -777,21 +802,31 @@ impl Scheduler {
             let grant = match permit.take() {
                 Some(p) => p.grant,
                 None => {
+                    // Mutations and session operations are admitted now or
+                    // refused; reads and calculations wait up to B-HTTP-06,
+                    // cut short by the remaining deadline.
                     let wait = admission.limits().wait().min(remaining);
                     let deadline_bound = wait < admission.limits().wait();
+                    let mode = match class {
+                        RetryClass::Mut | RetryClass::Sess => AdmissionMode::Synchronous,
+                        RetryClass::Read | RetryClass::Calc => AdmissionMode::Wait {
+                            wait,
+                            deadline_bound,
+                        },
+                    };
                     acquire_observed(
                         admission,
                         spec.priority,
                         rate,
                         spec.order_id,
-                        wait,
-                        deadline_bound,
+                        mode,
                         quota,
                         Some(ctx),
                         ctx.obs,
                     )
                     .await
                     .map_err(|e| {
+                        let deadline_bound = mode != AdmissionMode::Synchronous && deadline_bound;
                         admission_error(e, method, endpoint, n, deadline_bound)
                             .with_retry(retry_info(n - 1))
                     })?
@@ -922,6 +957,7 @@ fn admission_error(
     };
     HttpError::new(kind, method, endpoint, TransportStage::NotStarted)
         .with_attempt(attempt)
+        .with_admission(e.cause(), e.retry_after(), e.resets_at())
         .with_detail(&e.to_string())
 }
 
@@ -1092,7 +1128,6 @@ mod tests {
     #[tokio::test(start_paused = true)]
     async fn mutations_and_session_operations_make_exactly_one_attempt() {
         let s = scheduler();
-        let a = admission();
         for (m, e) in [
             (Method::Post, Endpoint::OrdersVariety),
             (Method::Put, Endpoint::OrdersVarietyId),
@@ -1101,6 +1136,9 @@ mod tests {
             (Method::Post, Endpoint::SessionToken),
             (Method::Delete, Endpoint::SessionToken),
         ] {
+            // A fresh scope per endpoint: these classes are admitted now or
+            // refused, and this test is about attempts, not capacity.
+            let a = admission();
             for status in [429, 502, 504] {
                 let calls = AtomicU32::new(0);
                 let err = s
