@@ -25,8 +25,10 @@
 use std::fmt;
 
 use crate::kite::connect::credentials::CredentialError;
+use crate::kite::connect::models::IngressStamp;
+use crate::kite::envelope::SourceIdentity;
 use crate::kite::obs::diagnostics::BoundedText;
-use crate::kite::obs::schema::{Endpoint, Method};
+use crate::kite::obs::schema::{AdmissionCause, Endpoint, Method};
 use crate::kite::protocol::Inbound;
 use crate::kite::protocol::enums::wire_enum;
 
@@ -130,7 +132,9 @@ pub struct BrokerError {
 
 #[cfg_attr(not(feature = "http"), allow(dead_code))]
 impl BrokerError {
-    pub(crate) fn new(error_type: Option<&str>, message: Option<&str>) -> Self {
+    /// A broker error as an envelope would carry it: `error_type` is kept
+    /// as a known or unknown value and `message` is bounded and sanitized.
+    pub fn new(error_type: Option<&str>, message: Option<&str>) -> Self {
         Self {
             error_type: error_type.map(Inbound::from_wire),
             message: message.map(|m| {
@@ -210,12 +214,25 @@ struct HttpErrorInner {
     timed_out: bool,
     retry: Option<RetryInfo>,
     detail: Option<BoundedText>,
+    admission_cause: Option<AdmissionCause>,
+    retry_after: Option<std::time::Duration>,
+    resets_at: Option<chrono::DateTime<chrono::FixedOffset>>,
+    identity: Option<SourceIdentity>,
+    operation_id: Option<u64>,
+    sent_at: Option<IngressStamp>,
+    received_at: Option<IngressStamp>,
     source: Option<Box<dyn std::error::Error + Send + Sync>>,
 }
 
 #[cfg_attr(not(feature = "http"), allow(dead_code))]
 impl HttpError {
-    pub(crate) fn new(
+    /// An error of `kind` for `method` on `endpoint` that got as far as
+    /// `stage`, with nothing else set: attempt 0, no status, no broker
+    /// error, no detail, no stamps. The `with_*` builders add the rest.
+    /// Public so that a broker double or a fixture test can build the
+    /// error the SDK would return; the SDK itself never puts a value from
+    /// a response body in an error, and a builder of one should not either.
+    pub fn new(
         kind: HttpErrorKind,
         method: Method,
         endpoint: Endpoint,
@@ -232,36 +249,94 @@ impl HttpError {
             timed_out: false,
             retry: None,
             detail: None,
+            admission_cause: None,
+            retry_after: None,
+            resets_at: None,
+            identity: None,
+            operation_id: None,
+            sent_at: None,
+            received_at: None,
             source: None,
         }))
     }
 
-    pub(crate) fn with_status(mut self, status: u16) -> Self {
+    /// The operation this error belongs to: the client's identity and the
+    /// operation ID. Set once per operation, on the way out; kept if
+    /// already set.
+    pub fn with_operation(mut self, identity: SourceIdentity, operation_id: u64) -> Self {
+        if self.0.identity.is_none() {
+            self.0.identity = Some(identity);
+        }
+        if self.0.operation_id.is_none() {
+            self.0.operation_id = Some(operation_id);
+        }
+        self
+    }
+
+    /// When the failed attempt was dispatched; kept if already set.
+    pub fn with_sent_at(mut self, sent_at: IngressStamp) -> Self {
+        if self.0.sent_at.is_none() {
+            self.0.sent_at = Some(sent_at);
+        }
+        self
+    }
+
+    /// When the failed attempt's response head arrived; kept if already set.
+    pub fn with_received_at(mut self, received_at: IngressStamp) -> Self {
+        if self.0.received_at.is_none() {
+            self.0.received_at = Some(received_at);
+        }
+        self
+    }
+
+    /// The admission facts of an `Admission` refusal: the cause and, when
+    /// known, the time until the next slot or the instant the ceiling resets.
+    pub fn with_admission(
+        mut self,
+        cause: AdmissionCause,
+        retry_after: Option<std::time::Duration>,
+        resets_at: Option<chrono::DateTime<chrono::FixedOffset>>,
+    ) -> Self {
+        self.0.admission_cause = Some(cause);
+        self.0.retry_after = retry_after;
+        self.0.resets_at = resets_at;
+        self
+    }
+
+    /// The HTTP status of the response, when one was received.
+    pub fn with_status(mut self, status: u16) -> Self {
         self.0.http_status = Some(status);
         self
     }
 
-    pub(crate) fn with_broker(mut self, broker: BrokerError) -> Self {
+    /// The broker's error envelope, when one was received.
+    pub fn with_broker(mut self, broker: BrokerError) -> Self {
         self.0.broker = Some(broker);
         self
     }
 
-    pub(crate) fn with_attempt(mut self, attempt: u32) -> Self {
+    /// The number of the attempt that failed: 1 for a first try.
+    pub fn with_attempt(mut self, attempt: u32) -> Self {
         self.0.attempt = attempt;
         self
     }
 
-    pub(crate) fn with_timeout(mut self) -> Self {
+    /// Mark the error as ended by a timeout (`is_timeout`).
+    pub fn with_timeout(mut self) -> Self {
         self.0.timed_out = true;
         self
     }
 
-    pub(crate) fn with_retry(mut self, retry: RetryInfo) -> Self {
+    /// The retry metadata of the operation.
+    pub fn with_retry(mut self, retry: RetryInfo) -> Self {
         self.0.retry = Some(retry);
         self
     }
 
-    pub(crate) fn with_detail(mut self, detail: &str) -> Self {
+    /// A bounded, sanitized detail for people. The SDK never puts a value
+    /// taken from a response body here; a builder of errors should not
+    /// either.
+    pub fn with_detail(mut self, detail: &str) -> Self {
         self.0.detail = Some(BoundedText::sanitize(
             detail,
             crate::kite::obs::diagnostics::DEFAULT_TEXT_BYTES,
@@ -269,10 +344,8 @@ impl HttpError {
         self
     }
 
-    pub(crate) fn with_source(
-        mut self,
-        source: impl std::error::Error + Send + Sync + 'static,
-    ) -> Self {
+    /// The underlying error, reported through `std::error::Error::source`.
+    pub fn with_source(mut self, source: impl std::error::Error + Send + Sync + 'static) -> Self {
         self.0.source = Some(Box::new(source));
         self
     }
@@ -328,6 +401,51 @@ impl HttpError {
     /// Retry metadata, when a retry policy applied.
     pub fn retry(&self) -> Option<RetryInfo> {
         self.0.retry
+    }
+
+    /// Why admission did not grant capacity, for an [`HttpErrorKind::Admission`]
+    /// error (and a `Deadline` error that expired while a read waited for
+    /// admission); `None` for every other kind.
+    pub fn admission_cause(&self) -> Option<AdmissionCause> {
+        self.0.admission_cause
+    }
+
+    /// For a mutation or session operation refused because a window was
+    /// full: the time until the lane's next slot, as of the refusal. The
+    /// SDK does not wait it out; the caller decides.
+    pub fn retry_after(&self) -> Option<std::time::Duration> {
+        self.0.retry_after
+    }
+
+    /// For a placement refused by the daily ceiling: when the IST day turns
+    /// and the ceiling resets. There is no earlier recovery.
+    pub fn resets_at(&self) -> Option<chrono::DateTime<chrono::FixedOffset>> {
+        self.0.resets_at
+    }
+
+    /// The client's source identity (producer, run and feed), on every
+    /// error an operation produces; the same value its responses carry.
+    pub fn source(&self) -> Option<&SourceIdentity> {
+        self.0.identity.as_ref()
+    }
+
+    /// The operation's ID, the `operation_id` its span records, on every
+    /// error an operation produces.
+    pub fn operation_id(&self) -> Option<u64> {
+        self.0.operation_id
+    }
+
+    /// When the failed attempt was dispatched: `Some` once the request left
+    /// the process (stage `Started` or later), `None` for an error with
+    /// stage `NotStarted`.
+    pub fn sent_at(&self) -> Option<IngressStamp> {
+        self.0.sent_at
+    }
+
+    /// When the failed attempt's response head arrived: `Some` only with
+    /// stage `ResponseReceived`.
+    pub fn received_at(&self) -> Option<IngressStamp> {
+        self.0.received_at
     }
 
     /// A bounded, sanitized description, such as why a body failed to

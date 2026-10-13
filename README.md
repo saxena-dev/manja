@@ -36,8 +36,16 @@ are told, with enough detail to decide what to do next.
   their own.
 - **Kite's rate limits are enforced before you hit them.** Every documented limit (for
   example 10 orders a second, 400 a minute, 5000 a day, and 25 modifications per order)
-  is applied locally. A request waits briefly for capacity, 5 seconds by default, and
-  is refused with an `Admission` error rather than sent to be rejected by Kite.
+  is applied locally. A read waits briefly for capacity, 5 seconds by default; an order
+  call never waits, it is sent at once or refused with an `Admission` error that says
+  when to try again. Either way nothing is sent to be rejected by Kite, and two slots a
+  second are kept for cancellations and the reads that confirm them.
+- **What you were told is what was sent, and nothing you were told is lost.** Every
+  order call shows you its exact bytes and their hash before anything is sent, and
+  sends exactly those bytes. Its outcome is delivered even if you dropped the future:
+  to an outcome stream, or to the client's diagnostics. Every response and error
+  carries the client's identity and the operation's ID, and, once the request left the
+  process, when it left and when the answer arrived.
 - **Secrets stay secret.** API keys, access tokens and secrets never appear in `Debug`
   output, errors, diagnostics, spans or metric labels.
 - **Nothing grows without bound.** Every queue, body, payload and wait has a documented
@@ -58,7 +66,7 @@ are told, with enough detail to decide what to do next.
 
 ```toml
 [dependencies]
-manja = "0.2"
+manja = "0.3"
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 ```
 
@@ -66,7 +74,7 @@ All three features (`http`, `ticker` and `decoder`) are on by default. To depend
 less, turn off the defaults and pick what you use:
 
 ```toml
-manja = { version = "0.2", default-features = false, features = ["http"] }
+manja = { version = "0.3", default-features = false, features = ["http"] }
 ```
 
 manja needs **Rust 1.88** or newer. The HTTP client and the ticker run on the Tokio
@@ -103,8 +111,7 @@ async fn log_in(request_token: &str, api_secret: &str) -> Result<(), Box<dyn std
         .session(ApiKey::new("your_api_key")?)
         .exchange(&RequestToken::new(request_token)?, &ApiSecret::new(api_secret)?)
         .await?
-        .data
-        .expect("a successful exchange carries the session");
+        .data;
 
     // The API key and access token, ready for every other call.
     let credentials = session.credentials()?;
@@ -116,8 +123,10 @@ async fn log_in(request_token: &str, api_secret: &str) -> Result<(), Box<dyn std
 The API secret is only borrowed for that one call, to compute the checksum Kite asks
 for. The exchange is never retried automatically.
 
-An access token lasts until 6 AM the next day, unless it is invalidated sooner, so plan
-for the user to log in again each trading day.
+An access token lasts until the next 6 AM IST after it was issued, unless it is
+invalidated sooner, so plan for the user to log in again each trading day.
+`manja::kite::protocol::session_expires_at` gives that instant for a token issued at a
+given time, so you need not hard-code the rule.
 
 ### 2. Call the HTTP API
 
@@ -131,20 +140,26 @@ use manja::kite::connect::credentials::Credentials;
 async fn account(credentials: Credentials) -> Result<(), Box<dyn std::error::Error>> {
     let client = HTTPClient::new(Config::default())?.with_credentials(credentials);
 
-    let profile = client.user().profile().await?.data.expect("data");
+    let profile = client.user().profile().await?.data;
     println!("hello, {}", profile.user_name);
 
-    let holdings = client.portfolio().get_holdings().await?.data.unwrap_or_default();
-    let positions = client.portfolio().get_positions().await?.data.expect("data");
+    let holdings = client.portfolio().get_holdings().await?.data;
+    let positions = client.portfolio().get_positions().await?.data;
     println!("{} holdings, {} open positions", holdings.len(), positions.net.len());
     Ok(())
 }
 ```
 
-Every JSON call returns a `KiteApiResponse`, Kite's own envelope. When the call
-succeeds, its `data` is always present, so `expect` documents a guarantee rather than a
-hope. For lists, `unwrap_or_default()` reads just as well, and an empty list is a
-perfectly good fallback.
+Every JSON call returns a `Response`: its `data` is the endpoint's value itself, never
+an `Option`, because a call only succeeds when Kite answered with a success envelope
+and data of the expected shape. Its `meta` carries the facts of the call: Kite's
+optional message, the HTTP status, the operation ID, the attempt number, the client's
+source identity (which the ticker's envelopes share, so HTTP and ticker evidence from
+one process cite the same run), and two ingress stamps, `sent_at` and `received_at`,
+each in wall-clock and monotonic time. Every error carries the same identity and, once
+the request left the process, the same stamps. Order rows arrive as Kite reports them:
+`status`, `filled_quantity`, `pending_quantity` and `cancelled_quantity` are never
+collapsed into a convenience value.
 
 An `HTTPClient` is cheap to clone. Clones share one connection pool and one set of rate
 limits, so create it once and hand clones to the tasks that need it.
@@ -152,17 +167,21 @@ limits, so create it once and hand clones to the tasks that need it.
 ### 3. Place an order, carefully
 
 Orders are built from a request type that is checked before anything is sent. A
-quantity of zero, a LIMIT order without a price or a malformed tag is a `Validation`
-error, and nothing reaches Kite.
+quantity of zero or a LIMIT order without a price is a `Validation` error, and nothing
+reaches Kite. The tag is checked when it is built: 1 to 20 ASCII letters or digits,
+nothing else.
 
 ```rust,no_run
 use manja::kite::connect::client::HTTPClient;
 use manja::kite::connect::models::{
-    Exchange, OrderType, OrderVariety, PlaceOrderRequest, ProductType, TransactionType,
+    Exchange, OrderType, OrderVariety, PlaceOrderRequest, ProductType, Tag, TransactionType,
 };
 use manja::kite::protocol::Quantity;
 
 async fn buy(client: &HTTPClient) -> Result<(), Box<dyn std::error::Error>> {
+    // The tag is required: it is what finds this order again if the
+    // response is lost. Use a fresh one for every attempt.
+    let tag = Tag::new("rebalance42")?;
     let mut order = PlaceOrderRequest::new(
         OrderVariety::Regular,
         Exchange::NSE,
@@ -171,19 +190,18 @@ async fn buy(client: &HTTPClient) -> Result<(), Box<dyn std::error::Error>> {
         OrderType::Limit,
         Quantity::new(1)?,
         ProductType::CashAndCarry,
+        tag.clone(),
     );
     order.price = Some(1500.0);
-    // A tag lets you find this order again if the response is lost.
-    order.tag = Some("rebalance42".into());
 
     match client.orders().place_order(&order).await {
-        Ok(receipt) => println!("accepted as {}", receipt.data.expect("data").order_id),
-        Err(err) if err.as_http().is_some_and(|e| e.may_have_reached_broker()) => {
-            // The request left the process, so the order may exist. Check the
-            // order book before deciding to place it again.
-            let book = client.orders().list_orders().await?.data.unwrap_or_default();
-            let placed = book.iter().any(|o| o.tag.as_deref() == Some("rebalance42"));
-            println!("order was placed: {placed}");
+        Ok(receipt) => println!("accepted as {}", receipt.data.order_id),
+        Err(err) if err.may_have_reached_broker() => {
+            // The request left the process, so the order may exist. Look for
+            // the tag in the order book before deciding to place it again: a
+            // match is evidence, not proof, since Kite does not make tags unique.
+            let matches = client.orders().list_orders_tagged(&tag).await?.data;
+            println!("orders carrying the tag: {}", matches.len());
         }
         Err(err) => return Err(err.into()),
     }
@@ -194,10 +212,15 @@ async fn buy(client: &HTTPClient) -> Result<(), Box<dyn std::error::Error>> {
 A receipt means Kite accepted the order, not that it filled. Follow its progress with
 `get_order_history`, or with the order updates the ticker delivers.
 
-When you want a last check between waiting for rate-limit capacity and sending, reserve
-the capacity first with `HTTPClient::admit` and place the order with
-`place_order_with_permit`. The permit expires after a second, which keeps the check
-close to the send.
+An order call never waits for rate-limit capacity: it is sent at once or refused with an
+`Admission` error that says how long until the next slot (`retry_after`), so a check you
+make just before calling it is still current when the bytes leave.
+
+An order call is also not an `async fn`: it returns a `Dispatched` future, and the attempt
+runs on a task the client owns from the moment the call returns. Dropping the future, or
+timing it out, does not cancel an order that is already on its way; the attempt completes
+and its outcome is delivered to the client's outcome stream (`build_with_outcomes`) or
+kept in the diagnostics, so a receipt Kite sent is never thrown away.
 
 ### 4. Stream live market data
 
@@ -276,10 +299,12 @@ async fn prices(events: TickerEvents) -> Result<(), Box<dyn std::error::Error>> 
 }
 ```
 
-Prices on the wire are integers. Kite divides NSE currency derivatives by 10,000,000 and
-everything else by 100, so `scaled` asks you for the segment rather than guessing it.
-The BSE currency segment has no verified scale, so `scaled` refuses it rather than
-guess.
+Prices on the wire are integers. Kite's documentation divides currencies by 10,000,000
+and everything else by 100, and manja follows it, except for BSE currency (BCD) and NSE
+commodity (NCO) derivatives, which it divides by 10,000 as Zerodha's own client library
+does. `scaled` asks you for the segment rather than guessing it. Quantities, volume and
+open interest are unsigned counts, so a value above two billion, which large futures
+contracts reach, decodes as it is.
 
 The decoder works on plain bytes and needs no runtime, so it is just as useful for
 replaying captured data offline. With `default-features = false, features = ["decoder"]`
@@ -287,8 +312,10 @@ it builds with no network stack at all.
 
 ## Handling errors
 
-Every failed HTTP call is a `ManjaError::Http(HttpError)`. The error's **kind** tells you
-what happened, and its **stage** tells you how far the request got:
+Every failed read is a `ManjaError::Http(HttpError)`, and every failed order call is the
+`HttpError` itself (it converts into `ManjaError`, so `?` works in either kind of
+function). The error's **kind** tells you what happened, and its **stage** tells you how
+far the request got:
 
 ```rust,no_run
 use manja::kite::connect::client::HTTPClient;
@@ -296,7 +323,7 @@ use manja::kite::error::HttpErrorKind;
 
 async fn holdings(client: &HTTPClient) {
     match client.portfolio().get_holdings().await {
-        Ok(response) => println!("{} holdings", response.data.unwrap_or_default().len()),
+        Ok(response) => println!("{} holdings", response.data.len()),
         Err(err) => match err.as_http() {
             Some(e) if e.kind() == HttpErrorKind::AuthRejected => {
                 // The access token expired or was invalidated: log in again.
@@ -312,14 +339,14 @@ async fn holdings(client: &HTTPClient) {
 |---|---|
 | `Validation` | your request was invalid; nothing was sent |
 | `Configuration` | the client or the request could not be built; nothing was sent |
-| `Admission` | a local limit refused the request: rate-limit capacity was not available within the wait, the day's order limit or an order's modification limit is spent, or a dispatch permit does not match; nothing was sent |
-| `Deadline` | the operation's deadline, or a dispatch permit, expired before an attempt could start; nothing was sent |
+| `Admission` | a local limit refused the request: an order call found its window full (the error carries `retry_after`), the day's order limit is spent (`resets_at`), an order's modification limit is spent, a read found no capacity within the wait, or the client is closing; `admission_cause()` names which of the limits, and is `None` for a closing client; nothing was sent |
+| `Deadline` | the operation's deadline expired before an attempt could start; nothing was sent |
 | `Transport` | the network failed or timed out; a deadline that runs out during an attempt shows up here, as a timeout |
 | `Broker` | Kite returned an error, available through `e.broker()` |
 | `AuthRejected` | Kite rejected the credentials |
 | `HttpStatus` | an error status without Kite's error envelope |
 | `Decode` | a response arrived but could not be understood |
-| `Cancelled` | never returned by a call: it appears only in `HTTPClient::diagnostics()`, for an operation whose future was dropped |
+| `Cancelled` | never returned by a call: it appears only in `HTTPClient::diagnostics()`, for a read whose future was dropped. An order call is never cancelled by dropping its future (see below) |
 
 The stage is `NotStarted` only when manja knows for certain that the request never left
 your machine. Anything later means Kite may have acted on it, and
@@ -329,11 +356,21 @@ as Kite sent it, which can mention amounts or IDs.
 
 ## Cancellation and timeouts
 
-Every call is an ordinary future, so `tokio::select!` and `tokio::time::timeout` work as
-you'd expect, with one thing to keep in mind. A future does nothing until it is first
-polled, and dropping it before it sends anything cancels only local work. Dropping it
-after the request was sent does not cancel anything at Kite: the order may still be
-placed. Treat a cancelled order call like a lost response, and check the order book.
+Reads and the margin and charge calculations are ordinary futures, so `tokio::select!`
+and `tokio::time::timeout` work as you'd expect: a read does nothing until it is first
+polled, and dropping it cancels only local work (the cancellation is noted in
+`diagnostics()`).
+
+Order calls, and every other call that can change your account, are different on
+purpose. The call itself validates the request, admits it and hands the one attempt to
+a task the client owns; the `Dispatched` future it returns is only your view of that
+attempt. Dropping the future, timing it out or selecting away from it cancels nothing
+and loses nothing: the attempt completes, and its outcome is delivered to the future if
+you still hold it and to the client's outcome stream if you registered one
+(`HTTPClient::builder(config).build_with_outcomes()`), or kept in `diagnostics()` if you
+did not. So an order you stopped waiting for is not a lost order; read its outcome
+instead of guessing. `client.close(deadline)` waits for the attempts in flight before
+you shut down.
 
 The same holds for ticker commands. Once a command has been handed to the ticker,
 dropping the future that sent it does not withdraw it; `desired_revision` in
@@ -342,12 +379,20 @@ dropping the future that sent it does not withdraw it; `desired_revision` in
 ## Rate limits, retries and deadlines
 
 You don't need to configure anything to stay within Kite's documented limits. By
-default every request class is admitted at its documented rate, a request waits up to 5
-seconds for capacity, a read makes up to three attempts with jittered backoff between
+default every request class is admitted at its documented rate, a read waits up to 5
+seconds for capacity while an order call is sent at once or refused with a hint (it never
+queues behind your own polling), a read makes up to three attempts with jittered backoff between
 them, and each operation has 30 seconds to finish (15 for the session calls). The daily
 order limit and the per-order modification limit never wait: once spent, they refuse
-the request straight away. `docs/contract.md` calls these limits quotas, and lists every
-bound with its range.
+the request straight away. Two requests per second of the standard class, and none of
+any other class by default, are kept for control traffic: order cancellations and GTT
+deletions take that lane by default, and `client.with_priority(Priority::Control)`
+marks any other call, such as the order-book read that confirms a cancellation. If you
+would rather look before you call, `client.admission().headroom(class)` reports the
+slots free in each lane right now and when the next one appears, and
+`modifications_remaining(&order_id)` the modifications an order has left; both are
+advisory snapshots of what this process has sent, not of the account. `docs/contract.md`
+calls these limits quotas, and lists every bound with its range.
 
 When your application needs different bounds, set them once on the configuration.
 Every setter checks its value against a documented range:
@@ -411,6 +456,21 @@ Knowing the edges saves surprises:
 - It never retries a request that could change your account.
 - It does not cover alerts, the holdings summary, the full profile, the trigger range,
   or receiving postbacks over HTTP. The ticker delivers order updates instead.
+- It does not keep an idempotency store keyed by order tag, and it does not resolve a
+  lost order response for you by reading the order book. The tag is a correlation
+  field Kite echoes, not an identity: `list_orders_tagged` returns every row carrying
+  it, and you decide what a match means.
+- It does not decide which of your reads are urgent. You mark them with
+  `with_priority(Priority::Control)`; the reserve is yours to size.
+- It does not coordinate quotas across processes or with the Kite app. Its headroom is
+  the view from this process, which is why it is called advisory.
+- It does not simulate a broker. Every response type can be built outside the crate,
+  so a paper broker is yours to write against the same types.
+- It does not fence one client's token from another's. A client holds one credential
+  snapshot; `with_credentials` makes another client.
+- It does not check whether your decision to send is still current, and it ships no
+  CLI or agent tooling: an order call is one attempt, sent now or refused, and what to
+  send is decided by you before you call.
 
 ## How manja is tested
 
@@ -420,9 +480,11 @@ Trust has to be earned, so here is how manja tries to earn it:
   [`kiteconnect-mocks`](https://github.com/zerodha/kiteconnect-mocks), pinned to a
   commit and served byte for byte. Expected values are written out by hand, never
   produced by parsing the fixture a second time.
-- **Real ticker bytes.** The decoder is checked against a capture from a live Kite
-  session and a vendored corpus of framed, index, heartbeat and malformed messages,
-  each with its origin and SHA-256 recorded.
+- **Real-shaped ticker bytes.** The decoder is checked against a corpus derived from a
+  live Kite session: the same framing, packet mix, instruments and depth structure, with
+  every non-zero price, quantity and time changed and the stream's ordering and range
+  constraints re-imposed, so the repository holds no recorded bytes. Alongside it are
+  framed, index, heartbeat and malformed messages, each with its SHA-256 recorded.
 - **Hostile inputs.** Seeded property campaigns feed the decoder more than 70,000
   generated, mutated and truncated inputs, checking that it stays within its bounds and
   that every decoded packet re-encodes to its exact bytes.
@@ -451,11 +513,11 @@ without an account:
 
 | Example | What it shows |
 |---|---|
-| `http_client` | account reads, placing an order with a permit, quotes, diagnostics and metrics |
+| `http_client` | account reads, placing an order, quotes, diagnostics and metrics |
 | `session` | exchanging a request token and invalidating a session |
 | `ticker` | subscribing, changing modes, reading raw messages, status and a clean shutdown |
 | `ticker_typed` | the ticker with the decoder: every message with its decoded packets |
-| `decode_offline` | decoding captured ticker bytes with no runtime or network |
+| `decode_offline` | decoding a recorded-format corpus of ticker bytes with no runtime or network |
 
 ```text
 cargo run --example http_client
@@ -490,7 +552,9 @@ The exact paths and their behavior are in `docs/contract.md` §2.1.
 
 With both `ticker` and `decoder`, `kite::ticker::typed` decodes messages as they
 arrive. Credentials, models, errors, the protocol types, envelopes and the
-observability types are always available.
+observability types are always available. `http` enables Tokio's runtime handle, because
+an order call's attempt runs on a task the client spawns; a build with only `decoder`,
+or no features at all, has no Tokio or network dependency.
 
 ## Documentation
 
@@ -499,14 +563,18 @@ observability types are always available.
   detail. The API reference cites it by section, and cites limits by IDs such as
   `B-HTTP-01`.
 - [`docs/verification.md`](docs/verification.md): how each behavior is tested.
-- [`docs/migration.md`](docs/migration.md): upgrading from 0.1.
+- [`docs/migration.md`](docs/migration.md): upgrading from 0.2, and before that from
+  0.1.
 
-## Upgrading from 0.1
+## Upgrading from 0.2
 
-0.2 is a large, deliberate break. The browser login is gone, errors are never reported
-as success, orders take dedicated request types, and `TickerBuilder` replaces the old
-WebSocket client. [`docs/migration.md`](docs/migration.md) lists every change with what
-to do about it.
+0.3 breaks every caller once, deliberately, so that it never has to again for these
+reasons: every endpoint returns `Response<T>` with its `data` and `meta`; every order
+call is a plain function returning a `Dispatched` future whose attempt outlives it;
+placements require a `Tag`; the permit API is gone; and, the one change the compiler
+will not find for you, an order call never waits for rate-limit capacity, it is sent now
+or refused with a hint. [`docs/migration.md`](docs/migration.md) lists every change with
+what to do about it, starting with that one, and keeps the 0.1 to 0.2 guide after it.
 
 ## Status and disclaimer
 

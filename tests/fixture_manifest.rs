@@ -3,8 +3,8 @@
 //!
 //! The manifest must list every other file in the corpus tree, and nothing
 //! else, with a matching SHA-256 and size, so vendored bytes can neither drift
-//! nor silently grow. The capture container must frame into exactly 19
-//! records with no trailing bytes.
+//! nor silently grow. The corpus container must frame into exactly 19
+//! records with no trailing bytes, and no fixture file name carries a date.
 
 // Shared with other test crates, which use helpers this one does not.
 #[allow(dead_code)]
@@ -103,24 +103,40 @@ fn verify(root: &Path) -> Result<usize, Vec<String>> {
     }
     let mut listed: Vec<String> = Vec::new();
     for entry in &entries {
-        for key in [
-            "path",
-            "source_repository",
-            "source_commit",
-            "original_path",
-            "sha256",
-            "size",
-            "provenance",
-        ] {
+        for key in ["path", "sha256", "size", "provenance"] {
             if !entry.fields.contains_key(key) {
                 problems.push(format!("entry {:?} lacks `{key}`", entry.fields));
             }
         }
-        if !matches!(
-            entry.fields.get("provenance").map(String::as_str),
-            Some("captured" | "derived" | "synthetic")
-        ) {
-            problems.push(format!("entry {:?} has no valid provenance", entry.fields));
+        // No file holds bytes recorded from a Kite session, and no entry
+        // points at private storage: a synthetic-derived file is identified by
+        // how it was made and by the hash and size of its private original.
+        match entry.fields.get("provenance").map(String::as_str) {
+            Some("synthetic") => {}
+            Some("synthetic-derived") => {
+                for key in [
+                    "tool",
+                    "tool_version",
+                    "parameter_set",
+                    "parameter_set_sha256",
+                    "seed",
+                    "original_sha256",
+                    "original_size",
+                ] {
+                    if !entry.fields.contains_key(key) {
+                        problems.push(format!("entry {:?} lacks `{key}`", entry.fields));
+                    }
+                }
+            }
+            _ => problems.push(format!("entry {:?} has no valid provenance", entry.fields)),
+        }
+        for key in ["source_repository", "source_commit", "original_path"] {
+            if entry.fields.contains_key(key) {
+                problems.push(format!(
+                    "entry {:?} names a private source in `{key}`",
+                    entry.fields
+                ));
+            }
         }
         let Some(path) = entry.fields.get("path") else {
             continue;
@@ -178,7 +194,7 @@ fn scratch_copy(tag: &str) -> PathBuf {
 #[test]
 fn every_vendored_file_matches_its_manifest_entry() {
     let checked = verify(&corpus_dir()).unwrap_or_else(|p| panic!("{}", p.join("\n")));
-    // 11 cases × (.bin + .json) plus the real capture.
+    // 11 cases × (.bin + .json) plus the synthetic corpus.
     assert_eq!(checked, 23);
 }
 
@@ -226,25 +242,25 @@ fn a_truncated_manifest_fails_actionably() {
 
 #[test]
 fn the_capture_container_frames_all_19_records() {
-    let bytes = capture::read_real_capture();
+    let bytes = capture::read_synthetic_corpus();
     let records = capture::read_capture(&bytes).unwrap();
     assert_eq!(records.len(), 19);
     // Every byte is consumed by a header or a payload: 19 twelve-byte headers.
     let payload_bytes: usize = records.iter().map(|r| r.payload.len()).sum();
     assert_eq!(payload_bytes + 19 * 12, bytes.len());
-    // Receipt times are non-decreasing in this capture.
+    // Receipt times are non-decreasing in the corpus.
     assert!(
         records
             .windows(2)
             .all(|w| w[0].receipt_unix_nanos <= w[1].receipt_unix_nanos)
     );
-    assert_eq!(records[0].receipt_unix_nanos, 1_769_019_551_354_728_000);
+    assert_eq!(records[0].receipt_unix_nanos, 1_740_593_956_356_784_346);
     assert_eq!(records[0].payload.len(), 453_458);
 }
 
 #[test]
 fn the_container_reader_rejects_truncation() {
-    let bytes = capture::read_real_capture();
+    let bytes = capture::read_synthetic_corpus();
     let cut = &bytes[..bytes.len() - 1];
     assert!(matches!(
         capture::read_capture(cut),
@@ -254,4 +270,26 @@ fn the_container_reader_rejects_truncation() {
         capture::read_capture(&bytes[..5]),
         Err(capture::CaptureError::TruncatedHeader { offset: 0 })
     ));
+}
+
+#[test]
+fn no_fixture_file_name_carries_a_date() {
+    // A session date in a file name would tie a public fixture to a day; the
+    // synthetic-derived corpus is named for what it is, not when it was taken.
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures");
+    let names = files_under(&root);
+    assert!(names.len() > 20, "the fixtures were scanned");
+    for name in names {
+        let digits: Vec<&str> = name
+            .split(|c: char| !c.is_ascii_digit())
+            .filter(|d| !d.is_empty())
+            .collect();
+        let dated = digits.windows(3).any(|w| {
+            w[0].len() == 4
+                && (w[0].starts_with("19") || w[0].starts_with("20"))
+                && w[1].len() == 2
+                && w[2].len() == 2
+        });
+        assert!(!dated, "{name} carries a date");
+    }
 }

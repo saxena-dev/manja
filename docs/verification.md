@@ -23,23 +23,51 @@ runs, so a missing fixture fails setup instead of skipping tests.
 ### 1.2 Vendored ticker corpus
 
 `tests/fixtures/ticker/` holds binary ticker messages that the official samples do not
-provide: framed batches, index packets, the heartbeat, malformed cases, and one real
-capture of 19 messages. [`MANIFEST.toml`](../tests/fixtures/ticker/MANIFEST.toml)
-records each file's origin, source commit, SHA-256, size and class:
+provide: framed batches, index packets, the heartbeat, malformed cases, and a
+synthetic-derived corpus of 19 messages (2 692 packets). No file in it holds bytes
+recorded from a Kite session. [`MANIFEST.toml`](../tests/fixtures/ticker/MANIFEST.toml)
+records each file's SHA-256, size and class:
 
-- **captured**: bytes recorded from a live Kite WebSocket session;
-- **derived**: bytes cut, re-framed or generated from captured bytes;
-- **synthetic**: hand-constructed bytes with no capture origin.
+- **synthetic**: hand-constructed bytes, and the decoded expectation of such bytes;
+- **synthetic-derived**: bytes produced from a private capture by a
+  constraint-preserving perturbation, with the tool and its version, the parameter set
+  and its SHA-256, the seed, and the SHA-256 and size of the private original, which
+  never leaves private storage.
 
-`tests/fixture_manifest.rs` re-hashes every file and rejects any file the manifest does
-not list. Each `<case>.json` file holds the output of an independent decoder, called
-qdx, for its `<case>.bin`. Those outputs are a cross-check, not protocol truth: the
-protocol reference is `kite:websocket.md`. Where `manja` deliberately differs from qdx,
-the difference is documented in `kite::decoder::framing` and `kite::decoder::packets`.
+The perturbation keeps the capture's shape and changes its values. Framing, record
+count and lengths, packet count, families, instrument tokens, zero fields and signs are
+unchanged; every other non-zero number is moved, by a per-instrument price level and an
+increasing map over each instrument's prices, multiplicative noise on quantities, noise
+on the increments of cumulative volume, one offset of whole weeks plus a random second
+on every timestamp, and N(0, 2 ms) jitter on each record's receipt time; then the
+constraints of the perturbation are re-imposed: tick and lot grids, depth order and a
+positive spread, the day's low and high bracketing open, last price and the previous
+close, monotone cumulative volume, and index change equal to last price minus close.
+No non-zero value other than a token equals its original, the zero mask equals the
+original's, and the same seed and parameters reproduce the same bytes. Those
+properties need the private original, so the tool checks them where the original is
+kept. This repository checks, on the
+vendored bytes, depth order and a positive spread, the day's range, monotone volume, the
+index change identity and last-trade time no later than exchange time, and pins the
+zero-field counts (`fixture_invariants`); the tick and lot grids are checked by the
+tool only. The corpus and the three protocol fixtures cut from it
+(`single_full`, `single_index_full`, `multi_packet`) are synthetic-derived; the
+`original_sha256` and `original_size` of the three cut fixtures and their oracles
+identify the capture they were cut from, and `parameter_set_sha256` is the SHA-256 of
+the tool's complete parameter file, which `parameter_set` summarises. Every other case
+is hand-built.
 
-The capture file uses a test-only container read by `tests/support/capture.rs`. It is
+`tests/fixture_manifest.rs` re-hashes every file, rejects any file the manifest does not
+list, requires each class's fields, and refuses a field that would point at private
+storage. Each `<case>.json` file holds the output of an independent decoder
+implementation, not `manja`'s, for its `<case>.bin`. Those outputs are a cross-check,
+not protocol truth: the protocol reference is `kite:websocket.md`. Where `manja`
+deliberately differs from the independent decoder, the difference is documented in
+`kite::decoder::framing` and `kite::decoder::packets`.
+
+The corpus file uses a test-only container read by `tests/support/capture.rs`. It is
 not a `manja` format: each record is a little-endian `u64` receive time in Unix
-nanoseconds, a little-endian `u32` length, and that many bytes of the unchanged Kite
+nanoseconds, a little-endian `u32` length, and that many bytes of a Kite binary
 message.
 
 ### 1.3 Supplemental fixtures
@@ -60,22 +88,22 @@ IDs are stable. Tests cite the rows they cover, singly or as a range such as
 
 | ID | Family | Evidence |
 |---|---|---|
-| `INV-B-01` | LTP, 8 bytes | qdx `single_ltp` (synthetic); no official LTP packet exists (`INV-GAP-05`) |
-| `INV-B-02` | Quote, 44 bytes | official `ticker_quote.packet`; qdx `single_quote` |
-| `INV-B-03` | Full with depth, 184 bytes | official `ticker_full.packet`; qdx `single_full`; the capture |
-| `INV-B-04` | Index quote, 28 bytes | qdx `single_index_quote` (synthetic) |
-| `INV-B-05` | Index full, 32 bytes | qdx `single_index_full`; the capture |
-| `INV-B-06` | Heartbeat, 1 byte: a message, not a tick | qdx `heartbeat` (synthetic) |
+| `INV-B-01` | LTP, 8 bytes | hand-built `single_ltp`; no official LTP packet exists (`INV-GAP-05`) |
+| `INV-B-02` | Quote, 44 bytes | official `ticker_quote.packet`; hand-built `single_quote` |
+| `INV-B-03` | Full with depth, 184 bytes | official `ticker_full.packet`; `single_full`; the synthetic-derived corpus |
+| `INV-B-04` | Index quote, 28 bytes | hand-built `single_index_quote` |
+| `INV-B-05` | Index full, 32 bytes | `single_index_full`; the synthetic-derived corpus |
+| `INV-B-06` | Heartbeat, 1 byte: a message, not a tick | hand-built `heartbeat` |
 
 ### 2.2 Framing cases (`kite:websocket.md:73-85`)
 
 | ID | Case | Evidence |
 |---|---|---|
-| `INV-F-01` | Count plus length-prefixed batch | qdx `multi_packet`; all 19 capture records (2 692 packets) |
-| `INV-F-02` | Count and length disagree | qdx `malformed_count` |
-| `INV-F-03` | Truncated packet or header | qdx `truncated` |
-| `INV-F-04` | Trailing bytes | qdx `trailing_bytes` |
-| `INV-F-05` | Unknown packet length | qdx `unknown_size` |
+| `INV-F-01` | Count plus length-prefixed batch | `multi_packet`; all 19 corpus records (2 692 packets) |
+| `INV-F-02` | Count and length disagree | hand-built `malformed_count` |
+| `INV-F-03` | Truncated packet or header | hand-built `truncated` |
+| `INV-F-04` | Trailing bytes | hand-built `trailing_bytes` |
+| `INV-F-05` | Unknown packet length | hand-built `unknown_size` |
 
 ### 2.3 Text messages (`kite:websocket.md:165-184`)
 
@@ -90,15 +118,17 @@ IDs are stable. Tests cite the rows they cover, singly or as a range such as
 | ID | Segment | Expected |
 |---|---|---|
 | `INV-S-01` | CDS | divide by 10 000 000 |
-| `INV-S-02` | BCD | refused (`contract.md` §5) |
+| `INV-S-02` | BCD | divide by 10 000 (`contract.md` §5) |
+| `INV-S-03` | NCO | divide by 10 000 (`contract.md` §5) |
 
 ### 2.5 Known gaps
 
 | ID | Gap | How it is covered |
 |---|---|---|
-| `INV-GAP-05` | No official LTP packet (`ticker_ltp.json` has no `.packet` file) | the synthetic qdx `single_ltp` and generated packets |
+| `INV-GAP-05` | No official LTP packet (`ticker_ltp.json` has no `.packet` file) | the hand-built `single_ltp` and generated packets |
 | `INV-GAP-06` | No official index, heartbeat or broker-text messages | the vendored corpus for index and heartbeat; supplemental text messages |
 | `INV-GAP-07` | No official non-2xx error envelopes (400, 403, 429, 500, a missing `error_type`, an HTML body) | supplemental envelopes in the documented shape (`kite:response-structure.md:17-28`, `kite:exceptions.md:7-16`), each stating the official body it was derived from |
+| `INV-GAP-08` | No file in the repository is a captured Kite message | the vendored corpus is synthetic-derived (§1.2); equivalence between live and replayed bytes is established outside this repository, where the original captures are kept |
 
 ---
 
@@ -107,39 +137,42 @@ IDs are stable. Tests cite the rows they cover, singly or as a range such as
 | Target | Features | Checks |
 |---|---|---|
 | `support` | `http`, `ticker` | the loopback harnesses and every fault they can inject |
-| `protocol_common` | none | the always-available protocol types |
-| `envelope_capture` | none | raw-observation envelopes over the capture keep bytes and receive times |
-| `fixture_manifest` | none | the vendored corpus against `MANIFEST.toml` |
+| `protocol_common` | none | the always-available protocol types. The session expiry rule is covered by unit tests in `kite::protocol::datetime`: issued 05:59:59 IST expires the same day at 06:00, issued 06:00:00 IST the next day, a UTC input (01:00Z, 06:30 IST) the next day at 06:00 IST, sub-second inputs either side of 06:00, and for every input the result carries offset +05:30, falls at `SESSION_EXPIRY_IST`, and is strictly after the input by at most one day (`contract.md` §2.2) |
+| `envelope_capture` | none | raw-observation envelopes over the synthetic-derived corpus keep bytes and receive times; a unit test in `kite::envelope::types` round-trips a `SourceIdentity` through serde as its three identifiers and refuses an invalid one on the way in |
+| `fixture_manifest` | none | the vendored corpus against `MANIFEST.toml`: every file listed with its SHA-256 and size and nothing unlisted, the corpus framing into 19 records, each class's fields present (`synthetic-derived` entries carry the tool and version, the parameter set and its SHA-256, the seed and the private original's SHA-256 and size), no `captured` or `derived` class, no field pointing at private storage, and no fixture file name carrying a date |
+| `fixture_invariants` | `decoder` | the constraints the synthetic-derived corpus re-imposes, decoded with manja: 2 692 packets (2 399 full, 293 index full); strictly increasing receipt times; the day's low and high bracket open, close and last price over non-zero values in every packet; non-zero bid prices strictly descend and offer prices ascend, and the best offer is above the best bid where both exist (none does in this post-close corpus); per-instrument cumulative volume never decreases (each instrument appears once here); index `change` equals last price minus close wherever it is non-zero; last-trade time never after the exchange time; the zero-field counts are pinned (78 293 of 107 955 numeric fields in full packets, 56 of 2 051 in index packets), since zero-mask equality with the original is checked where the original is kept |
 | `obs_schema` | none | the observability catalogue against `tests/obs_schema/catalogue.v1.txt` |
 | `references` | none | every citation and ID in the repository resolves (§7) |
 | `http_classification` | `http` | total success and error classification (`contract.md` §2.4) |
 | `http_error_details` | `http` | no response value in an error detail: a seeded string, number and symbol in malformed envelopes, mistyped payloads and malformed instrument and mutual fund CSV rows never reach `detail()`, `Display` or `Debug`, and each detail still names what failed and where (`contract.md` §2.4) |
-| `http_admission` | `http` | admission: a refused request fails before transport, as `NotStarted` |
-| `http_scheduling` | `http` | deadlines, retries, one-attempt operations and cancellation evidence |
-| `http_reads` | `http` | read response types against the official samples |
-| `http_order_rows` | `http` | strict and tolerant decoding of the order and trade lists: every official list the same under both policies; one row made invalid by a path-changing ID, a malformed timestamp or a malformed price, in the order, history, trade and order-trade lists, rejected in place or failing the strict list with only the count and first index; an array of non-objects as rejected rows; a strict rejection recorded as a failed operation and attempt and in the diagnostics; the rejected-row counter; envelope failures (malformed JSON, a non-object body, a missing or non-success status, missing, null or non-array data, and broker, HTTP and credential errors) identical on all four lists under both policies; and no seeded value in any detail or `Debug` output (`contract.md` §2.16) |
+| `http_admission` | `http` | admission: a refused request fails before transport, as `NotStarted`. Priority lanes under a paused clock, through the public `Admission` API: with the default reserve, ten `Standard` acquisitions in the `Standard` class admit eight and the ninth is admitted exactly when the first ages out, while `Control` acquisitions admit at once in that state; eleven `Control` acquisitions in one second refuse the eleventh at once under a 1 ms wait bound and admit it exactly one second after the first; a reserve of 0 admits ten `Standard` at once; a placement reserve of 2 reserves 8 of 10 per second and 280 of 400 per minute and leaves the daily ceiling untouched; a reserve at a window's rate refuses `Standard` at once with `NoStandardCapacity`; `with_control_reserve` refuses 6 naming `B-HTTP-15`. Through the client, with a 61-per-minute `Standard` window and a reserve of 1: the second `Standard` read is refused before transport, a cancel and a `with_priority(Control)` read are sent, a cancel marked `Standard` is refused, and a reserve covering the class refuses a `Standard` read with an `Admission` error naming `B-HTTP-15` and sends nothing (`contract.md` §2.1, `contract.md` §3.2, `contract.md` §3.6). Headroom, paused clock: the default snapshot is 8 Standard and 10 Control with no next slot; exactly `standard_now` Standard calls admit and the next waits; at 0 the next slot is one second away, Control still has its two, and advancing the clock by the hint makes a Standard slot appear and admit at once; a dropped grant restores the number; reserve 0 reports equal lanes; a reserve at the window rate reports 0 Standard and no next slot; `day_remaining` is `None` outside placement and counts a ceiling of 3 down to `Some(0)`, where both lanes read 0 and the next placement is refused; `modifications_remaining` starts at 25, is 23 after two admissions for one order and 25 for another, a dropped grant does not count, and two `modify_order` calls through the client leave 23 (`contract.md` §3.6). Synchronous admission. Through the client on the real clock, with the clock paused only around the refused call: ten placements fill the window and the eleventh `place_order` is refused with zero paused-clock time elapsed (no timer awaited), kind `Admission`, stage `NotStarted`, cause `window_full`, a `retry_after` of at most one second that together with the time already spent covers the first grant's second, and nothing sent; after waiting the hint out the next placement is sent. Under the paused clock at the `Admission` level: `try_acquire` on a full window returns `Refused` with the instant the wait path would sleep to, counts no waiter, still reports a 1 ms hint at 999 ms and admits at the hint; on the Control lane the eleventh call in a second is refused with a one-second hint and reports 2 ms at 998 ms (the D7 hand-over). A read in the same scope with its lane full still waits and is sent after the slot frees (real clock); a ceiling of 2 refuses the third placement with `resets_at` 2026-09-24T00:00:00+05:30 under a fixed wall clock and no `retry_after`, with the clock paused around the refusal; the 26th modification of one order is `ModificationCeiling` with neither hint, at the `Admission` level and through the client; a refusal (stage `NotStarted`) has neither `sent_at` nor `received_at` while carrying the client's `source` and an operation ID (`contract.md` §2.4, `contract.md` §3.6) |
+| `http_scheduling` | `http` | deadlines, retries, one-attempt operations and cancellation evidence for reads (the permit test of 0.2 is gone with the API) |
+| `http_dispatch` | `http` | detached mutations, on the real clock against a loopback server that answers after a delay: a placement future dropped after the request was sent still delivers exactly one outcome to the stream, with result `ok`, HTTP status 200, the receipt's order ID, the client's source, both stamps and the hash of the form sent, and the diagnostics hold no `Cancelled` entry; without a stream the same outcome lands in the orphan ring and counts one orphan; with a 16-outcome stream and a consumer that reads nothing until twenty placements have completed, every attempt completes, the stream yields sixteen outcomes, then one `Overflow { dropped: 4 }`, then ends, and the diagnostics count four dropped and no orphan; `close` waits for the attempt in flight, then refuses the next dispatch, which emits no record, and a refusal for a full window is immediate with no record either; with an in-flight bound of 2 and a stalled server the third dispatch is refused with `Admission` and nothing more is spawned; a 65-byte correlation token is a `Validation` error from `with_correlation` that records no failure in the diagnostics, and a dispatch outside a Tokio runtime is a `Configuration` refusal; a future held unpolled until its attempt completed and then dropped hands its outcome to the ring (one orphan) without a stream, and with a stream the stream alone has it; `Dispatched` is `Send` (`contract.md` §2.17, `contract.md` §3.2) |
+| `http_reads` | `http` | read response types against the official samples; every response's `meta` carries HTTP status 200, attempt 1 and no message for the official profile and order book, with distinct increasing operation IDs across two calls, and `Response::map` keeps the meta; every response's `received_at` is at or after its `sent_at` in both the wall and the monotonic clock, `sent_at` is after the client was built, a clone and a `with_credentials` handle report the client's own `SourceIdentity`, a client built without one has producer `manja`, feed `default` and a run ID another client does not share, a client built with `identity(...)` reports it, and the meta round-trips through serde with the identity (`contract.md` §2.18) |
+| `http_order_rows` | `http` | strict and tolerant decoding of the order and trade lists: every official list the same under both policies; one row made invalid by a path-changing ID, a malformed timestamp or a malformed price, in the order, history, trade and order-trade lists, rejected in place or failing the strict list with only the count and first index; an array of non-objects as rejected rows; a strict rejection recorded as a failed operation and attempt and in the diagnostics; the rejected-row counter; envelope failures (malformed JSON, a non-object body, a missing or non-success status, missing, null or non-array data, and broker, HTTP and credential errors) identical on all four lists under both policies; and no seeded value in any detail or `Debug` output (`contract.md` §2.16); broker state unchanged: a row derived from `orders.json` with 3 of 10 filled round-trips `status`, `quantity`, `filled_quantity`, `pending_quantity` and `cancelled_quantity` under both policies, and the same row with the undocumented status `HALF FILLED` keeps it as `Inbound::Unknown` with its wire text (`contract.md` §2.18) |
 | `http_order_rows_span` | `http` | a strict rejection ends its operation span as `decode_error`, and its attempt span records `error_class` `decode_error`. Like every span-capturing test, it installs its capture through `tests/support/spans.rs`, so a concurrent test without a subscriber cannot have the span cached as disabled |
-| `http_orders` | `http` | placement, modification, cancellation and conversion requests on the wire; path-changing order IDs unable to be built; an order ID from the order book passed straight back into a modification; and a path-changing ID in a response decoded as an error |
+| `http_orders` | `http` | placement, modification, cancellation and conversion requests on the wire; a placement refused for a full window sends nothing and carries `retry_after`, the call itself being the admission boundary (no permit); path-changing order IDs unable to be built; an order ID from the order book passed straight back into a modification; and a path-changing ID in a response decoded as an error. Wire forms: for placement, modification, cancellation (the empty body, SHA-256 `e3b0c4...`) and conversion, the captured request's method, path, content type and body equal the form's and `sha256(captured body) == wire.sha256()`; `wire()` is deterministic over 100 calls and across a clone, and differs for a different price; `Display` of a placement form equals the form body, `Debug` shows the same body and the hash, neither contains `api_key`, `access_token` or `Authorization`, and `WireForm`'s fields name no credential type (a check over `src/kite/connect/wire.rs`); an invalid request has no form (`contract.md` §2.1). Response meta: a supplemental receipt derived from `order_response.json` with an envelope-level `message` (no official sample carries one; `autoslice_response.json`'s sits inside a slice) round-trips it in `meta.message` with a populated operation ID, HTTP status 200 and attempt 1, and the official receipt carries `None`; a connection dropped after the request leaves an error with stage `Started`, `sent_at` set, `received_at` absent, the client's `source` and an operation ID, and a response that arrives but does not decode carries both stamps in order (`contract.md` §2.4, `contract.md` §2.18). Tags: `Tag::new("abc123")` and the same through `TryFrom<&str>`, `TryFrom<String>` and `FromStr` succeed and agree; 21 characters, an empty string, a hyphen and a space each fail every constructor with the `tag` `RequestError` whose reason names the grammar; the placement bodies carry `tag=`; a compile-fail doc test on `PlaceOrderRequest` shows a tagless `new` does not compile; and against a supplemental order book derived from `orders.json` with two rows tagged `rebalance42` and one tagged `other1`, `list_orders_tagged` returns both matching rows in broker order with their order IDs (a filter, not proof of one placement), one row for `other1`, an empty list with the meta intact for an unused tag, and each call is a plain `GET /orders` (`contract.md` §2.16) |
 | `http_margins` | `http` | order margins, basket margins and order charges |
-| `http_holdings_authorisation` | `http` | holdings authorisation: named ISIN and quantity pairs and the entire holdings on the wire, the request ID from the official `holdings_auth.json`, the documented portal URL and its encoding, a malformed ISIN sending nothing, one attempt after a lost response or a 429, and a 428 sell refusal reported by `requires_holdings_authorisation` (`contract.md` §2.15) |
+| `http_holdings_authorisation` | `http` | holdings authorisation: named ISIN and quantity pairs and the entire holdings on the wire, the request ID from the official `holdings_auth.json`, the documented portal URL and its encoding, a malformed ISIN sending nothing, one attempt after a lost response or a 429, and a 428 sell refusal reported by `requires_holdings_authorisation` (`contract.md` §2.15); the named and the entire-holdings requests each sent exactly as their wire form, hash for hash, the latter with no body (`contract.md` §2.1) |
 | `http_mutual_funds` | `http` | mutual fund orders, one order by UUID, SIPs, holdings and the instrument list decoded field by field from the official samples; an unsafe order ID unable to be built; a malformed CSV row; an unknown status; read retries; and the standard quota class (`contract.md` §2.14). The mutation fixtures (`mf_order_*`, `mf_sip_place`, `mf_sip_modify`, `mf_sip_cancel`) and `mf_sip_info.json` have no documented endpoint and are not used |
 | `http_historical` | `http` | historical candles: every interval's path and the IST query on the wire, minute and open-interest candles decoded from the official samples, continuous data, a range that ends before it starts, a malformed candle, read retries, and the client admitting them in their own 3-per-second class, apart from quotes (`contract.md` §2.13); a paused-clock unit test in `kite::connect::admission` covers the class's timing |
-| `http_gtt` | `http` | GTT placement (single and two-leg), modification and deletion on the wire, one attempt each; each mutation dispatched with a permit, and a mismatched, expired or foreign permit or an invalid request starting no transport; the trigger list and trigger decoded from the official samples; and a fetched trigger converted back into a request (`contract.md` §2.12); the sandbox has no GTT (`kite:sandbox.md:298`), so these samples are its only evidence |
+| `http_gtt` | `http` | GTT placement (single and two-leg), modification and deletion on the wire, one attempt each, each admitted on its own call and counted once in the admission histogram, and an invalid request starting no transport; the trigger list and trigger decoded from the official samples; and a fetched trigger converted back into a request (`contract.md` §2.12); a two-leg placement, a modification and a deletion each sent exactly as their wire form, hash for hash, with the JSON `condition` and `orders` fields inside the form body and the forms deterministic over 100 calls (`contract.md` §2.1); the sandbox has no GTT (`kite:sandbox.md:298`), so these samples are its only evidence |
 | `http_market` | `http` | quote completeness and the instrument master |
-| `http_session` | `http` | token exchange and invalidation (`contract.md` §2.2) |
-| `http_observability` | `http` | HTTP spans, metrics and diagnostics |
+| `http_session` | `http` | token exchange and invalidation (`contract.md` §2.2); each sent exactly as its wire form, hash for hash, with the exchange form's `Display` and `Debug` redacting the request token and checksum and the invalidation form's `Debug` redacting the access token while neither renders the secret (`contract.md` §2.1); an exchange whose future is dropped after 100 ms while the server answers at 300 ms was sent, counts as one dispatch in flight, completes under `close`, records no failure and no `Cancelled` entry, and leaves one orphaned outcome for `/session/token` with result `ok`, status 200, stage `ResponseReceived`, no receipt IDs and no token in its `Debug` (`contract.md` §2.17) |
+| `http_observability` | `http` | HTTP spans, metrics and diagnostics; the operation span's `priority` field is `standard` on a read, `control` on a cancel, a GTT deletion and a `with_priority(Control)` read, and absent from the admission span (`contract.md` §4.2); after a 503 then a 200, the response's `meta.attempt` is 2 and its `meta.operation_id` equals the operation span's `operation_id` (`contract.md` §2.18); a placement refused for a full window ends its operation span with `result=admission_rejected`, `stage=not_started` and `admission_cause=window_full`, its child admission span records `admission_result=refused`, and the admission-wait histogram counts one `refused` sample in the `mut` class (`contract.md` §4.2); a placement through a `with_correlation` client exposes the token and the form's hash on the future before it is polled and ends its operation span with `correlation` equal to the token and `wire_sha256` equal to the form's hex digest, a read through the same client records the token and no hash, a placement refused because the client is closing records the hash and no token, the admission and attempt spans carry neither field, and no metric label holds the token or the digest (`contract.md` §2.17, `contract.md` §4.2) |
 | `ticker_owner` | `ticker` | the single-owner ticker and its raw delivery |
 | `ticker_subscriptions` | `ticker` | desired subscriptions, revisions and wire order |
 | `ticker_lifecycle` | `ticker` | bounded reconnect, liveness and credential rejection |
 | `ticker_delivery` | `ticker` | bounded delivery, cancellation and teardown |
 | `ticker_status` | `ticker` | ticker spans, metrics and status |
 | `decoder_framing` | `decoder` | framing against the vendored corpus |
-| `decoder_packets` | `decoder` | every packet family, field by field |
+| `decoder_packets` | `decoder` | every packet family, field by field. Unit tests in `kite::decoder::packets` decode a hand-built full packet with open interest 3 000 000 000 in all three open-interest fields, `u32::MAX` in every quantity, volume and depth quantity, 40 000 depth orders and timestamps past `0x8000_0000`, all as those unsigned values, while a price with the same sign bit stays negative; unit tests in `kite::protocol::scale` scale BCD and NCO by 10 000 and map `Exchange::NCO` to `Segment::Nco` (`contract.md` §5) |
 | `decoder_text` | `decoder` | text messages without coercion, and a failed parse whose detail names what failed but no value from the message (`contract.md` §2.9) |
 | `decoder_adapter` | `decoder` | provenance and identical live and captured results, and a retained text diagnostic that holds no value from the message (`contract.md` §2.9) |
 | `decoder_qualification` | `decoder` | §4 |
 | `observability_conformance` | all | §5 |
-| `public_surface` | all | every public type is reachable through its documented path |
+| `public_surface` | all | every public type is reachable through its documented path; the 0.2 dispatch permit API is absent: a scan of every source file under `src/kite/connect` finds none of the six retired names (the permit type, the target type, the client's `admit` method, the suffix of the seven permit-carrying mutation methods, the validity bound's accessor and its retired bound ID), the needles being assembled from fragments so the test spells none; every mutation and session operation is typed as `Dispatched<_>` and the dispatch API (`Dispatched`'s accessors, `with_correlation`, `close`, `build_with_outcomes`, `OutcomeStream`, `Outcome`'s fields, `ReceiptIds`, `OutcomeStreamError`, `CloseError`, `HttpLimits::outcome_capacity` and the four dispatch diagnostics) is reachable (`contract.md` §2.17) |
+| `constructible` | none | every feature row: a downstream-style module using public paths only builds one value of every public type in `kite::connect::models` (every DTO, request type, receipt and enum), `Response<Order>`, `ResponseMeta`, `IngressStamp`, `HttpError` at each of the four stages with `BrokerError` and `RetryInfo` and an `Admission` refusal with its hint, `OrderUpdate` with `PostbackChecksum`, every checked type, and, under `http`, `Outcome` and `ReceiptIds`, recording each type's name as it builds it; the test then scans every `pub struct` and `pub enum` in `src/kite/connect/models/*.rs` and requires each name among the recorded ones, and requires the names that live outside the models by a fixed list (the two dispatch types joining it under `http`), so a public model type without a downstream construction fails (`contract.md` §2.19) |
 
 `ticker_lifecycle` runs on the real clock with the smallest permitted bounds. The
 decoder targets need no async runtime. `tests/packaging/check.sh` packages the crate,
@@ -171,14 +204,14 @@ MANJA_FUZZ_SEED=0xdeadbeef cargo test --no-default-features --features decoder -
 | `campaign_trailing_bytes` | `0x2` | 10 000 / 100 000 | always `TrailingBytes`, with no packet exposed |
 | `campaign_allocation_and_work_bounds` | `0x3` | 200 / 2 000, inputs up to 8 MiB | each call under 500 ms (linear work); over 16 MiB is `Oversized` before any work |
 | `campaign_malformed_text` | `0x4` | 20 000 / 200 000, with mutations, truncation and nesting to 80 | success only for a JSON object with a string `type`, as the matching variant; detail ≤ 512 bytes |
-| `campaign_numeric_extremes_and_segments` | `0x5` | 20 000 / 200 000 packets and prices × 9 segments | packets are byte-faithful; only a negative unsigned field is refused; every `i32` scales exactly in every supported segment; only BCD is refused |
-| `campaign_capture_mutations` | `0x6` | 3 000 / 30 000 bit flips, truncations, insertions and extensions of the capture | the same framing and faithfulness invariants |
+| `campaign_numeric_extremes_and_segments` | `0x5` | 20 000 / 200 000 packets and prices × 10 segments | every packet of a known length decodes byte-faithfully, whatever its sign bits; every `i32` price scales exactly in every segment, none refused |
+| `campaign_capture_mutations` | `0x6` | 3 000 / 30 000 bit flips, truncations, insertions and extensions of the synthetic-derived corpus | the same framing and faithfulness invariants |
 
-A further test decodes all 19 capture records with different receive times and after a
+A further test decodes all 19 corpus records with different receive times and after a
 serialize-and-read-back round trip, and checks that the results are identical and that
 a failed decode leaves the raw bytes readable.
 
-**Limits.** The capture holds only 184-byte full and 32-byte index-full packets, so LTP,
+**Limits.** The synthetic-derived corpus holds only 184-byte full and 32-byte index-full packets, so LTP,
 quote, index quote, heartbeat and text coverage comes from the official samples, the
 vendored corpus and supplemental messages. CDS scaling is exercised by golden values and
 generated integers only. The campaign covers the parser and the adapter, not the live
@@ -218,7 +251,10 @@ Isolation from a recorder or subscriber callback that blocks or panics is not cl
 keeping 1 span in 10). The workloads are:
 
 - **HTTP**: 100 sequential GETs, 64-way concurrent GETs, and one 429 followed by a
-  success, against the loopback server serving the official `profile.json`.
+  success, against the loopback server serving the official `profile.json`; and 100
+  sequential order modifications (`http dispatch PUT`), each a detached dispatch awaited
+  in turn with the outcome stream drained afterwards, against `order_modify.json`, which
+  measures the task spawn, the channel and the outcome record over a sequential GET.
 - **Ticker**: full-mode messages of 1, 100 and 3 000 instruments from the vendored
   `single_full` packet, with a heartbeat after every tenth message.
 - **Decoder**: every vendored binary message cycled to about 10⁶ messages, both through
@@ -248,6 +284,7 @@ Rust 1.98.0, release profile and all features. Another host needs its own measur
 | Extra allocations from recording | ≤ 1 per operation over `disabled` | 0 |
 | Ticker delivery latency, p99.9 | ≤ 1 ms | 282 µs |
 | Ticker peak retained heap | ≤ 16 MiB | 12.4 MiB |
+| HTTP dispatch (`http dispatch PUT`) against a read (`http sequential GET`), median time per operation, each configuration of the same run | ≤ 1.25× (`MAX_DISPATCH_OVER_READ`) | 1.08× (`trace-info`), worst of four runs on 2026-10-13; the first, at 43e1a9d, measured 0.93× `disabled`, 0.94× `metrics`, 0.95× `trace-info` and 0.91× `trace-sampled` |
 
 ---
 

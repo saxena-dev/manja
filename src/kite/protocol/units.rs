@@ -27,7 +27,10 @@ use crate::kite::protocol::scale::{ScaleError, Segment, price_divisor};
 ///
 /// Incremented whenever a conversion rule changes its result for any input,
 /// so derived values can record which policy produced them.
-pub const CONVERSION_POLICY_VERSION: u32 = 1;
+///
+/// 2 (0.3.0): BSE currency derivatives and NSE commodity derivatives divide
+/// by 10 000 instead of the former being refused (`docs/contract.md` §5).
+pub const CONVERSION_POLICY_VERSION: u32 = 2;
 
 /// Largest distance from an integer, in raw units, that `from_f64` accepts as
 /// float representation noise.
@@ -196,7 +199,7 @@ mod tests {
     #[test]
     fn exact_round_trips() {
         for (value, divisor, raw) in [
-            (1576.1, 100, 157_610),
+            (1234.56, 100, 123_456),
             (0.05, 100, 5),
             (-12.34, 100, -1_234),
             (83.1234, 10_000_000, 831_234_000),
@@ -234,8 +237,8 @@ mod tests {
     fn arithmetic_is_checked() {
         let p = ScaledPrice::new(i64::MAX / 2, 100).unwrap();
         assert_eq!(p.checked_mul(3), Err(UnitError::Overflow));
-        let p = ScaledPrice::new(157_610, 100).unwrap();
-        assert_eq!(p.checked_mul(-3).unwrap().raw(), -472_830);
+        let p = ScaledPrice::new(123_456, 100).unwrap();
+        assert_eq!(p.checked_mul(-3).unwrap().raw(), -370_368);
     }
 
     #[test]

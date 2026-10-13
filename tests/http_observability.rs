@@ -598,14 +598,10 @@ async fn scripted(obs: Observability) -> (Vec<String>, usize) {
     .await;
     let c = client(&h.base_url(), &obs);
     let mut out = vec![
-        format!("{:?}", c.user().profile().await.map(|r| r.data.is_some())),
+        format!("{:?}", c.user().profile().await.map(|r| r.data.user_id)),
         format!(
             "{:?}",
-            c.clone()
-                .orders()
-                .list_orders()
-                .await
-                .map(|r| r.data.map(|d| d.len()))
+            c.clone().orders().list_orders().await.map(|r| r.data.len())
         ),
         format!(
             "{:?}",
@@ -614,7 +610,7 @@ async fn scripted(obs: Observability) -> (Vec<String>, usize) {
                 .cancel_order(OrderVariety::Regular, &OrderId::new(ORDER_ID).unwrap())
                 .await
                 .map_err(|e| {
-                    let e = e.as_http().unwrap();
+                    let e = e;
                     (e.kind(), e.http_status(), e.stage(), e.attempt())
                 })
                 .map(|_| ())
@@ -627,7 +623,7 @@ async fn scripted(obs: Observability) -> (Vec<String>, usize) {
                     &ApiSecret::new(SECRET).unwrap(),
                 )
                 .await
-                .map(|r| r.data.map(|s| s.user_id))
+                .map(|r| r.data.user_id)
         ),
     ];
     out.push(format!(
@@ -663,4 +659,227 @@ fn clients_default_to_a_disabled_scope_and_share_it_with_clones() {
     let (_rec, obs) = recording();
     let e = HTTPClient::with_observability(Config::default(), obs.clone()).unwrap();
     assert!(e.observability().same_scope(&obs));
+}
+
+// ---- priority lanes -----------------------------------------------------
+
+#[tokio::test]
+async fn the_operation_span_records_the_priority_lane() {
+    let cap = Capture::default();
+    let _g = cap.install();
+    let (_rec, obs) = recording();
+    let orders = fixtures::json_body("orders.json").unwrap();
+    let h = HttpHarness::start(vec![
+        Reply::json(orders.clone()),
+        Reply::json(fixtures::json_body("order_cancel.json").unwrap()),
+        Reply::json(orders),
+        Reply::json(fixtures::json_body("gtt_delete_order.json").unwrap()),
+    ])
+    .await;
+    let c = client(&h.base_url(), &obs);
+    // A read is standard by default, a cancel is control by default, a read
+    // marked control is control, and a GTT deletion is control by default.
+    c.orders().list_orders().await.unwrap();
+    c.orders()
+        .cancel_order(
+            OrderVariety::Regular,
+            &OrderId::new("151220000000000").unwrap(),
+        )
+        .await
+        .unwrap();
+    c.with_priority(manja::kite::connect::admission::Priority::Control)
+        .orders()
+        .list_orders()
+        .await
+        .unwrap();
+    c.gtt().delete_trigger(123).await.unwrap();
+    assert_eq!(h.requests().len(), 4);
+
+    let ops = cap.named(OP);
+    let lanes: Vec<(Option<&str>, Option<&str>)> = ops
+        .iter()
+        .map(|op| (op.field("endpoint"), op.field("priority")))
+        .collect();
+    assert_eq!(
+        lanes,
+        [
+            (Some("/orders"), Some("standard")),
+            (Some("/orders/{variety}/{order_id}"), Some("control")),
+            (Some("/orders"), Some("control")),
+            (Some("/gtt/triggers/{id}"), Some("control")),
+        ]
+    );
+    // The lane is recorded on the operation span alone; the admission span
+    // and every metric label set are unchanged.
+    for a in cap.named(ADMISSION) {
+        assert_eq!(a.field("priority"), None);
+    }
+}
+
+// ---- response meta agrees with the span ----------------------------------
+
+#[tokio::test]
+async fn the_response_meta_names_the_operation_and_the_attempt_that_answered() {
+    let cap = Capture::default();
+    let _g = cap.install();
+    let (_rec, obs) = recording();
+    let h = HttpHarness::start(vec![
+        server_error(),
+        Reply::json(fixtures::json_body("orders.json").unwrap()),
+    ])
+    .await;
+    let c = client(&h.base_url(), &obs);
+    let response = c.orders().list_orders().await.unwrap();
+    assert_eq!(response.meta.attempt, 2, "the second attempt answered");
+    assert_eq!(response.meta.http_status, 200);
+    let [op] = cap.named(OP).try_into().unwrap();
+    assert_eq!(
+        op.field("operation_id"),
+        Some(response.meta.operation_id.to_string().as_str()),
+        "the meta's operation ID is the span's"
+    );
+}
+
+// ---- a refused mutation names its cause on the spans ---------------------
+
+#[tokio::test]
+async fn a_refused_mutation_records_refused_and_the_cause() {
+    use manja::kite::connect::models::{
+        Exchange, OrderType, OrderVariety, PlaceOrderRequest, ProductType, Tag, TransactionType,
+    };
+    use manja::kite::protocol::Quantity;
+    let cap = Capture::default();
+    let _g = cap.install();
+    let (rec, obs) = recording();
+    // Placements admit one per second here, so the second is refused.
+    let profile = QuotaProfile::kite_v3()
+        .with_version("one-placement")
+        .with_windows(
+            manja::kite::connect::admission::RateClass::OrderPlacement,
+            vec![manja::kite::connect::admission::Window::new(
+                1,
+                Duration::from_secs(60),
+            )],
+        )
+        .unwrap();
+    let receipt = fixtures::json_body("order_response.json").unwrap();
+    let h = HttpHarness::start(vec![Reply::json(receipt)]).await;
+    let c = HTTPClient::builder(config(&h.base_url(), fast()))
+        .observability(obs.clone())
+        .admission(Admission::new(profile, AdmissionLimits::default()))
+        .credentials(Credentials::new("test_api_key", "test_access_token").unwrap())
+        .build()
+        .unwrap();
+    let order = PlaceOrderRequest::new(
+        OrderVariety::Regular,
+        Exchange::NSE,
+        "INFY",
+        TransactionType::BUY,
+        OrderType::Market,
+        Quantity::new(1).unwrap(),
+        ProductType::CashAndCarry,
+        Tag::new("t1").unwrap(),
+    );
+    c.orders().place_order(&order).await.unwrap();
+    let err = c.orders().place_order(&order).await.unwrap_err();
+    assert!(err.retry_after().is_some());
+    assert_eq!(h.requests().len(), 1);
+
+    let ops = cap.named(OP);
+    assert_eq!(ops.len(), 2);
+    assert_eq!(ops[0].field("result"), Some("ok"));
+    assert_eq!(ops[0].field("admission_cause"), None);
+    assert_eq!(ops[1].field("result"), Some("admission_rejected"));
+    assert_eq!(ops[1].field("stage"), Some("not_started"));
+    assert_eq!(ops[1].field("admission_cause"), Some("window_full"));
+    let admissions = cap.named(ADMISSION);
+    assert_eq!(admissions.len(), 2);
+    assert_eq!(admissions[0].field("admission_result"), Some("granted"));
+    assert_eq!(admissions[1].field("admission_result"), Some("refused"));
+    assert_eq!(admissions[1].parent, Some(ops[1].id));
+    assert_eq!(
+        rec.histogram(Instrument::HttpAdmissionWait, &["mut", "refused"])
+            .0,
+        1
+    );
+}
+
+// ---- a mutation's span carries its correlation and wire hash -------------
+
+#[tokio::test]
+async fn the_operation_span_records_a_mutations_correlation_and_wire_hash() {
+    use manja::kite::connect::models::{
+        Exchange, OrderType, PlaceOrderRequest, ProductType, Tag, TransactionType,
+    };
+    use manja::kite::protocol::Quantity;
+    let cap = Capture::default();
+    let _g = cap.install();
+    let (rec, obs) = recording();
+    let h = HttpHarness::start(vec![
+        Reply::json(fixtures::json_body("order_response.json").unwrap()),
+        Reply::json(fixtures::json_body("orders.json").unwrap()),
+    ])
+    .await;
+    let c = client(&h.base_url(), &obs);
+    let order = PlaceOrderRequest::new(
+        OrderVariety::Regular,
+        Exchange::NSE,
+        "INFY",
+        TransactionType::BUY,
+        OrderType::Market,
+        Quantity::new(1).unwrap(),
+        ProductType::CashAndCarry,
+        Tag::new("t1").unwrap(),
+    );
+    let wire = order.wire().unwrap();
+    let token = "attempt 7f3a";
+    let tagged = c.with_correlation(token).unwrap();
+    // A correlated placement: the token and the hash are on the future
+    // before it is polled and on the span once it ends.
+    let dispatched = tagged.orders().place_order(&order);
+    assert_eq!(dispatched.correlation(), Some(token));
+    assert_eq!(dispatched.wire_sha256(), Some(wire.sha256()));
+    assert!(dispatched.refusal().is_none());
+    dispatched.await.unwrap();
+    // A read through the same handle records the token on its span too,
+    // and no hash: it has no wire form.
+    tagged.orders().list_orders().await.unwrap();
+    // A placement refused before transport (the client is closing) has no
+    // correlation and still records the hash of the form it did not send.
+    c.close(Duration::ZERO).await.unwrap();
+    let refused = c.orders().place_order(&order);
+    assert!(refused.refusal().is_some());
+    assert_eq!(refused.wire_sha256(), Some(wire.sha256()));
+    assert_eq!(h.requests().len(), 2);
+
+    let ops = cap.named(OP);
+    assert_eq!(ops.len(), 3);
+    assert_eq!(ops[0].field("endpoint"), Some("/orders/{variety}"));
+    assert_eq!(ops[0].field("correlation"), Some(token));
+    assert_eq!(
+        ops[0].field("wire_sha256"),
+        Some(wire.sha256_hex().as_str())
+    );
+    assert_eq!(ops[0].field("result"), Some("ok"));
+    assert_eq!(ops[1].field("endpoint"), Some("/orders"));
+    assert_eq!(ops[1].field("correlation"), Some(token));
+    assert_eq!(ops[1].field("wire_sha256"), None);
+    assert_eq!(ops[2].field("correlation"), None);
+    assert_eq!(
+        ops[2].field("wire_sha256"),
+        Some(wire.sha256_hex().as_str())
+    );
+    assert_eq!(ops[2].field("result"), Some("admission_rejected"));
+    assert_eq!(ops[2].field("stage"), Some("not_started"));
+    // Neither reaches a metric label or the admission and attempt spans.
+    for s in cap.named(ADMISSION).into_iter().chain(cap.named(ATTEMPT)) {
+        assert_eq!(s.field("correlation"), None);
+        assert_eq!(s.field("wire_sha256"), None);
+    }
+    for (labels, _) in rec.dump() {
+        for v in labels.values() {
+            let v = v.to_string();
+            assert!(!v.contains(token) && !v.contains(&wire.sha256_hex()), "{v}");
+        }
+    }
 }

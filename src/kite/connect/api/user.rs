@@ -9,7 +9,7 @@
 
 use crate::kite::connect::{
     client::HTTPClient,
-    models::{KiteApiResponse, Segment, SegmentKind, UserMargins, UserProfile},
+    models::{Response, Segment, SegmentKind, UserMargins, UserProfile},
 };
 use crate::kite::error::Result;
 
@@ -28,7 +28,7 @@ use crate::kite::error::Result;
 /// # async fn run() -> Result<(), Box<dyn std::error::Error>> {
 /// let client = HTTPClient::new(Config::default())?
 ///     .with_credentials(Credentials::new("api_key", "access_token")?);
-/// let profile = client.user().profile().await?.data.expect("data");
+/// let profile = client.user().profile().await?.data;
 /// let equity = client.user().margins_by_segment(SegmentKind::Equity).await?;
 /// println!("{}: {:?}", profile.user_name, equity.data);
 /// # Ok(()) }
@@ -61,12 +61,12 @@ impl<'c> User<'c> {
     ///
     /// # Returns
     ///
-    /// A `Result` containing a `KiteApiResponse` with `UserProfile` data on success,
+    /// A `Result` containing a `Response` with `UserProfile` data on success,
     /// or an error if the request fails.
     ///
     /// Refer to the Kite API documentation (`kite:user.md:131-197`) for more details.
     ///
-    pub async fn profile(&self) -> Result<KiteApiResponse<UserProfile>> {
+    pub async fn profile(&self) -> Result<Response<UserProfile>> {
         self.client.get("/user/profile").await
     }
 
@@ -76,12 +76,12 @@ impl<'c> User<'c> {
     ///
     /// # Returns
     ///
-    /// A `Result` containing a `KiteApiResponse` with `UserMargins` data on success,
+    /// A `Result` containing a `Response` with `UserMargins` data on success,
     /// or an error if the request fails.
     ///
     /// Refer to the Kite API documentation (`kite:user.md:198-294`) for more details.
     ///
-    pub async fn margins(&self) -> Result<KiteApiResponse<UserMargins>> {
+    pub async fn margins(&self) -> Result<Response<UserMargins>> {
         self.client.get("/user/margins").await
     }
 
@@ -96,15 +96,12 @@ impl<'c> User<'c> {
     ///
     /// # Returns
     ///
-    /// A `Result` containing a `KiteApiResponse` with `Segment` data on success,
+    /// A `Result` containing a `Response` with `Segment` data on success,
     /// or an error if the request fails.
     ///
     /// Refer to the Kite API documentation (`kite:user.md:198-294`) for more details.
     ///
-    pub async fn margins_by_segment(
-        &self,
-        segment: SegmentKind,
-    ) -> Result<KiteApiResponse<Segment>> {
+    pub async fn margins_by_segment(&self, segment: SegmentKind) -> Result<Response<Segment>> {
         self.client
             .get(&format!("/user/margins/{}", segment.as_ref()))
             .await

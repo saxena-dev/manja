@@ -1,11 +1,11 @@
 //! Packet families decoded field by field.
 //!
 //! Baselines: the official `ticker_quote.packet` and `ticker_full.packet`
-//! (base64 text of one bare packet) with their JSON, the vendored qdx
-//! reference outputs (`docs/verification.md` §1.2) for the
-//! single-packet and multi-packet cases, and every packet of the real
-//! capture. `ticker_ltp.json` has no packet file, so the LTP layout is
-//! covered by the qdx `single_ltp` pair only. The real capture holds only
+//! (base64 text of one bare packet) with their JSON, the vendored
+//! independent-decoder reference outputs (`docs/verification.md` §1.2) for
+//! the single-packet and multi-packet cases, and every packet of the
+//! synthetic-derived corpus. `ticker_ltp.json` has no packet file, so the LTP
+//! layout is covered by the hand-built `single_ltp` pair only. The corpus holds only
 //! full and index-full packets, so it cannot exercise the LTP,
 //! quote or index-quote layouts.
 
@@ -17,7 +17,7 @@ use manja::kite::decoder::packets::{DepthEntry, Packet, decode, decode_bytes, sc
 use manja::kite::protocol::scale::Segment;
 use serde_json::{Map, Value, json};
 
-use support::capture::{read_capture, read_real_capture, read_ticker_fixture};
+use support::capture::{read_capture, read_synthetic_corpus, read_ticker_fixture};
 use support::fixtures;
 
 fn oracle(name: &str) -> Value {
@@ -111,7 +111,7 @@ fn decoded(payload: &[u8]) -> Vec<Value> {
 }
 
 #[test]
-fn every_qdx_packet_pair_matches_field_by_field() {
+fn every_vendored_packet_pair_matches_field_by_field() {
     for name in [
         "single_ltp",
         "single_quote",
@@ -225,7 +225,7 @@ fn the_official_quote_and_full_samples_decode_to_their_expectations() {
 
 #[test]
 fn every_capture_packet_decodes_and_index_packets_stay_distinct() {
-    let capture = read_real_capture();
+    let capture = read_synthetic_corpus();
     let (mut full, mut index) = (0, 0);
     for r in read_capture(&capture).unwrap() {
         let Ok(Message::Packets(frames)) = frame(r.payload, FramingLimits::default()) else {

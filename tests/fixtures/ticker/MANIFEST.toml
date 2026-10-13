@@ -4,28 +4,32 @@
 # [[file]] entry, and tests/fixture_manifest.rs re-hashes each one and rejects any
 # unlisted file. The manifest itself is outside its own covered set.
 #
-# Classes: "captured" = bytes recorded from a live Kite WebSocket session;
-# "derived" = bytes cut or re-framed from captured bytes, or generated from them;
-# "synthetic" = hand-constructed bytes with no capture origin.
+# No file here holds bytes recorded from a Kite session. Classes:
+# "synthetic" = hand-constructed bytes, and the decoded expectation of such bytes;
+# "synthetic-derived" = bytes produced by a constraint-preserving perturbation of a
+# private capture (docs/verification.md §1.2): the same framing, counts, lengths,
+# packet families, instrument tokens, zero masks and signs, with every other non-zero
+# value different from the original. Such an entry records the tool and its version,
+# the parameter set (a summary) and parameter_set_sha256 (the SHA-256 of the tool's
+# complete parameter file), the seed, and the SHA-256 and size of the private original,
+# which never leaves private storage. For the three protocol fixtures cut from the
+# corpus and their oracles, original_sha256 and original_size identify the capture they
+# were cut from.
 #
-# The <case>.json files are expectation outputs of the qdx decoder in the source
-# repository. They are a cross-implementation ORACLE, not protocol truth: the
-# protocol reference is kite:websocket.md (docs/kite-sources.toml), and any
+# The <case>.json files are expectation outputs of an independent decoder
+# implementation, not manja's. They are a cross-implementation ORACLE, not protocol
+# truth: the protocol reference is kite:websocket.md (docs/kite-sources.toml), and any
 # disagreement is dispositioned in writing, never normalized away.
 #
-# tick_set_0__2026_01_21.bin is a TEST-ONLY capture container, not a manja
-# format: a sequence of records, each a little-endian u64 receipt time in Unix
-# nanoseconds, a little-endian u32 payload length, then that many bytes of the
-# unchanged big-endian Kite binary message.
+# synthetic_corpus.bin is a TEST-ONLY capture container, not a manja format: a sequence
+# of records, each a little-endian u64 receipt time in Unix nanoseconds, a little-endian
+# u32 payload length, then that many bytes of a big-endian Kite binary message.
 # The reader lives in tests/support/capture.rs and is never exported by manja.
 
 manifest_version = 1
 
 [[file]]
 path = "protocol/heartbeat.bin"
-source_repository = "kite-data-feed (private repository)"
-source_commit = "24f82a28213100094ac3f77c3aa3fdf1c22376f8"
-original_path = "qdx/tests/fixtures/protocol/heartbeat.bin"
 sha256 = "4bf5122f344554c53bde2ebb8cd2b7e3d1600ad631c385a5d7cce23c7785459a"
 size = 1
 provenance = "synthetic"
@@ -33,20 +37,14 @@ note = "Self-described as a 1-byte heartbeat frame; no capture origin is stated,
 
 [[file]]
 path = "protocol/heartbeat.json"
-source_repository = "kite-data-feed (private repository)"
-source_commit = "24f82a28213100094ac3f77c3aa3fdf1c22376f8"
-original_path = "qdx/tests/fixtures/protocol/heartbeat.json"
 sha256 = "aa2cc9953894c47dd3f52e7e027977d8cca224f8435081a74739ec413ca1de0c"
 size = 104
-provenance = "derived"
-generated_by = "qdx decoder, kite-data-feed/qdx (the source files do not record how the expectation was produced)"
-note = "qdx decoder expectation for heartbeat.bin (oracle, not protocol truth)."
+provenance = "synthetic"
+generated_by = "an independent decoder implementation, not manja's (cross-implementation oracle); the source files do not record how the expectation was produced"
+note = "Independent-decoder expectation for heartbeat.bin (oracle, not protocol truth)."
 
 [[file]]
 path = "protocol/malformed_count.bin"
-source_repository = "kite-data-feed (private repository)"
-source_commit = "24f82a28213100094ac3f77c3aa3fdf1c22376f8"
-original_path = "qdx/tests/fixtures/protocol/malformed_count.bin"
 sha256 = "d8fe477bb80b85ab5bf68da5f7e3120b37c11f11fbdb1523d3c94f742b12a896"
 size = 12
 provenance = "synthetic"
@@ -54,83 +52,101 @@ note = "Hand-constructed negative: declared packet count 0xFFFF followed by 10 z
 
 [[file]]
 path = "protocol/malformed_count.json"
-source_repository = "kite-data-feed (private repository)"
-source_commit = "24f82a28213100094ac3f77c3aa3fdf1c22376f8"
-original_path = "qdx/tests/fixtures/protocol/malformed_count.json"
 sha256 = "2e19a75c3886e7ee16e50fe50bc469820377d3e96c93d8181765699adcd2df3e"
 size = 99
-provenance = "derived"
-generated_by = "qdx decoder, kite-data-feed/qdx (the source files do not record how the expectation was produced)"
-note = "qdx decoder expectation for malformed_count.bin (oracle, not protocol truth)."
+provenance = "synthetic"
+generated_by = "an independent decoder implementation, not manja's (cross-implementation oracle); the source files do not record how the expectation was produced"
+note = "Independent-decoder expectation for malformed_count.bin (oracle, not protocol truth)."
 
 [[file]]
 path = "protocol/multi_packet.bin"
-source_repository = "kite-data-feed (private repository)"
-source_commit = "24f82a28213100094ac3f77c3aa3fdf1c22376f8"
-original_path = "qdx/tests/fixtures/protocol/multi_packet.bin"
-sha256 = "e2cad2391e3a04a36b379a0260fd93be901042a7decf9ffecacaf1d76915ac26"
+sha256 = "6afc48f30795754a23b283cfa17140d3256435bd17accbd1728a527f5c6b394f"
 size = 222
-provenance = "derived"
-note = "Both packets (184 and 32 bytes) occur verbatim in tick_set_0__2026_01_21.bin; combined into one two-packet message."
+provenance = "synthetic-derived"
+tool = "synth-fixture"
+tool_version = "0.1.0"
+parameter_set = "tokens=kept; level=LogNormal(0, 0.08); price=exp(N(0, 0.002)); quantity=exp(N(0, 0.15)); receipt_jitter=N(0, 2000000 ns); day_offset=weekday 60..365 days away plus U[-59, 59] s; gap_band=0.5; bracket_includes_close=true; lot_size=1 for every token (no instrument master)"
+parameter_set_sha256 = "934f1aaa22b47d6c396b13531a4271a33eeea5f71a96306906beb395781f55eb"
+seed = 3347
+original_sha256 = "a54f73d1eee761a17a57a7b300af1fe70dc850bd928d43963fa2a949d55cb912"
+original_size = 456442
+note = "Both packets (184 and 32 bytes) occur verbatim in synthetic_corpus.bin; combined into one two-packet message."
 
 [[file]]
 path = "protocol/multi_packet.json"
-source_repository = "kite-data-feed (private repository)"
-source_commit = "24f82a28213100094ac3f77c3aa3fdf1c22376f8"
-original_path = "qdx/tests/fixtures/protocol/multi_packet.json"
-sha256 = "d7c534e79b8e4ccb67f4c1af22219f28cc839f68847a8de9f220e0b06f228739"
-size = 1957
-provenance = "derived"
-generated_by = "qdx decoder, kite-data-feed/qdx (the source files do not record how the expectation was produced)"
-note = "qdx decoder expectation for multi_packet.bin (oracle, not protocol truth)."
+sha256 = "7568b6b00530785151a671b95ccfc608d350213eb4efe96d277960b5f0802d48"
+size = 1958
+provenance = "synthetic-derived"
+tool = "synth-fixture"
+tool_version = "0.1.0"
+parameter_set = "tokens=kept; level=LogNormal(0, 0.08); price=exp(N(0, 0.002)); quantity=exp(N(0, 0.15)); receipt_jitter=N(0, 2000000 ns); day_offset=weekday 60..365 days away plus U[-59, 59] s; gap_band=0.5; bracket_includes_close=true; lot_size=1 for every token (no instrument master)"
+parameter_set_sha256 = "934f1aaa22b47d6c396b13531a4271a33eeea5f71a96306906beb395781f55eb"
+seed = 3347
+original_sha256 = "a54f73d1eee761a17a57a7b300af1fe70dc850bd928d43963fa2a949d55cb912"
+original_size = 456442
+generated_by = "an independent decoder implementation, not manja's (cross-implementation oracle), run by the synthetic-fixture tool on the synthetic bytes"
+note = "Independent-decoder expectation for multi_packet.bin (oracle, not protocol truth)."
 
 [[file]]
 path = "protocol/single_full.bin"
-source_repository = "kite-data-feed (private repository)"
-source_commit = "24f82a28213100094ac3f77c3aa3fdf1c22376f8"
-original_path = "qdx/tests/fixtures/protocol/single_full.bin"
-sha256 = "2561bfc2229666012c5005a3905276959e63b31de687d5b9c68024ae73555598"
+sha256 = "69d2f63f064e7c3b2d9e68a30d1083c1c644fc1a310c35cc919588d194351c1a"
 size = 188
-provenance = "derived"
-note = "Its 184-byte packet body occurs verbatim in tick_set_0__2026_01_21.bin; re-framed as a one-packet message."
+provenance = "synthetic-derived"
+tool = "synth-fixture"
+tool_version = "0.1.0"
+parameter_set = "tokens=kept; level=LogNormal(0, 0.08); price=exp(N(0, 0.002)); quantity=exp(N(0, 0.15)); receipt_jitter=N(0, 2000000 ns); day_offset=weekday 60..365 days away plus U[-59, 59] s; gap_band=0.5; bracket_includes_close=true; lot_size=1 for every token (no instrument master)"
+parameter_set_sha256 = "934f1aaa22b47d6c396b13531a4271a33eeea5f71a96306906beb395781f55eb"
+seed = 3347
+original_sha256 = "a54f73d1eee761a17a57a7b300af1fe70dc850bd928d43963fa2a949d55cb912"
+original_size = 456442
+note = "Its 184-byte packet body occurs verbatim in synthetic_corpus.bin; re-framed as a one-packet message."
 
 [[file]]
 path = "protocol/single_full.json"
-source_repository = "kite-data-feed (private repository)"
-source_commit = "24f82a28213100094ac3f77c3aa3fdf1c22376f8"
-original_path = "qdx/tests/fixtures/protocol/single_full.json"
-sha256 = "2c93d21403de6a386ed9f727aee81bd5549ebe6976de9a4981471dff6c45a8b4"
-size = 1522
-provenance = "derived"
-generated_by = "qdx decoder, kite-data-feed/qdx (the source files do not record how the expectation was produced)"
-note = "qdx decoder expectation for single_full.bin (oracle, not protocol truth)."
+sha256 = "8ec533e5fe4c331eacf1398abdbc0738dc59186092c6cc24deb09f5f858b6850"
+size = 1523
+provenance = "synthetic-derived"
+tool = "synth-fixture"
+tool_version = "0.1.0"
+parameter_set = "tokens=kept; level=LogNormal(0, 0.08); price=exp(N(0, 0.002)); quantity=exp(N(0, 0.15)); receipt_jitter=N(0, 2000000 ns); day_offset=weekday 60..365 days away plus U[-59, 59] s; gap_band=0.5; bracket_includes_close=true; lot_size=1 for every token (no instrument master)"
+parameter_set_sha256 = "934f1aaa22b47d6c396b13531a4271a33eeea5f71a96306906beb395781f55eb"
+seed = 3347
+original_sha256 = "a54f73d1eee761a17a57a7b300af1fe70dc850bd928d43963fa2a949d55cb912"
+original_size = 456442
+generated_by = "an independent decoder implementation, not manja's (cross-implementation oracle), run by the synthetic-fixture tool on the synthetic bytes"
+note = "Independent-decoder expectation for single_full.bin (oracle, not protocol truth)."
 
 [[file]]
 path = "protocol/single_index_full.bin"
-source_repository = "kite-data-feed (private repository)"
-source_commit = "24f82a28213100094ac3f77c3aa3fdf1c22376f8"
-original_path = "qdx/tests/fixtures/protocol/single_index_full.bin"
-sha256 = "c4037360f657eb298b5da8b686ef99ef8d4148709dfb46c5d507e90fadcfc6ff"
+sha256 = "3ce106be96f9a461525fc02eba5468a68e2ac90a68214e5ea25cb8a7d47b8b27"
 size = 36
-provenance = "derived"
-note = "Its 32-byte packet body occurs verbatim in tick_set_0__2026_01_21.bin; re-framed as a one-packet message."
+provenance = "synthetic-derived"
+tool = "synth-fixture"
+tool_version = "0.1.0"
+parameter_set = "tokens=kept; level=LogNormal(0, 0.08); price=exp(N(0, 0.002)); quantity=exp(N(0, 0.15)); receipt_jitter=N(0, 2000000 ns); day_offset=weekday 60..365 days away plus U[-59, 59] s; gap_band=0.5; bracket_includes_close=true; lot_size=1 for every token (no instrument master)"
+parameter_set_sha256 = "934f1aaa22b47d6c396b13531a4271a33eeea5f71a96306906beb395781f55eb"
+seed = 3347
+original_sha256 = "a54f73d1eee761a17a57a7b300af1fe70dc850bd928d43963fa2a949d55cb912"
+original_size = 456442
+note = "Its 32-byte packet body occurs verbatim in synthetic_corpus.bin; re-framed as a one-packet message."
 
 [[file]]
 path = "protocol/single_index_full.json"
-source_repository = "kite-data-feed (private repository)"
-source_commit = "24f82a28213100094ac3f77c3aa3fdf1c22376f8"
-original_path = "qdx/tests/fixtures/protocol/single_index_full.json"
-sha256 = "17ddc51725a32ff1a2e5af2a9f850ff8c69fde2f3be6321bc0ff36136e82e7d9"
+sha256 = "2283710d20c2e32ace06bb6597e4cb963cdb4d1779a10bd7c80dbea15fd2a1a9"
 size = 406
-provenance = "derived"
-generated_by = "qdx decoder, kite-data-feed/qdx (the source files do not record how the expectation was produced)"
-note = "qdx decoder expectation for single_index_full.bin (oracle, not protocol truth)."
+provenance = "synthetic-derived"
+tool = "synth-fixture"
+tool_version = "0.1.0"
+parameter_set = "tokens=kept; level=LogNormal(0, 0.08); price=exp(N(0, 0.002)); quantity=exp(N(0, 0.15)); receipt_jitter=N(0, 2000000 ns); day_offset=weekday 60..365 days away plus U[-59, 59] s; gap_band=0.5; bracket_includes_close=true; lot_size=1 for every token (no instrument master)"
+parameter_set_sha256 = "934f1aaa22b47d6c396b13531a4271a33eeea5f71a96306906beb395781f55eb"
+seed = 3347
+original_sha256 = "a54f73d1eee761a17a57a7b300af1fe70dc850bd928d43963fa2a949d55cb912"
+original_size = 456442
+generated_by = "an independent decoder implementation, not manja's (cross-implementation oracle), run by the synthetic-fixture tool on the synthetic bytes"
+note = "Independent-decoder expectation for single_index_full.bin (oracle, not protocol truth)."
 
 [[file]]
 path = "protocol/single_index_quote.bin"
-source_repository = "kite-data-feed (private repository)"
-source_commit = "24f82a28213100094ac3f77c3aa3fdf1c22376f8"
-original_path = "qdx/tests/fixtures/protocol/single_index_quote.bin"
 sha256 = "54af70d61969b064bffe83c53edc0e25bf3d80c08ab1db45bb512a88ae06003f"
 size = 32
 provenance = "synthetic"
@@ -138,20 +154,14 @@ note = "Self-described synthetic in single_index_quote.json."
 
 [[file]]
 path = "protocol/single_index_quote.json"
-source_repository = "kite-data-feed (private repository)"
-source_commit = "24f82a28213100094ac3f77c3aa3fdf1c22376f8"
-original_path = "qdx/tests/fixtures/protocol/single_index_quote.json"
 sha256 = "aca6842e522ff4f8084da2e63802dbb3f2d04429832618e61e8625ed8e100538"
 size = 387
-provenance = "derived"
-generated_by = "qdx decoder, kite-data-feed/qdx (the source files do not record how the expectation was produced)"
-note = "qdx decoder expectation for single_index_quote.bin (oracle, not protocol truth)."
+provenance = "synthetic"
+generated_by = "an independent decoder implementation, not manja's (cross-implementation oracle); the source files do not record how the expectation was produced"
+note = "Independent-decoder expectation for single_index_quote.bin (oracle, not protocol truth)."
 
 [[file]]
 path = "protocol/single_ltp.bin"
-source_repository = "kite-data-feed (private repository)"
-source_commit = "24f82a28213100094ac3f77c3aa3fdf1c22376f8"
-original_path = "qdx/tests/fixtures/protocol/single_ltp.bin"
 sha256 = "ef8aea1eac64324cf1ba3d6e6d9378107681f0a85d14fed0e69462417392a821"
 size = 12
 provenance = "synthetic"
@@ -159,20 +169,14 @@ note = "Self-described synthetic in single_ltp.json."
 
 [[file]]
 path = "protocol/single_ltp.json"
-source_repository = "kite-data-feed (private repository)"
-source_commit = "24f82a28213100094ac3f77c3aa3fdf1c22376f8"
-original_path = "qdx/tests/fixtures/protocol/single_ltp.json"
 sha256 = "fc2bb80e0819bad336869c615eb5e9c53cacdc966d2599dd06147d062bc70c73"
 size = 234
-provenance = "derived"
-generated_by = "qdx decoder, kite-data-feed/qdx (the source files do not record how the expectation was produced)"
-note = "qdx decoder expectation for single_ltp.bin (oracle, not protocol truth)."
+provenance = "synthetic"
+generated_by = "an independent decoder implementation, not manja's (cross-implementation oracle); the source files do not record how the expectation was produced"
+note = "Independent-decoder expectation for single_ltp.bin (oracle, not protocol truth)."
 
 [[file]]
 path = "protocol/single_quote.bin"
-source_repository = "kite-data-feed (private repository)"
-source_commit = "24f82a28213100094ac3f77c3aa3fdf1c22376f8"
-original_path = "qdx/tests/fixtures/protocol/single_quote.bin"
 sha256 = "8d09c24feef86a8b9a8203d372ebf588538bb258d02752ae27a9e0f75787fbba"
 size = 48
 provenance = "synthetic"
@@ -180,20 +184,14 @@ note = "Self-described synthetic in single_quote.json."
 
 [[file]]
 path = "protocol/single_quote.json"
-source_repository = "kite-data-feed (private repository)"
-source_commit = "24f82a28213100094ac3f77c3aa3fdf1c22376f8"
-original_path = "qdx/tests/fixtures/protocol/single_quote.json"
 sha256 = "9d2dbe960b7c84e77f4a89d99d1cda2c6d948df0405e623ac3132634e7132224"
 size = 528
-provenance = "derived"
-generated_by = "qdx decoder, kite-data-feed/qdx (the source files do not record how the expectation was produced)"
-note = "qdx decoder expectation for single_quote.bin (oracle, not protocol truth)."
+provenance = "synthetic"
+generated_by = "an independent decoder implementation, not manja's (cross-implementation oracle); the source files do not record how the expectation was produced"
+note = "Independent-decoder expectation for single_quote.bin (oracle, not protocol truth)."
 
 [[file]]
 path = "protocol/trailing_bytes.bin"
-source_repository = "kite-data-feed (private repository)"
-source_commit = "24f82a28213100094ac3f77c3aa3fdf1c22376f8"
-original_path = "qdx/tests/fixtures/protocol/trailing_bytes.bin"
 sha256 = "26ddbc799bb8288db309a4647cf0ddeb1c89c921407e82af671026e3c43640b2"
 size = 14
 provenance = "synthetic"
@@ -201,20 +199,14 @@ note = "Hand-constructed negative: one complete 8-byte packet plus 2 trailing by
 
 [[file]]
 path = "protocol/trailing_bytes.json"
-source_repository = "kite-data-feed (private repository)"
-source_commit = "24f82a28213100094ac3f77c3aa3fdf1c22376f8"
-original_path = "qdx/tests/fixtures/protocol/trailing_bytes.json"
 sha256 = "c783047d2692d2106d4b65c33b23a13b7f46ed0badcbc66d59afaa632ff2230c"
 size = 145
-provenance = "derived"
-generated_by = "qdx decoder, kite-data-feed/qdx (the source files do not record how the expectation was produced)"
-note = "qdx decoder expectation for trailing_bytes.bin (oracle, not protocol truth)."
+provenance = "synthetic"
+generated_by = "an independent decoder implementation, not manja's (cross-implementation oracle); the source files do not record how the expectation was produced"
+note = "Independent-decoder expectation for trailing_bytes.bin (oracle, not protocol truth)."
 
 [[file]]
 path = "protocol/truncated.bin"
-source_repository = "kite-data-feed (private repository)"
-source_commit = "24f82a28213100094ac3f77c3aa3fdf1c22376f8"
-original_path = "qdx/tests/fixtures/protocol/truncated.bin"
 sha256 = "597156454ab375f06aaa5d94abb57802d688055fab49f09b9ceb7334ce251e7e"
 size = 6
 provenance = "synthetic"
@@ -222,20 +214,14 @@ note = "Hand-constructed negative: one declared 8-byte packet, 2 body bytes pres
 
 [[file]]
 path = "protocol/truncated.json"
-source_repository = "kite-data-feed (private repository)"
-source_commit = "24f82a28213100094ac3f77c3aa3fdf1c22376f8"
-original_path = "qdx/tests/fixtures/protocol/truncated.json"
 sha256 = "73fb5b3d2a446b7276caf6bdeb8767dd5b91ae34079c1ee5621a9c60809c0110"
 size = 100
-provenance = "derived"
-generated_by = "qdx decoder, kite-data-feed/qdx (the source files do not record how the expectation was produced)"
-note = "qdx decoder expectation for truncated.bin (oracle, not protocol truth)."
+provenance = "synthetic"
+generated_by = "an independent decoder implementation, not manja's (cross-implementation oracle); the source files do not record how the expectation was produced"
+note = "Independent-decoder expectation for truncated.bin (oracle, not protocol truth)."
 
 [[file]]
 path = "protocol/unknown_size.bin"
-source_repository = "kite-data-feed (private repository)"
-source_commit = "24f82a28213100094ac3f77c3aa3fdf1c22376f8"
-original_path = "qdx/tests/fixtures/protocol/unknown_size.bin"
 sha256 = "0b6e7252e52e079ae51ef4c3e11cf48277e4e0c0ae68f3b9a8fcbff64b1ba11c"
 size = 20
 provenance = "synthetic"
@@ -243,21 +229,22 @@ note = "Hand-constructed negative: one packet declaring an undocumented 16-byte 
 
 [[file]]
 path = "protocol/unknown_size.json"
-source_repository = "kite-data-feed (private repository)"
-source_commit = "24f82a28213100094ac3f77c3aa3fdf1c22376f8"
-original_path = "qdx/tests/fixtures/protocol/unknown_size.json"
 sha256 = "b9ba5f3df27648a1bd5d4d6a8f310c7627413734b982f39591a8187d4aadb476"
 size = 129
-provenance = "derived"
-generated_by = "qdx decoder, kite-data-feed/qdx (the source files do not record how the expectation was produced)"
-note = "qdx decoder expectation for unknown_size.bin (oracle, not protocol truth)."
+provenance = "synthetic"
+generated_by = "an independent decoder implementation, not manja's (cross-implementation oracle); the source files do not record how the expectation was produced"
+note = "Independent-decoder expectation for unknown_size.bin (oracle, not protocol truth)."
 
 [[file]]
-path = "tick_set_0__2026_01_21.bin"
-source_repository = "kite-data-feed (private repository)"
-source_commit = "24f82a28213100094ac3f77c3aa3fdf1c22376f8"
-original_path = "qdx/tests/fixtures/tick_set_0__2026_01_21.bin"
-sha256 = "a54f73d1eee761a17a57a7b300af1fe70dc850bd928d43963fa2a949d55cb912"
+path = "synthetic_corpus.bin"
+sha256 = "0d2b61bd28c769dc9db9968e0e727399c032655555dcd15914e82d13410828da"
 size = 456442
-provenance = "captured"
-note = "Real capture: 19 records of Kite binary messages (184-byte full and 32-byte index-full packets) in the test-only container described above."
+provenance = "synthetic-derived"
+tool = "synth-fixture"
+tool_version = "0.1.0"
+parameter_set = "tokens=kept; level=LogNormal(0, 0.08); price=exp(N(0, 0.002)); quantity=exp(N(0, 0.15)); receipt_jitter=N(0, 2000000 ns); day_offset=weekday 60..365 days away plus U[-59, 59] s; gap_band=0.5; bracket_includes_close=true; lot_size=1 for every token (no instrument master)"
+parameter_set_sha256 = "934f1aaa22b47d6c396b13531a4271a33eeea5f71a96306906beb395781f55eb"
+seed = 3347
+original_sha256 = "a54f73d1eee761a17a57a7b300af1fe70dc850bd928d43963fa2a949d55cb912"
+original_size = 456442
+note = "Synthetic-derived corpus: 19 records, 2692 packets (184-byte full and 32-byte index-full) in the test-only container described above; a constraint-preserving perturbation of a private capture with the same framing, counts, lengths, families, instrument tokens, zero masks and signs, and every other non-zero value different from the original."

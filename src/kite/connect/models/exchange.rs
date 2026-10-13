@@ -39,6 +39,8 @@ pub enum Exchange {
     BFO,
     /// Bombay Currency Derivatives
     BCD,
+    /// NSE commodity derivatives
+    NCO,
     /// Multi Commodity Exchange
     MCX,
     /// Multi Commodity Exchange Stock Exchange
@@ -57,6 +59,7 @@ impl WireEnum for Exchange {
             "BSE" => Self::BSE,
             "BFO" => Self::BFO,
             "BCD" => Self::BCD,
+            "NCO" => Self::NCO,
             "MCX" => Self::MCX,
             "MCXSX" => Self::MCXSX,
             "INDICES" => Self::INDICES,
@@ -73,6 +76,7 @@ impl WireEnum for Exchange {
             Self::BSE => "BSE",
             Self::BFO => "BFO",
             Self::BCD => "BCD",
+            Self::NCO => "NCO",
             Self::MCX => "MCX",
             Self::MCXSX => "MCXSX",
             Self::INDICES => "INDICES",

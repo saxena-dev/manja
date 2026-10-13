@@ -99,13 +99,7 @@ async fn order_margins_are_arrays_in_and_out() {
     )])
     .await;
     let c = client_with(&h.base_url(), fast());
-    let margins = c
-        .margins()
-        .orders(&[infy_market()])
-        .await
-        .unwrap()
-        .data
-        .unwrap();
+    let margins = c.margins().orders(&[infy_market()]).await.unwrap().data;
     let r = only(&h);
     assert_eq!(
         (r.method.as_str(), r.target.as_str()),
@@ -142,13 +136,7 @@ async fn basket_margins_preserve_initial_final_and_per_order_entries() {
         nifty("NIFTY23JUL20600CE", TransactionType::SELL),
         nifty("NIFTY23JUL20700CE", TransactionType::BUY),
     ];
-    let basket = c
-        .margins()
-        .basket(&orders, true)
-        .await
-        .unwrap()
-        .data
-        .unwrap();
+    let basket = c.margins().basket(&orders, true).await.unwrap().data;
     let r = only(&h);
     assert_eq!(
         (r.method.as_str(), r.target.as_str()),
@@ -182,13 +170,7 @@ async fn virtual_contract_note_is_order_wise() {
     )])
     .await;
     let c = client_with(&h.base_url(), fast());
-    let charges = c
-        .charges()
-        .orders(&[charges_request()])
-        .await
-        .unwrap()
-        .data
-        .unwrap();
+    let charges = c.charges().orders(&[charges_request()]).await.unwrap().data;
     let r = only(&h);
     assert_eq!(
         (r.method.as_str(), r.target.as_str()),

@@ -22,7 +22,7 @@ use tracing::Subscriber;
 use tracing::span::{Attributes, Id};
 use tracing_subscriber::layer::{Context, Layer, SubscriberExt};
 
-use support::capture::{read_capture, read_real_capture, read_ticker_fixture};
+use support::capture::{read_capture, read_synthetic_corpus, read_ticker_fixture};
 
 const FEED: &str = "feedSENTINEL02";
 
@@ -125,7 +125,7 @@ fn a_retained_text_diagnostic_holds_no_value_from_the_message() {
 
 #[test]
 fn live_and_captured_copies_decode_identically_on_every_capture_record() {
-    let capture = read_real_capture();
+    let capture = read_synthetic_corpus();
     let mut s = sequencer();
     let live = Adapter::new(SourceMode::Live, &Observability::disabled());
     let (rec, obs) = {

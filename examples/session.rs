@@ -24,6 +24,7 @@ mod support;
 use manja::kite::connect::client::HTTPClient;
 use manja::kite::connect::config::Config;
 use manja::kite::connect::credentials::{AccessToken, ApiKey, ApiSecret, RequestToken};
+use manja::kite::protocol::session_expires_at;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -38,8 +39,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 .session(ApiKey::new(key)?)
                 .exchange(&RequestToken::new(token)?, &ApiSecret::new(secret.trim())?)
                 .await?
-                .data
-                .expect("data");
+                .data;
             // The tokens are secret-wrapped; exporting them is explicit.
             let _credentials = session.credentials()?;
             println!("exchanged a session for {}", session.user_id);
@@ -77,12 +77,19 @@ async fn local() -> Result<(), Box<dyn std::error::Error>> {
             &ApiSecret::new("api_secret")?,
         )
         .await?
-        .data
-        .expect("data");
+        .data;
     println!(
         "exchanged: user {} ({:?})",
         session.user_id, session.user_type
     );
+    // A token expires at the next 06:00 IST after it was issued; the SDK
+    // publishes the rule and never acts on it.
+    if let Some(login_time) = session.login_time {
+        println!(
+            "token issued {login_time}, expires {}",
+            session_expires_at(login_time)
+        );
+    }
     let credentials = session.credentials()?;
     // Invalidation takes the token to retire and no secret.
     let done = client

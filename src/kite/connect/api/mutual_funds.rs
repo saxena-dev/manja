@@ -14,7 +14,7 @@
 //!
 use crate::kite::connect::{
     client::HTTPClient,
-    models::{KiteApiResponse, MfHolding, MfInstrument, MfOrder, MfSip},
+    models::{MfHolding, MfInstrument, MfOrder, MfSip, Response},
 };
 use crate::kite::error::{HttpError, HttpErrorKind, Result, TransportStage};
 use crate::kite::obs::schema::{Endpoint, Method};
@@ -34,8 +34,8 @@ use crate::kite::protocol::MfOrderId;
 /// # async fn run() -> Result<(), Box<dyn std::error::Error>> {
 /// let client = HTTPClient::new(Config::default())?
 ///     .with_credentials(Credentials::new("api_key", "access_token")?);
-/// let holdings = client.mutual_funds().list_holdings().await?.data.unwrap_or_default();
-/// let sips = client.mutual_funds().list_sips().await?.data.unwrap_or_default();
+/// let holdings = client.mutual_funds().list_holdings().await?.data;
+/// let sips = client.mutual_funds().list_sips().await?.data;
 /// println!("{} funds held, {} SIPs", holdings.len(), sips.len());
 /// # Ok(()) }
 /// ```
@@ -52,7 +52,7 @@ impl<'c> MutualFunds<'c> {
 
     /// Orders placed in the last 7 days, open and executed: `GET /mf/orders`
     /// (`kite:mutual-funds.md:17-19`).
-    pub async fn list_orders(&self) -> Result<KiteApiResponse<Vec<MfOrder>>> {
+    pub async fn list_orders(&self) -> Result<Response<Vec<MfOrder>>> {
         self.client.get("/mf/orders").await
     }
 
@@ -61,18 +61,18 @@ impl<'c> MutualFunds<'c> {
     ///
     /// The ID is an [`MfOrderId`], valid by construction, so it cannot change
     /// the request path; an equity `OrderId` is a different type.
-    pub async fn get_order(&self, order_id: &MfOrderId) -> Result<KiteApiResponse<MfOrder>> {
+    pub async fn get_order(&self, order_id: &MfOrderId) -> Result<Response<MfOrder>> {
         self.client.get(&format!("/mf/orders/{order_id}")).await
     }
 
     /// Active and paused SIPs: `GET /mf/sips` (`kite:mutual-funds.md:209-211`).
-    pub async fn list_sips(&self) -> Result<KiteApiResponse<Vec<MfSip>>> {
+    pub async fn list_sips(&self) -> Result<Response<Vec<MfSip>>> {
         self.client.get("/mf/sips").await
     }
 
     /// Allotted units held in the DEMAT account: `GET /mf/holdings`
     /// (`kite:mutual-funds.md:362-364`).
-    pub async fn list_holdings(&self) -> Result<KiteApiResponse<Vec<MfHolding>>> {
+    pub async fn list_holdings(&self) -> Result<Response<Vec<MfHolding>>> {
         self.client.get("/mf/holdings").await
     }
 

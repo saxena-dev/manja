@@ -34,13 +34,13 @@ pub struct UserProfile {
     /// Full URL to the user's avatar (PNG image) if there's one
     pub avatar_url: Option<String>,
     /// Additional metadata
-    pub meta: Meta,
+    pub meta: ProfileMeta,
 }
 
 /// Represents additional metadata associated with the user's profile.
 ///
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
-pub struct Meta {
+pub struct ProfileMeta {
     /// Demat consent: empty, consent or physical
     pub demat_consent: String,
 }

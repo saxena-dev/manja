@@ -236,8 +236,10 @@ pub enum DecodeDiagnosticKind {
     InvalidText,
     /// A text message had a type this build does not know.
     UnknownTextType,
-    /// A packet field held a value its documented type cannot have, such
-    /// as a negative quantity.
+    /// A packet field held a value its type cannot have. Since
+    /// `DECODER_VERSION` 2 no binary packet field produces it, because
+    /// count fields are read unsigned; it stays in the versioned diagnostic
+    /// schema (`docs/contract.md` §4.5).
     InvalidField,
 }
 

@@ -310,6 +310,33 @@ struct SourceKeyRepr {
     ingress_sequence: u64,
 }
 
+#[derive(Serialize, Deserialize)]
+struct SourceIdentityRepr {
+    producer_id: String,
+    run_id: RunId,
+    feed_id: String,
+}
+
+/// The three identifiers, as a [`SourceKey`] serializes them. Deserializing
+/// checks the identifiers as [`SourceIdentity::new`] does.
+impl Serialize for SourceIdentity {
+    fn serialize<S: Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
+        SourceIdentityRepr {
+            producer_id: self.producer_id().to_string(),
+            run_id: self.run_id(),
+            feed_id: self.feed_id().to_string(),
+        }
+        .serialize(s)
+    }
+}
+
+impl<'de> Deserialize<'de> for SourceIdentity {
+    fn deserialize<D: Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        let r = SourceIdentityRepr::deserialize(d)?;
+        Self::new(r.producer_id, r.run_id, r.feed_id).map_err(serde::de::Error::custom)
+    }
+}
+
 impl Serialize for SourceKey {
     fn serialize<S: Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
         SourceKeyRepr {
@@ -1046,5 +1073,25 @@ mod tests {
         let json = serde_json::to_value(LifecycleKind::Gap(gap)).unwrap();
         assert!(json.get("missing").is_none());
         assert_eq!(json["kind"], "gap");
+    }
+}
+
+#[cfg(test)]
+mod identity_serde_tests {
+    use super::*;
+
+    #[test]
+    fn a_source_identity_round_trips_and_is_checked_on_the_way_in() {
+        let id = SourceIdentity::new("engine", RunId::from_u128(42), "http").unwrap();
+        let json = serde_json::to_string(&id).unwrap();
+        assert_eq!(
+            json,
+            r#"{"producer_id":"engine","run_id":42,"feed_id":"http"}"#
+        );
+        let back: SourceIdentity = serde_json::from_str(&json).unwrap();
+        assert_eq!(back, id);
+        // An identifier that `new` refuses is refused on deserialization too.
+        let bad = r#"{"producer_id":"","run_id":42,"feed_id":"http"}"#;
+        assert!(serde_json::from_str::<SourceIdentity>(bad).is_err());
     }
 }

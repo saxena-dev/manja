@@ -83,6 +83,50 @@ fn format_broker_datetime(t: &DateTime<FixedOffset>) -> String {
     t.with_timezone(&ist()).format(DATETIME_FORMAT).to_string()
 }
 
+/// The time of day, in IST, at which every access token expires: 6 AM
+/// (`kite:user.md:115`). An access token stays valid until it is invalidated
+/// or until the next 6 AM IST after it was issued, which Kite words as "6 AM
+/// on the next day"; see [`session_expires_at`].
+pub const SESSION_EXPIRY_IST: NaiveTime = match NaiveTime::from_hms_opt(6, 0, 0) {
+    Some(t) => t,
+    None => unreachable!(),
+};
+
+/// The instant at which a token issued at `issued_at` expires: the next
+/// [`SESSION_EXPIRY_IST`] (06:00 IST) strictly after `issued_at`, at offset
+/// +05:30 (`kite:user.md:115`).
+///
+/// A pure function of its argument: it reads no clock, starts no timer and
+/// refreshes nothing. What to do as the instant approaches is the caller's.
+/// The input may carry any offset; it is converted to IST first, so an
+/// instant given in UTC yields the same result as the same instant in IST.
+///
+/// ```
+/// use chrono::{DateTime, FixedOffset};
+/// use manja::kite::protocol::session_expires_at;
+///
+/// // 01:00 UTC is 06:30 IST, past that day's 6 AM: the token lasts until
+/// // 6 AM the next day.
+/// let issued: DateTime<FixedOffset> = "2026-10-12T01:00:00Z".parse().unwrap();
+/// assert_eq!(
+///     session_expires_at(issued).to_rfc3339(),
+///     "2026-10-13T06:00:00+05:30"
+/// );
+/// ```
+pub fn session_expires_at(issued_at: DateTime<FixedOffset>) -> DateTime<FixedOffset> {
+    let local = issued_at.with_timezone(&ist());
+    let same_day = local.date_naive().and_time(SESSION_EXPIRY_IST);
+    let expiry = if local.naive_local() < same_day {
+        same_day
+    } else {
+        same_day + chrono::Duration::days(1)
+    };
+    ist()
+        .from_local_datetime(&expiry)
+        .single()
+        .expect("a fixed offset maps every local time to one instant")
+}
+
 /// A timestamp field that is either a full broker datetime or a bare time of
 /// day, as both occur in documented responses.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -282,5 +326,79 @@ mod tests {
             "2015-12-31"
         );
         assert!(parse_broker_date("2015-12-31 00:00:00").is_err());
+    }
+}
+
+#[cfg(test)]
+mod session_expiry_tests {
+    use super::*;
+
+    fn at(s: &str) -> DateTime<FixedOffset> {
+        s.parse().unwrap()
+    }
+
+    #[test]
+    fn the_constant_is_six_in_the_morning() {
+        assert_eq!(
+            SESSION_EXPIRY_IST,
+            NaiveTime::from_hms_opt(6, 0, 0).unwrap()
+        );
+    }
+
+    #[test]
+    fn one_second_before_six_expires_the_same_day() {
+        let expiry = session_expires_at(at("2026-10-12T05:59:59+05:30"));
+        assert_eq!(expiry.to_rfc3339(), "2026-10-12T06:00:00+05:30");
+    }
+
+    #[test]
+    fn exactly_six_expires_the_next_day() {
+        let expiry = session_expires_at(at("2026-10-12T06:00:00+05:30"));
+        assert_eq!(expiry.to_rfc3339(), "2026-10-13T06:00:00+05:30");
+    }
+
+    #[test]
+    fn a_utc_input_is_read_as_the_same_instant() {
+        // 01:00 UTC is 06:30 IST.
+        let expiry = session_expires_at(at("2026-10-12T01:00:00Z"));
+        assert_eq!(expiry.to_rfc3339(), "2026-10-13T06:00:00+05:30");
+        // 00:29:59 UTC is 05:59:59 IST: the same day.
+        let expiry = session_expires_at(at("2026-10-12T00:29:59+00:00"));
+        assert_eq!(expiry.to_rfc3339(), "2026-10-12T06:00:00+05:30");
+        // The same instant in another offset gives the same answer.
+        assert_eq!(
+            session_expires_at(at("2026-10-11T20:00:00-05:00")),
+            session_expires_at(at("2026-10-12T06:30:00+05:30"))
+        );
+    }
+
+    #[test]
+    fn the_result_is_ist_and_strictly_after_the_input() {
+        for s in [
+            "2026-10-12T05:59:59+05:30",
+            "2026-10-12T05:59:59.999+05:30",
+            "2026-10-12T06:00:00+05:30",
+            "2026-10-12T06:00:00.001+05:30",
+            "2026-10-12T01:00:00Z",
+            "2026-12-31T23:30:00+00:00",
+            "2028-02-29T18:00:00+05:30",
+        ] {
+            let issued = at(s);
+            let expiry = session_expires_at(issued);
+            assert_eq!(expiry.offset().local_minus_utc(), IST_OFFSET_SECONDS, "{s}");
+            assert!(expiry > issued, "{s}");
+            assert!(expiry - issued <= chrono::Duration::days(1), "{s}");
+            assert_eq!(expiry.time(), SESSION_EXPIRY_IST, "{s}");
+        }
+        // A sub-second before six is still the same day; a sub-second after
+        // is the next day.
+        assert_eq!(
+            session_expires_at(at("2026-10-12T05:59:59.999+05:30")).to_rfc3339(),
+            "2026-10-12T06:00:00+05:30"
+        );
+        assert_eq!(
+            session_expires_at(at("2026-10-12T06:00:00.001+05:30")).to_rfc3339(),
+            "2026-10-13T06:00:00+05:30"
+        );
     }
 }

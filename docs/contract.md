@@ -9,8 +9,8 @@ but never renumbers or reuses one.
 Citations of the form `kite:<page>.md:<lines>` point into the Kite Connect v3
 documentation pages listed, with access time and SHA-256, in
 [`kite-sources.toml`](kite-sources.toml). How each part is tested is in
-[`verification.md`](verification.md), and changes from 0.1 are in
-[`migration.md`](migration.md).
+[`verification.md`](verification.md), and the changes from 0.2 to 0.3 (and, before that,
+from 0.1 to 0.2) are in [`migration.md`](migration.md).
 
 ---
 
@@ -20,7 +20,7 @@ documentation pages listed, with access time and SHA-256, in
 
 | Feature | Modules | Adds dependencies |
 |---|---|---|
-| `http` | `kite::connect::{api, client, config, admission, scheduler}` | `reqwest`, `tokio` (timers and synchronization), `csv`, `hex`, `sha2` |
+| `http` | `kite::connect::{api, client, config, admission, scheduler, wire, dispatch}` | `reqwest`, `tokio` (timers, synchronization and the runtime handle a dispatched mutation's attempt is spawned on, §2.17), `csv`, `hex`, `sha2` |
 | `ticker` | `kite::ticker`, including `kite::ticker::actor` | `tokio` (also TCP and runtime handle), `tokio-tungstenite`, `futures-util` |
 | `decoder` | `kite::decoder` | none |
 
@@ -60,16 +60,46 @@ alone, `ticker` with `decoder`, `http` with `ticker`, all three, and the default
 Not supported: alerts, placing or changing mutual fund orders and SIPs, the holdings
 summary, the full profile, the trigger range, and receiving postbacks over HTTP.
 
-Every JSON endpoint is decoded into its documented response type, and success requires
+Every JSON endpoint is decoded into its documented response type and returned as a
+`Response<T>` with the facts of the call (§2.18), and success requires
 a 2xx status plus a `status: "success"` envelope (`kite:response-structure.md:15-28`). The
 mutual fund SIP list is documented without a `status` (`kite:mutual-funds.md:219-221`),
 so for that endpoint alone an absent `status` is accepted; any `status` other than
 `success` is still an error.
 Order IDs used in request paths, and those in responses, are checked types, valid by
 construction (§2.16).
+Every operation takes a `Priority`, `Standard` or `Control`, which chooses its admission
+lane (§3.6). The caller marks it per call by making the call through
+`HTTPClient::with_priority(priority)`, a client sharing the original's transport,
+admission scope and credentials. Without a mark, `DELETE /orders/{variety}/{order_id}`
+and `DELETE /gtt/triggers/{id}` are `Control` and every other operation is `Standard`;
+a mark replaces the default in either direction. The SDK never decides which traffic
+is control: it honours the mark and keeps the reserve (`B-HTTP-15`).
 Order placement, modification and conversion, and GTT placement and modification, take
 dedicated request types and are form-encoded (`kite:response-structure.md:2`); margin and charge calculations are JSON
-(`kite:margins.md:13`). Quote requests above the documented key limits (500 for
+(`kite:margins.md:13`).
+A mutation sends exactly the bytes its `wire()` returns. Every mutation has a wire form,
+`kite::connect::wire::WireForm`: the HTTP method, the endpoint template, the request
+path with its segments filled in, the content type and the exact form-encoded body.
+`PlaceOrderRequest::wire()`, `ModifyOrderRequest::wire(variety, &order_id)`,
+`PositionConversionRequest::wire()`, `HoldingsAuthorisationRequest::wire()`,
+`GttRequest::wire()` (placement) and `GttRequest::wire_modification(trigger_id)` validate
+the request first and return the form or the `Validation` error the call would return;
+the mutations without a request type come from `WireForm::cancel_order(variety,
+&order_id)`, `WireForm::delete_trigger(trigger_id)`, `WireForm::session_exchange(...)` and
+`WireForm::session_invalidation(...)`. The call builds the same form and copies its path,
+query, content type and body into the request, so `sha256(body as received by Kite) ==
+wire.sha256()` for every mutation; a mutation with no body (cancellation, GTT deletion,
+session invalidation, an entire-holdings authorisation) sends no `Content-Type` and
+hashes the empty body. `Display` renders the body as Kite receives it, for example
+`tradingsymbol=INFY&exchange=NSE&...`; `sha256()` is the raw digest and `sha256_hex()`
+its hex. A `WireForm` holds no credential type and no header: the `Authorization` header
+is attached at send time and is never part of it, and no accessor returns the body bytes;
+they leave the form only through `Display`, the hash and the send. The two session forms
+carry the documented `request_token` and `checksum` fields or `access_token` query
+(§2.2): the exchange form's `Display` and `Debug` print `<redacted>` for `request_token`
+and `checksum`; the invalidation form has no body, so its `Display` is empty, and its
+`Debug` prints the query with `access_token` as `<redacted>`. Quote requests above the documented key limits (500 for
 `/quote`, 1000 for OHLC and LTP, `kite:market-quotes.md:272-278`) are rejected before
 sending, never truncated.
 
@@ -79,10 +109,11 @@ sending, never truncated.
 
 | Operation | Contract |
 |---|---|
-| `exchange(&RequestToken, &ApiSecret)` | `POST /session/token` with `api_key`, `request_token` and `checksum` = SHA-256 hex of `api_key + request_token + api_secret` (`kite:user.md:97-99`). The secret is borrowed for the call and never sent, stored or logged. Returns a `UserSession` whose tokens are secret-wrapped |
-| `invalidate(&AccessToken)` | `DELETE /session/token` for the session's API key (`kite:user.md:295-310`). Takes no API secret |
+| `exchange(&RequestToken, &ApiSecret)` | `POST /session/token` with `api_key`, `request_token` and `checksum` = SHA-256 hex of `api_key + request_token + api_secret` (`kite:user.md:97-99`). The secret is borrowed for the call and never sent, stored or logged. Returns a `Response<UserSession>` whose tokens are secret-wrapped. The request is `WireForm::session_exchange(&api_key, &request_token, &api_secret)`, whose `Display` and `Debug` redact the token and the checksum (§2.1) |
+| `invalidate(&AccessToken)` | `DELETE /session/token` for the session's API key (`kite:user.md:295-310`). Takes no API secret and returns the broker's `Response<bool>`. The request is `WireForm::session_invalidation(&api_key, &access_token)`: no body (so an empty `Display`), the two query parameters, the access token redacted in `Debug` |
 | Attempts | Exactly one transport attempt within the session deadline (`B-HTTP-11`). No retry after a 429, a lost response, a timeout or cancellation |
 | Side effects | None beyond the request: nothing is persisted, and no client has a token installed or cleared |
+| Expiry | An access token stays valid until it is invalidated or until the next 6 AM IST after it was issued, which Kite words as "6 AM on the next day" (`kite:user.md:115`): a token issued at 03:00 IST expires at 06:00 that same morning, one issued at 06:00:00 IST at 06:00 the next day. The rule is published, with no feature gate, as `kite::protocol::SESSION_EXPIRY_IST` (06:00:00, a `NaiveTime`) and the pure function `session_expires_at(issued_at)`, which returns the next 06:00 IST strictly after `issued_at` at offset +05:30, whatever offset the input carries. Neither reads a clock, starts a timer or refreshes anything; nothing in the SDK acts on the time |
 
 ### 2.3 Credentials
 
@@ -104,14 +135,21 @@ like every observability label domain (§4.1), is `#[non_exhaustive]`; the stabl
 |---|---|
 | `Validation` | the request failed local validation; nothing was sent |
 | `Configuration` | the client or request could not be built; nothing was sent |
-| `Admission` | admission capacity was unavailable before transport started |
+| `Admission` | admission capacity was unavailable before transport started. A mutation or session operation never waits for it: with a window full it is refused at once and the error carries `retry_after()`, the time until the lane's next slot; with the daily ceiling spent it carries `resets_at()`, the next 00:00 IST; the 25-per-order modification limit (`kite:exceptions.md:58`) has no recovery that day. `admission_cause()` names the cause (`window_full`, `daily_ceiling`, `modification_ceiling`, `no_standard_capacity`, `waiters_full`, `wait_expired`), for a read's exhausted wait too, including the `Deadline` error a read gets when the operation deadline expires during its admission wait. The SDK never waits a hint out; the caller decides. A mutation dispatched after `close` began, or when every `B-HTTP-10` in-flight slot is taken, is refused with this kind too, before admission, with no cause and no hint: nothing was sent, and the detail names the reason (§2.17) |
 | `Deadline` | the operation deadline expired |
 | `Transport` | the transport failed or timed out |
 | `HttpStatus` | a non-success status without a broker error envelope |
 | `Broker` | the broker returned an error envelope (`kite:exceptions.md:18-28`) |
 | `AuthRejected` | the broker rejected the credentials: `TokenException` or HTTP 403 (`kite:exceptions.md:20,35`) |
 | `Decode` | a response was received but was oversized, malformed or lacked the success envelope |
-| `Cancelled` | an operation whose future was dropped; recorded in `HTTPClient::diagnostics`, never returned by a call |
+| `Cancelled` | a read or calculation whose future was dropped; recorded in `HTTPClient::diagnostics`, never returned by a call. Not produced for a mutation or session operation by anything the caller does with the future: their attempt runs to completion (§2.17). The one exception is the runtime itself shutting down with the attempt in flight: the attempt task is dropped with it, a `Cancelled` entry with the attempt's stage is recorded, and the `Dispatched` future, if awaited, resolves with a `Transport` error at stage `Started` saying the attempt task ended without delivering an outcome |
+
+Every error an operation produces also carries the client's `source()` identity and the
+operation's `operation_id()` (§2.18), whatever its kind and stage. `sent_at()` is `Some`
+once the attempt was dispatched, that is for stage `Started` or later, and `received_at()`
+is `Some` only once a response head arrived, stage `ResponseReceived`; an error with stage
+`NotStarted` has neither stamp. The stamps are the same `IngressStamp`s a response
+carries, from the same clocks.
 
 `HttpError` also reports the method, the endpoint template (never a URL with
 credentials), the HTTP status and broker `error_type` when known, the attempt number,
@@ -169,7 +207,7 @@ raw stream and opens no second socket.
 | Completion | A command completes with `Ok(Revision)` once the owner has validated it and updated the desired state. That is acceptance, not broker acknowledgement. Lifecycle events then report the revision as `CommandsSent`, `Superseded` or `SendFailed` |
 | Wire order | Subscriptions are sent before their mode changes, because a `mode` request applies to tokens already subscribed (`kite:websocket.md:30-47`). Tokens are sent in ascending order, and modes in the fixed order LTP, quote, full |
 | Command cancellation | Dropping a command future after the owner accepted it does not withdraw the command |
-| HTTP cancellation | Dropping an HTTP future before transport starts cancels local work; dropping it later does not cancel anything at the broker |
+| HTTP cancellation | Dropping a read or calculation future before transport starts cancels local work; dropping it later does not cancel anything at the broker. A mutation or session operation cannot be cancelled by dropping its future: the call dispatched the attempt to a task the client owns, which finishes and reports whatever the caller does (§2.17) |
 | End of stream | `None` only after a successful `shutdown()`. Any other end yields one `Err` first, then `None`. Reconnects are lifecycle events, never an end of stream |
 | Termination | Dropping the primary receiver or the last `TickerHandle` stops the owner. `shutdown()` closes intake and the socket and delivers pending events within `B-TK-12` |
 
@@ -225,9 +263,10 @@ clock, network or global state, and is bounded by §3.4.
   (`kite:websocket.md:131-163`) contradicts that paragraph and the 184-byte total, and
   is not followed. A packet of any other length is reported as an unknown length,
   never guessed.
-- **Values**: prices stay the raw `int32` on the wire. `scaled` turns one into a
-  `ScaledPrice` with a caller-supplied `Segment` (§5). Negative quantities and order counts
-  are refused. Timestamps stay raw Unix seconds.
+- **Values**: prices stay the raw signed `int32` on the wire. `scaled` turns one into a
+  `ScaledPrice` with a caller-supplied `Segment`, and every segment has a divisor (§5).
+  Quantities, volume, open interest and order counts are read unsigned and never refused
+  (§5). Timestamps stay raw Unix seconds, read unsigned.
 - **Text** (`kite:websocket.md:165-184`): `order`, `error` and `message` messages
   become typed variants; any other `type` is preserved as `Unknown`. A `TextError`'s
   detail follows the rule for HTTP error details (§2.4): what failed and where, never a
@@ -294,13 +333,8 @@ are in `GttTrigger::orders`, where each fired order carries a `GttOrderResult`. 
 types and statuses (`kite:gtt.md:359-371`) are `Inbound` values, so an undocumented one
 is preserved. Every GTT endpoint is in the `Standard` quota class (§3.6).
 
-Each mutation has a `*_with_permit` form, `place_trigger_with_permit`,
-`modify_trigger_with_permit` and `delete_trigger_with_permit`, that dispatches with a
-`DispatchPermit` from `HTTPClient::admit(PermitTarget::PlaceGtt)`, `ModifyGtt` or
-`DeleteGtt`. The request is still validated first. A GTT
-permit names the operation but not the trigger, because no per-trigger limit is
-documented; an expired permit, one for another operation or one from another client's
-admission scope starts no transport (`B-HTTP-12`).
+Each mutation is admitted on its own call, now or refused with a hint (§3.6); no
+per-trigger limit is documented, so GTT mutations share the `Standard` class.
 
 ### 2.13 Historical candles
 
@@ -356,14 +390,14 @@ user completes on the depository's portal by keying in their demat PIN
 The SDK opens no browser, does not watch for the redirect, and does not retry the refused
 order; the application does each.
 
-### 2.16 Order IDs
+### 2.16 Order IDs and tags
 
 An order ID becomes a path segment of the order endpoints, so every one is a checked
 type in `kite::protocol`, and a value that could change the path cannot be constructed.
 
 | Type | Grammar | Used by |
 |---|---|---|
-| `OrderId` | 1 to 64 ASCII letters or digits | `Orders::modify_order`, `cancel_order` (and their `_with_permit` forms), `get_order_history` and `get_order_trades`; `PermitTarget::ModifyOrder`; the `order_id` of `Order`, `Trade`, `OrderReceipt`, `SliceResult::Placed` and `OrderUpdate`, `Order::parent_order_id` and `OrderUpdate::parent_order_id`, and `GttOrderOutcome::order_id` |
+| `OrderId` | 1 to 64 ASCII letters or digits | `Orders::modify_order`, `cancel_order`, `get_order_history` and `get_order_trades`; the `order_id` of `Order`, `Trade`, `OrderReceipt`, `SliceResult::Placed` and `OrderUpdate`, `Order::parent_order_id` and `OrderUpdate::parent_order_id`, and `GttOrderOutcome::order_id` |
 | `MfOrderId` | 1 to 64 ASCII letters, digits or hyphens | `MutualFunds::get_order` and `MfOrder::order_id` |
 
 Both are built with `new`, `TryFrom<&str>`, `TryFrom<String>` or `FromStr`, and deserialize
@@ -403,6 +437,121 @@ holdings and GTT lists, stay strict. The order ID in an
 `OrderChargesRequest` is not an `OrderId`: the documentation allows any string there
 (`kite:margins.md:395`), and it travels in the JSON body, never in a path.
 
+**Tags.** An order placement carries a `Tag` (`kite::connect::models`), required by
+`PlaceOrderRequest::new` and always sent as the `tag` field (`kite:orders.md:103`): 1 to
+20 ASCII letters or digits, valid by construction, built with `Tag::new`, `TryFrom<&str>`,
+`TryFrom<String>` or `FromStr`, each failing with the `tag` `RequestError` naming the
+grammar, which a call reports as a `Validation` error. The tag is a **correlation**
+field, not an idempotency key and not an identity: the broker echoes it on the order it
+registered and enforces no uniqueness, and an order placed from the Kite app can carry any
+text, so `Order::tag` stays the broker's text as received (the official order book carries
+`connect test order1`, which a `Tag` cannot hold). `Orders::list_orders_tagged(&tag)`
+fetches the strict order book (`GET /orders`; Kite has no tag query) and returns every row
+whose tag equals the argument, in broker order, with the response meta: a filter, never
+proof that a particular attempt was placed, since two rows may carry one tag. The SDK
+recommends one tag per **attempt**, not per intent: when an attempt ends with its outcome
+unknown and a later attempt is made, two attempt tags tell the two orders apart, while two
+copies of one intent tag cannot be told from one order seen twice. Modification,
+cancellation, conversion, GTT and session operations carry no tag; the wire has no field
+for one, and their recovery identity is the order or trigger ID.
+
+### 2.17 Dispatch
+
+Every mutation and session operation (the `mutation` and `session` rows of §2.1) is a
+plain function returning `Dispatched<T>` (`kite::connect::dispatch`), a future whose
+output is `Result<Response<T>, HttpError>`. The call itself, before the future is polled,
+validates the request and renders its wire form (§2.1), checks the body bound
+(`B-HTTP-09`), takes an in-flight slot (`B-HTTP-10`), admits the operation now or
+refuses it (§2.4, §3.6) and, once admitted, hands the single attempt to a task the client
+owns on the current Tokio runtime. From that point the attempt runs to completion whatever
+the caller does with the future: dropping it, timing it out or selecting away from it
+abandons nothing, and `HttpErrorKind::Cancelled` is never produced for a mutation by the
+caller's handling of the future. Only the runtime shutting down with the attempt in flight
+drops the attempt task, which is recorded as `Cancelled` with its stage (§2.4). Reads
+and calculations are unchanged: `async fn`, retried within their deadline, cancelled by
+drop (§2.6).
+
+| Item | Contract |
+|---|---|
+| Before polling | `operation_id()`; `refusal()`, the error when the call was refused before transport, else `None`; `wire_sha256()`, the hash of the form that was sent or would have been (`None` only when the request failed validation and has no form); `correlation()`; `is_in_flight()`. `Dispatched` is `Send`, so it can be moved to another task or held in a `select!` |
+| Refusal | A call refused before transport (a `Validation`, `Configuration` or `Admission` error, stage `NotStarted`) spawns nothing, emits no outcome record and resolves at once with the refusal when awaited; `refusal()` exposes the same error before the await. A dispatch made outside a Tokio runtime is a `Configuration` refusal; one made after `close` began is an `Admission` refusal; one that finds every `B-HTTP-10` slot taken is an `Admission` refusal, never a wait |
+| Outcome | The result of an admitted attempt is delivered once to the `Dispatched` future if it is still alive, and always, as an `Outcome` record, to the client's outcome stream when one was registered at build time (`HttpClientBuilder::build_with_outcomes`, capacity `B-HTTP-13`). Without a stream, the outcome of a dropped future goes to the orphaned outcome ring in `HttpDiagnostics` (`B-HTTP-14`) and `orphaned_outcome_count` grows by one, whether the future was dropped before the attempt completed or afterwards with the outcome delivered to it but never polled out; only an outcome the caller took by awaiting the future goes nowhere else |
+| Outcome record | `operation_id`, `correlation`, `method`, `endpoint` (the template), `wire_sha256`, `stage`, `result` (the `result.http_operation` domain, §4.3), `error` (the kind, when the attempt failed), `http_status`, `attempt` (always 1), `receipt` (the `order_id` or `trigger_id` the receipt carried, when the response decoded; otherwise none), `source`, `sent_at` and `received_at` (§2.18). It carries no request or response body, no URL and no header |
+| Stream | `OutcomeStream::recv()` yields `Some(Ok(outcome))` in completion order; `len()` and `is_empty()` read what is buffered. When the consumer falls behind by `B-HTTP-13` outcomes, or drops the stream, the client keeps every attempt running, counts each outcome it could not deliver in `HttpDiagnostics::outcome_stream_dropped` and keeps it in the ring (`B-HTTP-14`); once the buffered outcomes are drained, `recv()` yields one `Some(Err(OutcomeStreamError::Overflow { dropped }))` and then `None`. Nothing is dropped silently |
+| Correlation | `HTTPClient::with_correlation(token)` returns a client sharing the original's transport, admission scope, credentials and lane whose every call records `token` in the `correlation` field of its operation span (§4.2), and whose every mutation carries it in the outcome record and on `Dispatched::correlation()`; it is never a metric label. A token is 1 to `MAX_CORRELATION_BYTES` (64) bytes of printable ASCII, space included; anything else is a `Validation` error from `with_correlation` itself, returned as a plain value: no call was made, so no operation span, metric or diagnostics entry records it. A client without a mark carries none |
+| Wire hash on the span | The operation span records `wire_sha256` (hex) as soon as the form is rendered, so a dispatch refused after that point is recorded with the hash of the form it did not send (§4.2) |
+| Close | `HTTPClient::close(deadline)` marks the shared transport closing, so every later mutation dispatch from any clone is refused, and waits for the attempts in flight to complete and deliver; past the deadline it returns `CloseError { in_flight }` naming how many still run, and those continue on the runtime and still deliver. Dropping the last clone without `close` lets the attempts in flight finish and deliver to the stream |
+| Diagnostics | `HttpDiagnostics` reports `dispatches_in_flight`, the ring `orphaned_outcomes` (≤ `B-HTTP-14`, oldest evicted first), `orphaned_outcome_count` and `outcome_stream_dropped` (§4.5) |
+
+### 2.18 Responses
+
+Every JSON endpoint returns `Response<T> { data: T, meta: ResponseMeta }`
+(`kite::connect::models`). The CSV instrument lists return `String` or `Vec<Instrument>`
+and `Vec<MfInstrument>` as §2.1 and §2.14 say.
+
+| Field | Contract |
+|---|---|
+| `data: T` | The endpoint's documented type, the value itself. A call returns `Ok` only when Kite answered with a 2xx status, a `status: "success"` envelope and data of the expected shape (§2.1), so there is no `Option` and nothing to unwrap; every failure, including an error envelope, is a `ManjaError` (§2.4) |
+| `meta.message: Option<String>` | Kite's optional `message` from the envelope, as received; `None` when the envelope has none |
+| `meta.http_status: u16` | The HTTP status of the attempt that produced the response |
+| `meta.operation_id: u64` | The operation's ID: the `operation_id` field of its `manja.http.operation` span (§4.2), unique within the client's observability scope |
+| `meta.attempt: u32` | The number of the attempt that produced the response: 1 for a first try, 2 after one retry; the same numbering as `HttpError::attempt` |
+| `meta.source: SourceIdentity` | The client's producer, run and feed: the type and frame the ticker's envelope carries (§2.8), so HTTP evidence and ticker evidence from one process cite the same run. Set with `HttpClientBuilder::identity`; without it the client generates one (`SourceIdentity::generate()`: producer `manja`, a fresh run ID, feed `default`). Every clone and derived handle of a client shares it; `HTTPClient::source_identity()` reads it |
+| `meta.sent_at: IngressStamp` | When the attempt that produced the response was dispatched: the last instant before its bytes left the process |
+| `meta.received_at: IngressStamp` | When the response head (status and headers) arrived; never earlier than `sent_at` on the monotonic clock. The wall parts are two readings of the system clock, which may step between them (§2.8) |
+
+An `IngressStamp` is one instant in both of the envelope's clocks: `wall`, a `ReceiveTime`
+(signed UTC Unix nanoseconds from the system clock), and `monotonic`, a `MonotonicElapsed`
+(nanoseconds since the client's run origin, the instant its transport was built). Stamps
+from one client and its clones are comparable with each other; stamps from different
+clients are not, as with the ticker. Errors carry the same facts (§2.4).
+
+`Response::map(f)` applies `f` to the data and keeps the meta. `Response<T>` has exactly
+these two public fields; `ResponseMeta` is `#[non_exhaustive]` with public fields. Both
+serialize; `SourceIdentity` serializes as its three identifiers, as a `SourceKey` does,
+and an identifier that `SourceIdentity::new` refuses is refused on the way back in. The 0.2 envelope `KiteApiResponse`, with its
+`status`, `Option<T>` data and `error_type`, no longer exists: `status` was always
+`"success"` and `error_type` always `None` on a returned value, so neither was data
+(`migration.md` §3).
+
+Broker state arrives unchanged. An order row keeps every field reservation logic depends
+on exactly as the broker reports it: `status`, `filled_quantity`, `pending_quantity` and
+`cancelled_quantity`, with a status outside the documented tables preserved as
+`Inbound::Unknown` carrying its wire text, never mapped to a documented one. The SDK does
+not tell a partial fill of an open order from a terminal partially filled order; it
+reports the fields that let the caller do so.
+
+### 2.19 Constructibility
+
+Every public response type is constructible outside the crate, so a broker double or a
+fixture-based test can build what the client would return: `Response<T>`, `ResponseMeta`
+and `IngressStamp`; every DTO and request type in `kite::connect::models`; every receipt
+(`OrderReceipt` with `SliceResult` and `SliceError`, `GttReceipt`,
+`HoldingsAuthorisation`); the outcome record (`Outcome`, `ReceiptIds`); `HttpError` at
+every stage, with `BrokerError` and `RetryInfo`; the ticker's `OrderUpdate` with
+`PostbackChecksum`; and every checked type (`OrderId`, `MfOrderId`, `Tag`, `Quantity`,
+`InstrumentToken`, `ScaledPrice`, `BrokerTimestamp`, `Inbound`, `SourceIdentity`,
+`RunId`, `ReceiveTime`, `MonotonicElapsed`). The rules:
+
+| Shape | How it is built |
+|---|---|
+| Public fields | A struct literal, or an enum variant |
+| Checked type | Its fallible constructor (`OrderId::new`, `Tag::new`, `Quantity::new`, `ScaledPrice::new`, `BrokerTimestamp::parse`, `SourceIdentity::new`), which keeps its validation; `InstrumentToken::new`, `RunId::from_u128`, `ReceiveTime::from_unix_nanos`, `MonotonicElapsed::from_nanos` and `PostbackChecksum::new` are infallible. An unknown wire value, `Inbound::Unknown`, is built through `Inbound::from_wire` |
+| `#[non_exhaustive]` struct | A public constructor of its required facts, with the remaining public fields set afterwards, so that a later field stays additive: `ResponseMeta::new(message, http_status, operation_id, attempt, source, sent_at, received_at)`, `Outcome::new(operation_id, method, endpoint, wire_sha256, stage, result, source)`, `OrderUpdate::new(order_id)`, `SliceError::new(code, error_type, message)`, `RequestError::new(field, reason)` |
+| `HttpError` | `HttpError::new(kind, method, endpoint, stage)` then the builders `with_status`, `with_broker`, `with_attempt`, `with_timeout`, `with_retry`, `with_detail`, `with_source`, `with_admission`, `with_operation`, `with_sent_at` and `with_received_at`; `BrokerError::new(error_type, message)` bounds and sanitizes the message as the client does, and `with_detail` the detail. The SDK never puts a value from a response body in an error; a downstream that builds errors keeps that rule itself |
+| Secrets | `UserSession`'s token fields are `secrecy::Secret<String>`; the crate re-exports the crate as `manja::secrecy`, so they are built against the same version. `chrono` and `serde_json` types in fields come from the downstream's own dependency on those crates |
+
+Exceptions among response types: none. The runtime handles (`HTTPClient`, `Dispatched`,
+`OutcomeStream`, the ticker handles), the diagnostics snapshots and the validation error
+types of the checked types (`OrderIdError`, `UnitError`, `ScaleError`, `DateTimeError`,
+`EnvelopeError`, `UnknownValue`) are not response types and carry no such promise;
+`UnknownExchange` is built from the `UnknownValue` that `Inbound::from_wire` yields. No
+broker port trait is defined here: which subset of this surface a double speaks is the
+application's decision. `tests/constructible.rs`, which runs on every feature row, builds
+one value of each type in a downstream-style module that uses public paths only, and
+checks the model inventory against the source files, so a public model type added without
+a construction fails the test.
+
 ---
 
 ## 3. Runtime bounds
@@ -426,13 +575,16 @@ cannot be changed.
 | `B-HTTP-03` | Attempts for reads and calculations | 3 | 1 to 5 | |
 | `B-HTTP-04` | Attempts for mutations and session operations | 1 | fixed | |
 | `B-HTTP-05` | Retry backoff, initial delay / cap; multiplier 2, full jitter | 250 ms / 5 s | 10 ms to 5 s / 10 ms to 30 s | cap ≥ initial; never past `B-HTTP-01` |
-| `B-HTTP-06` | Admission wait | 5 s | 1 ms to 60 s | |
+| `B-HTTP-06` | Admission wait, for the read and calculation classes only | 5 s | 1 ms to 60 s | A mutation or session operation never waits: it is admitted now or refused with a hint (§2.4, §3.6) |
 | `B-HTTP-07` | Admission waiters per budget scope | 256 | 1 to 4 096 | when full, an `Admission` error |
 | `B-HTTP-08` | Response body: JSON / instrument CSV | 4 MiB / 64 MiB | 64 KiB to 64 MiB / 1 MiB to 256 MiB | when exceeded, a `Decode` error with the status kept |
 | `B-HTTP-09` | Request body | 1 MiB | 1 KiB to 8 MiB | when exceeded, a `Validation` error before admission |
-| `B-HTTP-10` | In-flight attempts per transport | 32 | 1 to 256 | |
+| `B-HTTP-10` | In-flight attempts per transport | 32 | 1 to 256 | counts a mutation's detached attempt from the call that dispatched it; a mutation that finds no slot is refused with an `Admission` error, never queued, while a read waits for one (§2.17) |
 | `B-HTTP-11` | Session operation deadline | 15 s | 1 s to 60 s | one attempt (`B-HTTP-04`) |
-| `B-HTTP-12` | Dispatch permit validity | 1 s | 10 ms to 30 s | ≤ `B-HTTP-01`; a permit is used once, and an expired one sends nothing |
+| `B-HTTP-12` | Retired in 0.3.0 with the dispatch permit (it bounded a permit's validity); the ID is never reused | | | |
+| `B-HTTP-13` | Outcome stream capacity: outcome records buffered for the consumer registered at build time | 1 024 | 16 to 65 536 | when full, the stream ends with `Overflow` once drained; every attempt still completes and every undelivered outcome is counted and kept in the ring (§2.17) |
+| `B-HTTP-14` | Orphaned outcome ring: outcome records kept in `HttpDiagnostics` for mutations whose future was dropped with no stream registered, and for outcomes the stream could not take | 16 | fixed | oldest evicted first; `orphaned_outcome_count` and `outcome_stream_dropped` count every record whether or not it is still in the ring (§2.17) |
+| `B-HTTP-15` | Control reserve per quota class, in requests per second: the part of the class rate only `Control` traffic may use | 2 for `Standard`, 0 for `Quote`, `Historical`, `OrderPlacement`, `OrderModification` and `Unclassified` | 0 to 5 | For a window of period `p` it reserves `reserve × p` slots, rounded up; ceilings have no reserve. A reserve at or above a window's rate leaves the class no `Standard` capacity: every `Standard` request in it is refused at once with an `Admission` error naming this bound, and never waits. 0 makes the lanes equal |
 
 Retries apply to 429, 502 to 504, transport faults and attempt timeouts, and only in
 the read and calculation classes. The calculation endpoints are documented as
@@ -501,6 +653,42 @@ class needs at least one window, limits must be positive, windows at least 1 ms,
 placement at most 10 per second. Admission cannot see requests
 from other processes or other SDK instances using the same API key.
 
+Within a class, every request is admitted on one of two lanes (§2.1). `Control` traffic
+may fill each window of the class entirely. `Standard` traffic may fill a window only up
+to its limit minus the class's control reserve (`B-HTTP-15`, §3.2), so with the default
+profile and reserve the `Standard` class admits 8 `Standard` requests per second and 10
+in all, and a `Control` request is admitted while the reserved slots are free whatever
+`Standard` traffic has done. Both lanes draw from the same windows and ceilings: a
+`Control` request counts against the class rate, the daily order ceiling and the
+per-order modification limit like any other, so the lanes together never exceed the
+documented rate. A read or calculation whose lane share is full waits for its slot under
+`B-HTTP-06`. A mutation or session operation is admitted synchronously: if every window of
+its class has a free slot on its lane it starts at once, and otherwise the call is refused
+before transport with an `Admission` error carrying the exact time until the lane's next
+slot, the instant the daily ceiling resets, or the per-order modification ceiling (§2.4).
+There is no wait and no option to wait: a refusal is affirmative evidence that nothing
+was sent, and the hint is accurate to the instant the wait would have ended. The reserve is a local view: it cannot keep capacity from other processes
+or the Kite app.
+
+Capacity is readable. `Admission::headroom(class)` returns a `Headroom` snapshot:
+`standard_now` and `control_now`, the admissions each lane would be granted at that
+instant (each window's lane share minus its live admissions, the smallest window
+deciding; both 0 once the daily ceiling is spent); `next_slot_in`, the time until the
+`Standard` lane next has a slot when it has none, and `None` when it has one now, when
+the ceiling is spent (no window frees it) or when the control reserve covers a window's
+rate (the lane can never be admitted); and `day_remaining`, the placements left under
+the daily ceiling for `OrderPlacement` and `None` for every other class.
+`Admission::modifications_remaining(&order_id)` is the modifications that order may
+still make today under the per-order limit. Both are **advisory** and the **local
+view**: reading reserves nothing, capacity can be taken between the read and the call,
+and the scope cannot see other processes, other SDK instances or the Kite app, whose
+orders count against the same limits (`kite:exceptions.md:45-58`; the daily ceiling is
+per user and API key, `kite:exceptions.md:57`). Within one scope the snapshot agrees
+with the next admission decision on the windows and the daily ceiling: if a lane reports
+`n`, `n` calls on it admit at once and the next waits or is refused, subject for
+`OrderModification` to the order's own limit, which `modifications_remaining` reads. There
+is no reserving variant.
+
 ---
 
 ## 4. Observability schema
@@ -528,12 +716,15 @@ Additions within version 1:
 | `endpoint` value `/portfolio/holdings/authorise` (§2.15) | the domain grows to 31 values, with the §4.4 bounds |
 | `manja_http_rejected_rows_total` (§2.16) | a new counter of list rows that did not decode, labelled by `endpoint` only |
 | `DecodeDiagnosticKind::InvalidField` (§4.5) | one more diagnostic kind |
+| `priority` field on `manja.http.operation` and the `priority` domain `standard`, `control` (§2.1, §4.2, §4.3) | a span field and a domain; no metric gains a label, so no series bound changes |
+| `admission_cause` field on `manja.http.operation`, the `admission_cause` domain, and the `admission_result` value `refused` (§2.4, §4.2, §4.3) | a span field, a domain and one more value of an existing label domain: the `manja_http_admission_wait_seconds` series bound grows from 16 to 20 (§4.4) |
+| `correlation` and `wire_sha256` fields on `manja.http.operation` (§2.17, §4.2) | two span fields: `correlation` is set on every call made through a `with_correlation` client and `wire_sha256` on every mutation with a wire form; neither is a metric label, so no series bound changes |
 
 ### 4.2 Spans
 
 | Span | Level | Fields |
 |---|---|---|
-| `manja.http.operation` | DEBUG | `operation_id`, `method`, `endpoint`, `quota_class`, `deadline_ms`, `result`, `stage` |
+| `manja.http.operation` | DEBUG | `operation_id`, `method`, `endpoint`, `quota_class`, `priority`, `deadline_ms`, `result`, `stage`, `admission_cause`, `correlation`, `wire_sha256` |
 | `manja.http.admission` | DEBUG | `operation_id`, `quota_class`, `wait_ms`, `admission_result` |
 | `manja.http.attempt` | DEBUG | `operation_id`, `attempt`, `method`, `endpoint`, `http_status`, `error_class`, `stage` |
 | `manja.ticker.connection` | DEBUG | `feed_id`, `connection_epoch`, `reason`, `result` |
@@ -558,7 +749,9 @@ or query parameters to Kite requests.
 | `result` (HTTP operation) | `ok`, `http_status`, `broker_error`, `auth_rejected`, `transport_error`, `timeout`, `deadline`, `admission_rejected`, `cancelled`, `decode_error`, `validation` |
 | `result` (HTTP attempt) | `ok`, `http_status`, `broker_error`, `auth_rejected`, `transport_error`, `timeout`, `cancelled`, `decode_error` |
 | `error_class` | `http_429`, `http_5xx`, `transport_error`, `timeout` |
-| `admission_result` | `granted`, `rejected`, `cancelled`, `deadline` |
+| `admission_result` | `granted`, `rejected`, `cancelled`, `deadline`, `refused` (a mutation or session operation refused without waiting) |
+| `admission_cause` | `window_full`, `daily_ceiling`, `modification_ceiling`, `no_standard_capacity`, `waiters_full`, `wait_expired` (why admission did not grant, §2.4; recorded on the operation span when it ends with an `Admission` error, or with a `Deadline` error because the operation deadline expired while a read or calculation waited for admission, where the cause is `wait_expired`) |
+| `priority` | `standard`, `control` (the operation's admission lane, §2.1; a span field, not a metric label) |
 | `transport` | `http`, `ticker` |
 | `result` (ticker connection) | `ok`, `auth_rejected`, `http_status`, `transport_error`, `timeout`, `cancelled` |
 | `reason` | `eof`, `remote_close`, `liveness_timeout`, `transport_error`, `protocol_error` |
@@ -585,7 +778,7 @@ are never labels.
 | `manja_http_attempt_duration_seconds` | histogram, s | `method`, `endpoint`, `result` | 992 |
 | `manja_http_in_flight` | gauge, attempts | `quota_class` | 4 |
 | `manja_http_admission_waiters` | gauge, waiters | `quota_class` | 4 |
-| `manja_http_admission_wait_seconds` | histogram, s | `quota_class`, `admission_result` | 16 |
+| `manja_http_admission_wait_seconds` | histogram, s | `quota_class`, `admission_result` | 20 |
 | `manja_http_retries_total` | counter, retries | `method`, `endpoint`, `error_class` | 496 |
 | `manja_http_rejected_rows_total` | counter, rows | `endpoint` | 31 |
 | `manja_auth_rejections_total` | counter, rejections | `transport` | 2 |
@@ -615,9 +808,9 @@ the buckets 0.001, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10, 30, 
 
 | Diagnostic | Fields |
 |---|---|
-| `HttpDiagnostics` | active attempts, admission waiters in total and per quota class, recent failures (≤ `B-DIAG-01`) each with endpoint, method, status, error class, stage, broker error type, a redacted message (≤ `B-DIAG-02`) and a monotonic timestamp, and a snapshot revision |
+| `HttpDiagnostics` | active attempts, admission waiters in total and per quota class, recent failures (≤ `B-DIAG-01`) each with endpoint, method, status, error class, stage, broker error type, a redacted message (≤ `B-DIAG-02`) and a monotonic timestamp, the mutation dispatches in flight, the orphaned outcome ring (≤ `B-HTTP-14`) with the counts of orphaned outcomes and of outcomes the stream could not take (§2.17), and a snapshot revision |
 | `TickerStatus` | as §2.7 |
-| Decoder adapter diagnostic | source key, decoder version, packet index if any, a bounded detail (≤ `B-DIAG-02`), and a `DecodeDiagnosticKind`: `truncated`, `count_mismatch`, `trailing_bytes`, `unknown_length`, `oversized`, `invalid_text`, `unknown_text_type`, or `invalid_field` (a field value its type cannot hold, such as a negative quantity) |
+| Decoder adapter diagnostic | source key, decoder version, packet index if any, a bounded detail (≤ `B-DIAG-02`), and a `DecodeDiagnosticKind`: `truncated`, `count_mismatch`, `trailing_bytes`, `unknown_length`, `oversized`, `invalid_text`, `unknown_text_type`, or `invalid_field` (a field value its type cannot hold; since `DECODER_VERSION` 2 no binary packet field produces it) |
 
 Snapshots are bounded, carry revisions and timestamps so a stale view is detectable,
 and need no recorder or subscriber.
@@ -654,12 +847,24 @@ These choices are not dictated by the Kite documentation alone.
 
 | Topic | Decision | Reason |
 |---|---|---|
-| Ticker price scale | Currency derivatives (CDS) divide by 10 000 000; NSE, NFO, BSE, BFO, MCX, MCXSX and indices divide by 100. The BSE currency segment (BCD) is refused | The documentation gives 10 000 000 for currencies and 100 for everything else (`kite:websocket.md:89`); nothing establishes a separate BCD scale, and the segment cannot be read from the token, so the caller supplies it |
+| Ticker price scale | Currency derivatives (CDS) divide by 10 000 000; BSE currency derivatives (BCD) and NSE commodity derivatives (NCO) divide by 10 000; NSE, NFO, BSE, BFO, MCX, MCXSX and indices divide by 100. The caller supplies the segment (`CONVERSION_POLICY_VERSION` 2) | The documentation gives 10 000 000 for currencies and 100 for everything else (`kite:websocket.md:89`) and names neither BCD nor NCO; its general rules would give BCD 10 000 000 and NCO 100. Zerodha's own client library, pykiteconnect 5.2.2, divides BCD (since 2021) and NCO (since 2026-09-15) by 10 000, and its divisors are what Kite's own users have relied on, so manja follows them rather than refusing those prices. The segment cannot be read reliably from the token, so the caller supplies it |
+| Unsigned counts | Every quantity, volume, open-interest and order-count field, and both timestamps, are read unsigned (`u32`; `u16` for depth order counts) and never refused; prices and the index change stay signed (`DECODER_VERSION` 2) | The page types every field `int32` (`kite:websocket.md:87-129`), but the server encodes counts unsigned: on 2026-02-20 every full packet of one NFO futures contract carried open interest between 2.67 and 4.03 billion, above `i32::MAX`, and refusing them dropped the instrument for the day. Zerodha's own client library has read every 32-bit field unsigned from its start, and changed depth order counts to an unsigned 16-bit read in 2018 to fix an overflow. A count is never negative, so the high bit can only be magnitude. Prices can be negative in principle and the signed read of them loses nothing, so they stay signed, where that library's unsigned read would be wrong |
 | Handshake rejection | A 401 or 403 WebSocket handshake ends the ticker with `AuthRejected` | Retrying rejected credentials cannot succeed and would only repeat the rejection |
 | Quota enforcement | Every documented window is enforced locally by default (§3.6) | Exceeding them is a documented broker error (`kite:exceptions.md:39`) |
+| No dispatch permits | The permit API of 0.2 (`admit`, `DispatchPermit`, `PermitTarget`, the `*_with_permit` methods and `B-HTTP-12`) is removed; the mutation call is the admission boundary (§3.6) | A permit was a timed race whose validity bound had to outlast the caller's own checks, which is the caller's policy in the SDK's configuration; it held a window slot for a request that might never be sent, exactly the slot a cancellation needs under load; and it doubled the mutation surface. A call that is admitted now or refused with a hint gives the same affirmative not-sent evidence with no token |
+| No wait for mutations | A mutation or session operation is admitted now or refused with a hint; only reads and calculations wait under `B-HTTP-06` (§2.4, §3.2, §3.6) | A wait between a caller's decision and the socket write makes that decision stale by construction, and a caller whose dispatch gate is serialised with other work cannot afford a call that sleeps. An immediate refusal is affirmative evidence that nothing was sent, and with the exact hint the caller can schedule better than a blind wait. Reads lose nothing by waiting, so they keep the bound |
+| Detached mutations | A mutation or session operation is a plain function returning `Dispatched<T>`; its one attempt runs on a task the client owns and its outcome is delivered to the future if alive and always to the outcome stream, or to the orphan ring when no stream is registered; a refusal spawns nothing and emits no record; `Cancelled` is never produced for a mutation (§2.17, §3.2) | Once the bytes have left there is nothing to cancel, so a future that can be dropped promises a capability that does not exist, and a receipt the broker sent and the SDK read must not be lost to a `select!`, a timeout or a panic in the caller. A bounded stream that ends with an error rather than dropping silently is the ticker's pattern in this crate; diagnostics alone are evicted and would have to be polled; a callback would run caller code on the SDK's task, which §4.7 declines to defend against. The cost is one task spawn and one channel per mutation, at most ten a second by broker rule; reads, the volume path, pay nothing |
+| Headroom | Admission capacity is readable as an advisory, local-view snapshot per class and lane, plus the modifications an order has left; a spent daily ceiling zeroes both lanes and announces no next slot, and a lane the reserve covers announces none either (§3.6) | A caller that can only learn capacity by being refused pays a refusal for every full window. A snapshot that agrees with the next decision lets it order its own work, and saying "advisory, local view" keeps the account-wide limit, which includes manual orders, where it belongs: with the caller. A reserving read would be the dispatch permit by another name |
+| Session expiry | The 6 AM expiry is taken as IST, and a token expires at the next 06:00 IST strictly after its issue time: an issue at exactly 06:00:00 expires the next day, an issue before 06:00 expires that same morning (§2.2) | Kite's one sentence (`kite:user.md:115`) names no zone and says "the next day"; every documented Kite time is IST, and a caller that injects the issue time needs one boundary rule with no gap, so the next boundary after the instant is the reading the function implements |
+| Ingress stamps | A response's `sent_at` is taken at dispatch, the last instant before the bytes leave the process, and `received_at` when the response head arrives, not when the body is complete; errors are stamped the same way, so a cut-off body still carries `received_at` (§2.18, §2.4) | A lost response is bounded by when the bytes left, and a response exists from the moment its head arrives, which is also when the error stage becomes `ResponseReceived`; stamping at the body's end would make a slow body look like a late response |
+| Responses | `Response<T> { data: T, meta }` replaces the 0.2 envelope on every JSON endpoint; the `status` and `error_type` fields are gone and `data` is not optional (§2.18) | A success type with an `Option` inside makes every caller write a panic path or a fallback for a case the SDK promises cannot happen, and a fallback such as an empty order book is exactly the silent failure the crate exists to prevent. Fields that are constant on success are not data. Order rows keep every broker quantity and status field as reported so a caller can tell a partial fill from a terminal partially filled order; the SDK never collapses them |
+| Wire forms | Every mutation renders a `WireForm` before it is sent and sends exactly those bytes; the forms of the two session operations exist but never render their token or checksum: the marker `<redacted>` stands in for each (§2.1) | An application that shows a person a compiled order and later journals what was sent needs the two to be provably the same bytes, and the hash of the form gives that without a second entry point. The session forms are included so every mutation has one; their bodies necessarily carry the documented token fields, so they render redacted and expose their bytes only through the hash and the send |
+| Priority lanes | Two caller-selected lanes per quota class with a control reserve (`B-HTTP-15`, §2.1, §3.6); order cancellation and GTT deletion default to `Control`, and the mark is made per call through `HTTPClient::with_priority` rather than as a parameter on every method | Cancellation and the reads that confirm it share one transport with polling, and an in-flight request cannot be recalled, so a reserve that `Standard` traffic may never take is the only honest form of priority. Which reads are urgent is known only to the application, so the mark is per call and the SDK never decides it. A derived client keeps every method's signature unchanged |
 | Oversized quote requests | Rejected before sending, never split or truncated | A split would return several snapshots taken at different times as one result |
 | Endpoint support | Holdings auctions and the order charges calculation stay supported | Both are documented read or calculation endpoints with official fixtures |
 | Holdings authorisation | Supported as the HTTP call that starts the flow, with the documented portal URL; the portal itself is left to the application | The endpoint and its result are documented (`kite:portfolio.md:503-541`). The remaining steps happen in the user's browser on the depository's portal, which an SDK cannot and should not drive |
+| Non-exhaustive response types | `ResponseMeta`, `Outcome`, `OrderUpdate`, `SliceError` and `RequestError` keep `#[non_exhaustive]` and gain a public constructor of their required facts; the two metadata structs become `SessionMeta` and `ProfileMeta`; `secrecy` is re-exported (§2.19) | Dropping the attribute would make every later field a breaking change; a constructor of the required facts keeps additions additive while leaving the type constructible, and the public fields take the optional facts afterwards. The two `Meta` structs were public fields' types that no downstream could name, so renaming them breaks nobody and says which object each belongs to. A downstream cannot build a `Secret<String>` without the crate that defines it, and a separately pinned version would be a different type |
+| Required tag | `PlaceOrderRequest::new` takes a `Tag`; the tag is documented as a correlation field, never an idempotency key, with one tag per attempt recommended; `list_orders_tagged` is a client-side filter over the order book (§2.16) | Kite has no idempotency key and the tag is the only caller-chosen field it echoes, so a placement whose response was lost has no other anchor than symbol, quantity and time, which an active caller's own flow makes ambiguous within seconds. A generated tag the caller never saw would be useless for recovery, and modification and cancellation carry an order ID and no tag field, so requiring one there would be a lie in the type. The broker does not make tags unique and manual orders can carry any text, so the SDK filters and the caller assigns the confidence; one tag per attempt is what makes a duplicate visible |
 | Order IDs | Checked types; a response ID that fails its grammar is a `Decode` error | An ID is a request path segment. A lenient fallback would let a malformed broker value reach a path unchecked, and every ID in the official samples already fits its grammar |
 | Rejected list rows | The default equity order and trade list methods stay strict; a paired `*_with_rejections` method returns every row, rejected ones in place (§2.16) | Strict is the default because `?` keeps a failure loud, and an entirely rejected book can never pass for an empty one. The tolerant form lets a caller still see, and act on, the rows that decoded. Keeping partial data out of `HttpError` keeps broker rows out of commonly logged errors |
 | Error details | A parse or decode failure is described by serde's category and position, with no field path | serde's message quotes the offending value. A field path would need a new dependency, and in a map-shaped payload such as a quote response its keys are broker values (instrument symbols). The tolerant order and trade lists hand the full serde error to the caller in `RowError`, outside any error (§2.16) |
@@ -667,7 +872,7 @@ These choices are not dictated by the Kite documentation alone.
 | GTT orders | Only LIMIT orders, each for the condition's instrument; a modification sends the complete trigger | The documentation lists `LIMIT` as the only order type and shows each order repeating the condition's exchange and tradingsymbol (`kite:gtt.md:56-64`); it recommends fetching the trigger and sending it back modified (`kite:gtt.md:390-393`) |
 | Default features | `http`, `ticker` and `decoder` | Keeps every 0.1 import path available |
 | Edition and minimum Rust version | Edition 2024; `rust-version` 1.88.0 | 1.88 is the first release with let chains, which the code uses. Every feature row, doc tests included, passes on 1.88.0, and 1.87.0 rejects the let chains (E0658). With `rust-version` at 1.88 the resolver picks dependency versions that build on it. Dependencies alone do not set the floor: down to 1.85 the resolver still finds compatible releases (the `icu_*` 2.3 crates, which need 1.88, fall back to earlier 2.x releases), and with the let chains reverted the all-features suite passes on 1.87.0 (checked on 2026-09-24) |
-| 0.1 code | Removed in 0.2.0 rather than deprecated: the `WebSocketClient` ticker, `TickerRequest::subscribe_with_mode`, `kite::traits` and the error variants nothing constructs (`migration.md` §4) | 0.2.0 is itself the breaking release, so keeping code only 0.1 callers needed would carry it into a release that already requires migration. The old ticker read the socket directly, so it could not have been repaired without changing its behavior |
+| 0.1 code | Removed in 0.2.0 rather than deprecated: the `WebSocketClient` ticker, `TickerRequest::subscribe_with_mode`, `kite::traits` and the error variants nothing constructs (`migration.md` §7.4) | 0.2.0 is itself the breaking release, so keeping code only 0.1 callers needed would carry it into a release that already requires migration. The old ticker read the socket directly, so it could not have been repaired without changing its behavior |
 | Observability budgets | As in `verification.md` §5 | Measured on a recorded host; exceeding one fails the benchmark |
 
 ---
@@ -677,11 +882,16 @@ These choices are not dictated by the Kite documentation alone.
 | Constant | Value | Versions |
 |---|---|---|
 | `ENVELOPE_VERSION` | 1.0 | the raw observation and lifecycle envelope (§2.8) |
-| `DECODER_VERSION` | 1 | the decoder's output for a given input |
-| `CONVERSION_POLICY_VERSION` | 1 | price scaling (§5) |
+| `DECODER_VERSION` | 2 | the decoder's output for a given input; 2 since 0.3.0, when count and timestamp fields became unsigned (§5) |
+| `CONVERSION_POLICY_VERSION` | 2 | price scaling (§5); 2 since 0.3.0, when BCD and NCO gained the 10 000 divisor |
 | `OBS_SCHEMA_VERSION` | 1 | the observability schema (§4) |
 | `QUOTA_PROFILE_VERSION` | `kite-connect-v3/exceptions.md@2026-09-23+r2` | the default quota profile (§3.6): the page it encodes, the date that page was accessed, and a revision that increases when the encoding of the same page changes. A version without a `+r` suffix is revision 1, and the revision restarts at 1 when the page is accessed again on a new date. Revision 2 added the `Historical` class |
 
-Each is versioned independently. The crate is pre-1.0: every intentional break ships only
-in a minor-version bump and is listed in `migration.md`. Where practical, an item is
-deprecated for a release before it is removed.
+The crate is at version 0.3.0. `DECODER_VERSION` and `CONVERSION_POLICY_VERSION` moved
+from 1 to 2 in it, because the decoder's output and the price scale changed for some
+inputs (§5); `OBS_SCHEMA_VERSION` stays 1 because the span fields 0.3 added are
+additive, and the envelope and quota versions are untouched. Each is
+versioned independently. The crate is pre-1.0: every intentional break ships only in a
+minor-version bump and is listed in `migration.md`, all of a release's breaks together;
+where practical, an item is deprecated for a release before it is removed. 1.0 is
+reserved for the first release that needed no break from its predecessor.

@@ -89,11 +89,14 @@ const MIB: usize = 1024 * KIB;
 /// | `B-HTTP-08` instrument CSV body | 64 MiB | 1 MiB ..= 256 MiB |
 /// | `B-HTTP-09` request body | 1 MiB | 1 KiB ..= 8 MiB |
 /// | `B-HTTP-10` in-flight attempts per transport | 32 | 1 ..= 256 |
+/// | `B-HTTP-13` outcome stream capacity | 1 024 | 16 ..= 65 536 |
 ///
-/// Deadline, attempt and retry bounds (`B-HTTP-01`–`05`, `-11`, `-12`) are
-/// the [`SchedulerLimits`]. Admission bounds (`B-HTTP-06`, `B-HTTP-07`)
-/// belong to the shared
-/// [`Admission`](crate::kite::connect::admission::Admission) scope.
+/// Deadline, attempt and retry bounds (`B-HTTP-01`–`05`, `-11`) are
+/// the [`SchedulerLimits`]. Admission bounds (`B-HTTP-06`, `B-HTTP-07`,
+/// `B-HTTP-15`) belong to the shared
+/// [`Admission`](crate::kite::connect::admission::Admission) scope. The
+/// in-flight bound counts a mutation's detached attempt from the moment it
+/// is dispatched; a dispatch that finds no slot is refused, never queued.
 ///
 /// A response larger than its bound is a `Decode` error that preserves the
 /// HTTP status; the body is not buffered past the bound. The documentation
@@ -106,6 +109,7 @@ pub struct HttpLimits {
     csv_body_bytes: usize,
     request_body_bytes: usize,
     in_flight: usize,
+    outcome_capacity: usize,
     scheduler: SchedulerLimits,
 }
 
@@ -116,6 +120,7 @@ impl Default for HttpLimits {
             csv_body_bytes: 64 * MIB,
             request_body_bytes: MIB,
             in_flight: 32,
+            outcome_capacity: 1024,
             scheduler: SchedulerLimits::default(),
         }
     }
@@ -138,12 +143,12 @@ impl HttpLimits {
         Ok(self)
     }
 
-    /// Deadline, attempt-timeout, retry and permit bounds.
+    /// Deadline, attempt-timeout and retry bounds.
     pub fn scheduler(&self) -> &SchedulerLimits {
         &self.scheduler
     }
 
-    /// Replace the deadline, attempt-timeout, retry and permit bounds.
+    /// Replace the deadline, attempt-timeout and retry bounds.
     pub fn with_scheduler(mut self, scheduler: SchedulerLimits) -> Self {
         self.scheduler = scheduler;
         self
@@ -164,6 +169,18 @@ impl HttpLimits {
     /// Maximum concurrent transport attempts on one transport.
     pub fn in_flight(&self) -> usize {
         self.in_flight
+    }
+
+    /// Capacity of the outcome stream (`B-HTTP-13`): outcomes buffered for
+    /// a consumer before the stream overflows and ends with an error.
+    pub fn outcome_capacity(&self) -> usize {
+        self.outcome_capacity
+    }
+
+    /// Set the outcome stream capacity (`B-HTTP-13`).
+    pub fn with_outcome_capacity(mut self, outcomes: usize) -> Result<Self, LimitError> {
+        self.outcome_capacity = check_range("B-HTTP-13", outcomes, 16, 65_536)?;
+        Ok(self)
     }
 
     /// Set the in-flight attempt bound (`B-HTTP-10`).

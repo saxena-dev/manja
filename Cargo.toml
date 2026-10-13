@@ -1,6 +1,6 @@
 [package]
 name = "manja"
-version = "0.2.0"
+version = "0.3.0"
 edition = "2024"
 rust-version = "1.88.0"
 authors = ["Paresh Saxena <pareshsaxena@gmail.com>"]
@@ -50,7 +50,7 @@ tracing = "0.1.40"
 # slice: both live transports and the decoder.
 [features]
 default = ["http", "ticker", "decoder"]
-http = ["dep:csv", "dep:hex", "dep:reqwest", "dep:sha2", "dep:tokio"]
+http = ["dep:csv", "dep:hex", "dep:reqwest", "dep:sha2", "dep:tokio", "tokio/rt"]
 ticker = [
     "dep:futures-util",
     "dep:tokio",
@@ -85,6 +85,10 @@ required-features = ["http"]
 
 [[test]]
 name = "http_scheduling"
+required-features = ["http"]
+
+[[test]]
+name = "http_dispatch"
 required-features = ["http"]
 
 [[test]]
@@ -165,6 +169,10 @@ required-features = ["decoder"]
 
 [[test]]
 name = "decoder_packets"
+required-features = ["decoder"]
+
+[[test]]
+name = "fixture_invariants"
 required-features = ["decoder"]
 
 [[test]]

@@ -40,7 +40,7 @@ use std::collections::{HashMap, HashSet};
 use crate::kite::connect::{
     client::HTTPClient,
     models::{
-        Exchange, HistoricalData, HistoricalRequest, Instrument, KiteApiResponse, KiteQuote, Quotes,
+        Exchange, HistoricalData, HistoricalRequest, Instrument, KiteQuote, Quotes, Response,
     },
 };
 use crate::kite::error::{HttpError, HttpErrorKind, Result, TransportStage};
@@ -176,8 +176,7 @@ impl<'c> Market<'c> {
     /// let quotes = Market::new(client)
     ///     .get_quotes::<LTPQuote>(&["NSE:INFY", "BSE:SENSEX"])
     ///     .await?
-    ///     .data
-    ///     .expect("a success envelope carries data");
+    ///     .data;
     /// for key in &quotes.missing {
     ///     println!("no data for {key}");
     /// }
@@ -186,7 +185,7 @@ impl<'c> Market<'c> {
     ///
     /// Fails before admission, sending nothing, for an empty list, more keys
     /// than the endpoint's limit, a duplicate key or a malformed key.
-    pub async fn get_quotes<Q>(&self, instruments: &[&str]) -> Result<KiteApiResponse<Quotes<Q>>>
+    pub async fn get_quotes<Q>(&self, instruments: &[&str]) -> Result<Response<Quotes<Q>>>
     where
         Q: KiteQuote,
     {
@@ -195,11 +194,13 @@ impl<'c> Market<'c> {
         let seen = check_keys(instruments, mode.max_instruments())
             .map_err(|detail| self.client.reject(rejected(path, &detail)))?;
         let query: Vec<(&str, &str)> = instruments.iter().map(|k| ("i", *k)).collect();
-        let response = self
+        let Response {
+            data: received,
+            meta,
+        } = self
             .client
             .get_with_query::<_, HashMap<String, Q>>(path, &query)
             .await?;
-        let received = response.data.unwrap_or_default();
         let requested: Vec<String> = instruments.iter().map(|k| k.to_string()).collect();
         let missing = requested
             .iter()
@@ -212,16 +213,14 @@ impl<'c> Market<'c> {
             .cloned()
             .collect();
         unexpected.sort();
-        Ok(KiteApiResponse {
-            status: response.status,
-            data: Some(Quotes {
+        Ok(Response {
+            data: Quotes {
                 requested,
                 received,
                 missing,
                 unexpected,
-            }),
-            message: response.message,
-            error_type: response.error_type,
+            },
+            meta,
         })
     }
 
@@ -243,7 +242,7 @@ impl<'c> Market<'c> {
     ///     ist.with_ymd_and_hms(2017, 12, 15, 9, 20, 0).unwrap(),
     /// );
     /// let data = client.market().get_historical(&request).await?.data;
-    /// for candle in data.map(|d| d.candles).unwrap_or_default() {
+    /// for candle in data.candles {
     ///     println!("{} close {}", candle.timestamp, candle.close);
     /// }
     /// # Ok(()) }
@@ -253,7 +252,7 @@ impl<'c> Market<'c> {
     pub async fn get_historical(
         &self,
         request: &HistoricalRequest,
-    ) -> Result<KiteApiResponse<HistoricalData>> {
+    ) -> Result<Response<HistoricalData>> {
         let path = request.path();
         request
             .validate()

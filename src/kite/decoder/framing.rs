@@ -21,17 +21,17 @@
 //!
 //! # Differences from the reference outputs
 //!
-//! The vendored qdx outputs (`docs/verification.md` §1.2) are a cross-check
-//! from an independent decoder, not protocol truth. Where they differ from
+//! The vendored reference outputs (`docs/verification.md` §1.2) are a
+//! cross-check from an independent decoder, not protocol truth. Where they differ from
 //! the behavior above:
 //!
-//! - `trailing_bytes`: qdx reports the one packet and a `TrailingBytes`
+//! - `trailing_bytes`: the independent decoder reports the one packet and a `TrailingBytes`
 //!   diagnostic. Here the batch is rejected with
 //!   [`DecodeDiagnosticKind::TrailingBytes`] and no packet is exposed,
 //!   because a batch that does not frame exactly is structurally invalid.
-//! - `malformed_count`: qdx's `InvalidPacketCount` corresponds to
+//! - `malformed_count`: its `InvalidPacketCount` corresponds to
 //!   [`DecodeDiagnosticKind::CountMismatch`].
-//! - `unknown_size`: qdx exposes one packet of unknown type; here it frames
+//! - `unknown_size`: it exposes one packet of unknown type; here it frames
 //!   as one packet whose [`Frame::family`] is [`PacketFamily::Unknown`].
 //! - `heartbeat.bin` is the single byte `0x01`. The documentation gives the
 //!   heartbeat's length only, not its value, so every one-byte binary

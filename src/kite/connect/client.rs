@@ -59,7 +59,7 @@
 //! templates and closed outcome values only.
 //!
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, Weak};
 use std::time::{Duration, Instant};
 
 use reqwest::header::{AUTHORIZATION, HeaderValue};
@@ -69,22 +69,26 @@ use tracing::{Instrument as _, Span};
 
 use crate::kite::{
     connect::{
-        admission::{Admission, RateClass},
+        admission::{Admission, Priority, RateClass},
         api::{Charges, Gtt, Margins, Market, MutualFunds, Orders, Portfolio, Session, User},
         config::Config,
         credentials::{AccessToken, ApiKey, Credentials},
-        models::{KiteApiResponse, Row, RowError, Rows, UserSession},
-        scheduler::{
-            AttemptCtx, DispatchPermit, OpObs, OpSpec, PermitTarget, RetryClass, Scheduler,
+        dispatch::{
+            CloseError, Delivery, Dispatched, MAX_CORRELATION_BYTES, ORPHANED_OUTCOMES, OrphanSink,
+            Outcome, OutcomeStream, ReceiptIds, StreamShared, operation_result,
         },
+        models::{IngressStamp, Response, ResponseMeta, Row, RowError, Rows, UserSession},
+        scheduler::{AttemptCtx, OneAttempt, OpObs, OpSpec, RetryClass, Scheduler},
+        wire::WireForm,
     },
+    envelope::{MonotonicElapsed, ReceiveTime, SourceIdentity},
     error::{
         BrokerError, HttpError, HttpErrorKind, KiteApiException, ManjaError, Result,
         TransportStage as Stage, json_error_detail,
     },
     obs::diagnostics::{BoundedText, DEFAULT_HISTORY, FailureHistory},
     obs::handle::{Labels, Observability},
-    obs::schema::{Endpoint, HttpOperationResult, Instrument, Method, QuotaClass},
+    obs::schema::{Endpoint, HttpOperationResult, Instrument, Method, PriorityLabel, QuotaClass},
     protocol::Inbound,
 };
 
@@ -99,6 +103,86 @@ struct Transport {
     obs: Observability,
     // This transport's operations waiting for admission, per quota class.
     waiting: [AtomicUsize; 4],
+    /// The client's source identity, shared by every handle on this
+    /// transport and carried on every response and error.
+    identity: SourceIdentity,
+    /// Where dispatched mutations deliver their outcomes.
+    outcomes: Mutex<OutcomeSink>,
+    /// Dispatched attempts not yet delivered.
+    dispatches: AtomicUsize,
+    /// Woken when a dispatch delivers, for `close`.
+    drained: tokio::sync::Notify,
+    /// Set by `close`: no new dispatch is admitted.
+    closing: AtomicBool,
+}
+
+/// The outcome sink of a transport: the stream's sender while the stream
+/// is open, and the orphan ring and counters otherwise.
+struct OutcomeSink {
+    sender: Option<tokio::sync::mpsc::Sender<Outcome>>,
+    /// A stream was registered at build time (it may have overflowed since).
+    registered: bool,
+    shared: Arc<StreamShared>,
+    /// The orphan ring (`B-HTTP-14`).
+    ring: FailureHistory<Outcome>,
+    /// Outcomes whose future was dropped, with no stream to take them.
+    orphaned: u64,
+}
+
+impl OutcomeSink {
+    /// An outcome that reached its `Dispatched` future, which was then
+    /// dropped without being polled. A registered stream already has it;
+    /// without one it is an orphan like any other.
+    fn orphan_after_delivery(&mut self, outcome: Outcome) {
+        if !self.registered {
+            self.orphaned += 1;
+            self.ring.push(outcome);
+        }
+    }
+
+    fn deliver(&mut self, outcome: Outcome, orphaned: bool) {
+        use tokio::sync::mpsc::error::TrySendError;
+        if let Some(sender) = &self.sender {
+            if let Err(TrySendError::Full(outcome) | TrySendError::Closed(outcome)) =
+                sender.try_send(outcome)
+            {
+                // The consumer fell behind or went away: close the stream
+                // so it ends after draining, and keep counting.
+                self.sender = None;
+                self.shared.overflowed.store(true, Ordering::Release);
+                self.shared.dropped.fetch_add(1, Ordering::AcqRel);
+                self.ring.push(outcome);
+            }
+        } else if self.registered {
+            self.shared.dropped.fetch_add(1, Ordering::AcqRel);
+            self.ring.push(outcome);
+        } else if orphaned {
+            self.orphaned += 1;
+            self.ring.push(outcome);
+        }
+    }
+}
+
+impl OrphanSink for Transport {
+    fn orphaned_after_delivery(&self, outcome: Outcome) {
+        self.outcomes
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .orphan_after_delivery(outcome);
+    }
+}
+
+impl Transport {
+    /// Now, in both of the envelope's clocks: wall time and time since this
+    /// transport's origin.
+    fn stamp(&self) -> IngressStamp {
+        IngressStamp {
+            wall: ReceiveTime::now(),
+            monotonic: MonotonicElapsed::from_nanos(
+                u64::try_from(self.origin.elapsed().as_nanos()).unwrap_or(u64::MAX),
+            ),
+        }
+    }
 }
 
 fn quota_index(q: QuotaClass) -> usize {
@@ -150,6 +234,17 @@ pub struct HttpDiagnostics {
     /// Incremented on every recorded failure, so a stale snapshot is
     /// detectable.
     pub snapshot_revision: u64,
+    /// Dispatched mutations whose attempt has not yet delivered.
+    pub dispatches_in_flight: usize,
+    /// The orphan ring (`B-HTTP-14`): the most recent outcomes that reached
+    /// no stream, oldest first.
+    pub orphaned_outcomes: Vec<Outcome>,
+    /// Outcomes whose `Dispatched` was dropped before delivery while no
+    /// stream was registered, since the client was built.
+    pub orphaned_outcome_count: u64,
+    /// Outcomes not delivered to the registered stream because it had
+    /// overflowed (`B-HTTP-13`), since the client was built.
+    pub outcome_stream_dropped: u64,
 }
 
 /// An asynchronous Kite Connect HTTP client.
@@ -179,6 +274,12 @@ pub struct HttpDiagnostics {
 /// [`gtt`](Self::gtt), [`mutual_funds`](Self::mutual_funds),
 /// [`margins`](Self::margins) and [`charges`](Self::charges).
 ///
+/// Every call is admitted on a [`Priority`] lane. Without a mark, order
+/// cancellation and GTT deletion are `Control` and everything else is
+/// `Standard`; [`Self::with_priority`] returns a client whose calls all
+/// take the given lane, so a caller can mark any call `Control`, for
+/// example the reads that confirm a cancellation.
+///
 /// # Example
 ///
 /// ```no_run
@@ -190,7 +291,7 @@ pub struct HttpDiagnostics {
 /// let client = HTTPClient::new(Config::default())?
 ///     .with_credentials(Credentials::new("api_key", "access_token")?);
 ///
-/// let holdings = client.portfolio().get_holdings().await?.data.unwrap_or_default();
+/// let holdings = client.portfolio().get_holdings().await?.data;
 /// println!("{} holdings", holdings.len());
 /// # Ok(()) }
 /// ```
@@ -198,6 +299,12 @@ pub struct HttpDiagnostics {
 pub struct HTTPClient {
     transport: Arc<Transport>,
     credentials: Option<Credentials>,
+    /// The caller's lane mark; `None` means each operation's default.
+    priority: Option<Priority>,
+    /// The caller's correlation token, recorded on the operation span of
+    /// every call this handle makes and carried by the outcome record of
+    /// every mutation it dispatches.
+    correlation: Option<String>,
 }
 
 impl std::fmt::Debug for HTTPClient {
@@ -205,6 +312,8 @@ impl std::fmt::Debug for HTTPClient {
         f.debug_struct("HTTPClient")
             .field("config", &self.transport.config)
             .field("credentials", &self.credentials)
+            .field("priority", &self.priority)
+            .field("correlation", &self.correlation)
             .finish()
     }
 }
@@ -221,9 +330,21 @@ pub struct HttpClientBuilder {
     admission: Option<Admission>,
     credentials: Option<Credentials>,
     observability: Option<Observability>,
+    identity: Option<SourceIdentity>,
 }
 
 impl HttpClientBuilder {
+    /// Identify this client's responses and errors as `identity`: the
+    /// producer, run and feed the ticker's envelope uses, so HTTP evidence
+    /// and ticker evidence from one process cite the same run. Without it
+    /// the client generates one with [`SourceIdentity::generate`]: producer
+    /// `manja`, a fresh run ID, feed `default`. Clones and derived handles
+    /// share the identity.
+    pub fn identity(mut self, identity: SourceIdentity) -> Self {
+        self.identity = Some(identity);
+        self
+    }
+
     /// Record spans and metrics in `obs`'s scope. Without it the client
     /// uses [`Observability::disabled`]; its typed diagnostics work either
     /// way.
@@ -245,23 +366,56 @@ impl HttpClientBuilder {
     }
 
     /// Build the client. Fails with a configuration error if the HTTP
-    /// transport cannot be built.
+    /// transport cannot be built. Without an outcome stream, outcomes of
+    /// dropped dispatches go to the orphan ring in the diagnostics.
     pub fn build(self) -> Result<HTTPClient> {
+        self.build_inner(None).map(|(client, _)| client)
+    }
+
+    /// Build the client with its outcome stream registered: every
+    /// dispatched mutation's outcome is delivered to the stream exactly
+    /// once, buffered up to `B-HTTP-13` (`HttpLimits::outcome_capacity`).
+    pub fn build_with_outcomes(self) -> Result<(HTTPClient, OutcomeStream)> {
+        let capacity = self.config.limits().outcome_capacity();
+        let (sender, receiver) = tokio::sync::mpsc::channel(capacity);
+        let shared = Arc::new(StreamShared::default());
+        let stream = OutcomeStream::new(receiver, shared.clone());
+        self.build_inner(Some((sender, shared)))
+            .map(|(client, _)| (client, stream))
+    }
+
+    fn build_inner(
+        self,
+        stream: Option<(tokio::sync::mpsc::Sender<Outcome>, Arc<StreamShared>)>,
+    ) -> Result<(HTTPClient, ())> {
+        let (sender, shared, registered) = match stream {
+            Some((sender, shared)) => (Some(sender), shared, true),
+            None => (None, Arc::new(StreamShared::default()), false),
+        };
+        let sink = OutcomeSink {
+            sender,
+            registered,
+            shared,
+            ring: FailureHistory::new(ORPHANED_OUTCOMES),
+            orphaned: 0,
+        };
         let mut client = HTTPClient::build_transport(
             self.config,
             self.admission.unwrap_or_default(),
             self.observability.unwrap_or_default(),
+            self.identity.unwrap_or_else(SourceIdentity::generate),
+            sink,
         )?;
         client.credentials = self.credentials;
-        Ok(client)
+        Ok((client, ()))
     }
 }
 
 // One polled logical operation: its span, its completion count and
 // duration, and its entry in the transport diagnostics. Dropped before
 // finishing, the operation was cancelled.
-struct OpGuard<'a> {
-    transport: &'a Transport,
+struct OpGuard {
+    transport: Arc<Transport>,
     method: Method,
     endpoint: Endpoint,
     quota: QuotaClass,
@@ -269,18 +423,34 @@ struct OpGuard<'a> {
     operation_id: u64,
     started: tokio::time::Instant,
     dispatched: Arc<AtomicBool>,
+    /// The dispatch stamp of the latest attempt, for errors built after
+    /// dispatch outside the attempt itself.
+    sent_at: Arc<Mutex<Option<IngressStamp>>>,
     done: bool,
 }
 
-impl OpGuard<'_> {
+impl OpGuard {
     fn finish<T>(
         mut self,
         result: std::result::Result<T, HttpError>,
     ) -> std::result::Result<T, HttpError> {
         self.done = true;
+        // Every error leaves with the operation's identity and ID, and with
+        // its dispatch stamp when the attempt was dispatched but the error
+        // was built elsewhere (the attempt timeout, in the scheduler).
+        let result = result.map_err(|e| {
+            let e = e.with_operation(self.transport.identity.clone(), self.operation_id);
+            match *self.sent_at.lock().unwrap_or_else(|p| p.into_inner()) {
+                Some(sent_at) if e.stage() != Stage::NotStarted => e.with_sent_at(sent_at),
+                _ => e,
+            }
+        });
         match &result {
             Ok(_) => self.complete(HttpOperationResult::Ok, Stage::ResponseReceived),
             Err(e) => {
+                if let Some(cause) = e.admission_cause() {
+                    self.span.record("admission_cause", cause.as_str());
+                }
                 self.complete(operation_result(e), e.stage());
                 self.transport.record(HttpFailure {
                     method: e.method(),
@@ -314,7 +484,7 @@ impl OpGuard<'_> {
     }
 }
 
-impl Drop for OpGuard<'_> {
+impl Drop for OpGuard {
     fn drop(&mut self) {
         if self.done {
             return;
@@ -341,22 +511,6 @@ impl Drop for OpGuard<'_> {
     }
 }
 
-/// The normalized result of a finished operation.
-fn operation_result(e: &HttpError) -> HttpOperationResult {
-    match e.kind() {
-        HttpErrorKind::Validation | HttpErrorKind::Configuration => HttpOperationResult::Validation,
-        HttpErrorKind::Admission => HttpOperationResult::AdmissionRejected,
-        HttpErrorKind::Deadline => HttpOperationResult::Deadline,
-        HttpErrorKind::HttpStatus => HttpOperationResult::HttpStatus,
-        HttpErrorKind::Broker => HttpOperationResult::BrokerError,
-        HttpErrorKind::AuthRejected => HttpOperationResult::AuthRejected,
-        HttpErrorKind::Decode => HttpOperationResult::DecodeError,
-        HttpErrorKind::Cancelled => HttpOperationResult::Cancelled,
-        _ if e.is_timeout() => HttpOperationResult::Timeout,
-        _ => HttpOperationResult::TransportError,
-    }
-}
-
 impl Transport {
     fn record(&self, failure: HttpFailure) {
         self.failures
@@ -374,6 +528,7 @@ impl HTTPClient {
             admission: None,
             credentials: None,
             observability: None,
+            identity: None,
         }
     }
 
@@ -391,7 +546,13 @@ impl HTTPClient {
         Self::builder(config).observability(obs).build()
     }
 
-    fn build_transport(config: Config, admission: Admission, obs: Observability) -> Result<Self> {
+    fn build_transport(
+        config: Config,
+        admission: Admission,
+        obs: Observability,
+        identity: SourceIdentity,
+        outcomes: OutcomeSink,
+    ) -> Result<Self> {
         // Attempt timeouts are enforced by the scheduler, not the transport.
         let http = reqwest::ClientBuilder::new().build().map_err(|e| {
             HttpError::new(
@@ -416,9 +577,79 @@ impl HTTPClient {
                 origin: Instant::now(),
                 obs,
                 waiting: Default::default(),
+                identity,
+                outcomes: Mutex::new(outcomes),
+                dispatches: AtomicUsize::new(0),
+                drained: tokio::sync::Notify::new(),
+                closing: AtomicBool::new(false),
             }),
             credentials: None,
+            priority: None,
+            correlation: None,
         })
+    }
+
+    /// A client sharing this client's transport, admission scope,
+    /// credentials and lane whose every call carries `token` as its
+    /// correlation: on the operation span of every call, and for a
+    /// mutation also on the outcome record and on
+    /// `Dispatched::correlation()`; never as a metric label.
+    /// The token is at most 64 bytes of printable ASCII; anything else is
+    /// a `Validation` error here, before any call, and no operation is
+    /// recorded for it. The original client is
+    /// unchanged. Make one handle per attempt, so each attempt has its
+    /// own token end to end.
+    pub fn with_correlation(&self, token: impl Into<String>) -> Result<Self> {
+        let token = token.into();
+        let valid = !token.is_empty()
+            && token.len() <= MAX_CORRELATION_BYTES
+            && token.bytes().all(|b| b.is_ascii_graphic() || b == b' ');
+        if !valid {
+            // No call was made, so no operation is recorded: the error is
+            // returned as a plain value, like a limit or credential error.
+            return Err(HttpError::new(
+                HttpErrorKind::Validation,
+                Method::Post,
+                Endpoint::Unknown,
+                Stage::NotStarted,
+            )
+            .with_detail("a correlation token is 1 to 64 bytes of printable ASCII")
+            .into());
+        }
+        Ok(Self {
+            correlation: Some(token),
+            ..self.clone()
+        })
+    }
+
+    /// Stop admitting new dispatches and wait up to `deadline` for the
+    /// dispatches in flight to deliver their outcomes. Reads are not
+    /// awaited: their callers hold their futures. If the deadline passes
+    /// first, the remaining dispatches keep running on the runtime and
+    /// still deliver to the stream or the ring.
+    pub async fn close(&self, deadline: Duration) -> std::result::Result<(), CloseError> {
+        self.transport.closing.store(true, Ordering::Release);
+        let until = tokio::time::Instant::now() + deadline;
+        loop {
+            let notified = self.transport.drained.notified();
+            let in_flight = self.transport.dispatches.load(Ordering::Acquire);
+            if in_flight == 0 {
+                return Ok(());
+            }
+            if tokio::time::timeout_at(until, notified).await.is_err() {
+                let in_flight = self.transport.dispatches.load(Ordering::Acquire);
+                if in_flight == 0 {
+                    return Ok(());
+                }
+                return Err(CloseError { in_flight });
+            }
+        }
+    }
+
+    /// The source identity this client's responses and errors carry; every
+    /// clone and derived handle shares it.
+    pub fn source_identity(&self) -> &SourceIdentity {
+        &self.transport.identity
     }
 
     /// The observability scope this client records in.
@@ -452,6 +683,37 @@ impl HTTPClient {
         Ok(self.with_credentials(credentials))
     }
 
+    /// A client sharing this client's transport, admission scope and
+    /// credentials whose every call is admitted on the lane `priority`,
+    /// in place of each operation's default. The original client is
+    /// unchanged.
+    ///
+    /// `Control` traffic may use a class's whole rate; `Standard` traffic
+    /// leaves the control reserve (`B-HTTP-15`) untouched. Mark the calls
+    /// your application cannot afford to have queued behind its own polling,
+    /// such as the order-book read that confirms a cancellation:
+    ///
+    /// ```no_run
+    /// use manja::kite::connect::admission::Priority;
+    /// # use manja::kite::connect::client::HTTPClient;
+    /// # async fn run(client: HTTPClient) -> Result<(), Box<dyn std::error::Error>> {
+    /// let control = client.with_priority(Priority::Control);
+    /// let orders = control.orders().list_orders().await?;
+    /// # Ok(()) }
+    /// ```
+    pub fn with_priority(&self, priority: Priority) -> Self {
+        Self {
+            priority: Some(priority),
+            ..self.clone()
+        }
+    }
+
+    /// The lane an operation on this client is admitted on.
+    fn priority_of(&self, method: Method, endpoint: Endpoint) -> Priority {
+        self.priority
+            .unwrap_or_else(|| Priority::default_for(method, endpoint))
+    }
+
     /// The credential snapshot, if any.
     pub fn credentials(&self) -> Option<&Credentials> {
         self.credentials.as_ref()
@@ -462,25 +724,16 @@ impl HTTPClient {
         &self.transport.config
     }
 
-    /// Admit capacity for `target` now, returning a [`DispatchPermit`] to
-    /// pass to the matching operation.
-    ///
-    /// This is the explicit point between admission and dispatch: the
-    /// caller may run its own checks before using the permit. The permit
-    /// expires after `B-HTTP-12`; dropping it unused returns its capacity.
-    pub async fn admit(&self, target: PermitTarget) -> Result<DispatchPermit> {
-        Ok(self
-            .transport
-            .scheduler
-            .admit(&self.transport.admission, target, &self.transport.obs)
-            .await?)
-    }
-
     /// A bounded diagnostics snapshot of this client's transport.
     pub fn diagnostics(&self) -> HttpDiagnostics {
         let failures = self
             .transport
             .failures
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let outcomes = self
+            .transport
+            .outcomes
             .lock()
             .unwrap_or_else(|e| e.into_inner());
         HttpDiagnostics {
@@ -496,6 +749,10 @@ impl HTTPClient {
                 .collect(),
             last_failures: failures.entries(),
             snapshot_revision: failures.revision(),
+            dispatches_in_flight: self.transport.dispatches.load(Ordering::Acquire),
+            orphaned_outcomes: outcomes.ring.entries(),
+            orphaned_outcome_count: outcomes.orphaned,
+            outcome_stream_dropped: outcomes.shared.dropped.load(Ordering::Acquire),
         }
     }
 
@@ -572,21 +829,21 @@ impl HTTPClient {
             reqwest::Method::GET,
             path,
             BodyKind::Csv,
-            None,
             true,
             |rb| rb,
-            |status, body| classify_text(status, body, m, endpoint).and_then(|t| parse(&t)),
+            |facts, body| {
+                classify_text(facts.http_status, body, m, endpoint).and_then(|t| parse(&t))
+            },
         )
         .await
     }
 
     /// GET `path` and decode the response envelope.
-    pub(crate) async fn get<Model>(&self, path: &str) -> Result<KiteApiResponse<Model>>
+    pub(crate) async fn get<Model>(&self, path: &str) -> Result<Response<Model>>
     where
         Model: DeserializeOwned,
     {
-        self.json(reqwest::Method::GET, path, None, true, |rb| rb)
-            .await
+        self.json(reqwest::Method::GET, path, true, |rb| rb).await
     }
 
     /// GET `path` with a query and decode the response envelope.
@@ -594,55 +851,240 @@ impl HTTPClient {
         &self,
         path: &str,
         query: &Q,
-    ) -> Result<KiteApiResponse<Model>>
+    ) -> Result<Response<Model>>
     where
         Q: Serialize + ?Sized,
         Model: DeserializeOwned,
     {
-        self.json(reqwest::Method::GET, path, None, true, |rb| rb.query(query))
+        self.json(reqwest::Method::GET, path, true, |rb| rb.query(query))
             .await
     }
 
-    /// Send `pairs` form-encoded (`application/x-www-form-urlencoded`,
-    /// `kite:response-structure.md:2`) and decode the
-    /// response envelope. `validate` runs first: an invalid request, or a
-    /// body over `B-HTTP-09`, fails before admission and sends nothing.
-    pub(crate) async fn send_form<Model>(
+    /// Dispatch a mutation: send its [`WireForm`] byte for byte as one
+    /// detached attempt and return the [`Dispatched`] future of its result.
+    ///
+    /// Synchronous up to the spawn: a `wire` error (the request failed
+    /// validation), a body over `B-HTTP-09`, a closing client, a missing
+    /// Tokio runtime, no free in-flight slot (`B-HTTP-10`) or an admission
+    /// refusal (D1) all return a refused `Dispatched` and send nothing.
+    /// Otherwise the attempt runs to completion on a task the client owns
+    /// and its outcome reaches the future, if alive, and the outcome stream
+    /// or orphan ring. With `auth` the client's `Authorization` header is
+    /// attached; the session operations send none. `ids` names the broker
+    /// identifiers a receipt carries, for the outcome record.
+    pub(crate) fn dispatch<Model>(
         &self,
-        method: reqwest::Method,
-        path: &str,
-        validate: std::result::Result<(), crate::kite::connect::models::RequestError>,
-        pairs: Vec<(&'static str, String)>,
-        permit: Option<DispatchPermit>,
-    ) -> Result<KiteApiResponse<Model>>
+        wire: std::result::Result<WireForm, HttpError>,
+        auth: bool,
+        ids: fn(&Model) -> ReceiptIds,
+    ) -> Dispatched<Model>
     where
-        Model: DeserializeOwned,
+        Model: DeserializeOwned + Send + 'static,
     {
-        let (m, endpoint) = labels(&method, path);
-        let rejected = |detail: &str| {
-            self.reject(
-                HttpError::new(HttpErrorKind::Validation, m, endpoint, Stage::NotStarted)
-                    .with_detail(detail),
-            )
+        let (m, endpoint) = match &wire {
+            Ok(wire) => (wire.method(), wire.endpoint()),
+            Err(e) => (e.method(), e.endpoint()),
         };
-        validate.map_err(|e| rejected(&e.to_string()))?;
-        let body = form_urlencode(&pairs);
-        if body.len() > self.transport.config.limits().request_body_bytes() {
-            return Err(rejected("the request body exceeds its bound"));
+        let guard = self.guard(m, endpoint);
+        let operation_id = guard.operation_id;
+        let correlation = self.correlation.clone();
+        let refuse = |guard: OpGuard, sha: Option<[u8; 32]>, err: HttpError| {
+            let err = match guard.finish::<()>(Err(err)) {
+                Err(e) => e,
+                Ok(()) => unreachable!("finish returns its input"),
+            };
+            Dispatched::refused(operation_id, correlation.clone(), sha, m, endpoint, err)
+        };
+        let not_started = |kind: HttpErrorKind, detail: &str| {
+            HttpError::new(kind, m, endpoint, Stage::NotStarted).with_detail(detail)
+        };
+        let wire = match wire {
+            Ok(wire) => wire,
+            Err(e) => return refuse(guard, None, e),
+        };
+        let sha = wire.sha256();
+        guard.span.record("wire_sha256", hex::encode(sha).as_str());
+        if wire.body_len() > self.transport.config.limits().request_body_bytes() {
+            return refuse(
+                guard,
+                Some(sha),
+                not_started(
+                    HttpErrorKind::Validation,
+                    "the request body exceeds its bound",
+                ),
+            );
         }
-        self.json(method, path, permit, true, |rb| {
-            if pairs.is_empty() {
-                // Nothing to send: no body and no content type.
-                rb
-            } else {
-                rb.header(
-                    reqwest::header::CONTENT_TYPE,
-                    "application/x-www-form-urlencoded",
+        if self.transport.closing.load(Ordering::Acquire) {
+            return refuse(
+                guard,
+                Some(sha),
+                not_started(HttpErrorKind::Admission, "the client is closing"),
+            );
+        }
+        let Ok(runtime) = tokio::runtime::Handle::try_current() else {
+            return refuse(
+                guard,
+                Some(sha),
+                not_started(
+                    HttpErrorKind::Configuration,
+                    "a mutation is dispatched from inside a Tokio runtime",
+                ),
+            );
+        };
+        let Ok(in_flight) = self.transport.in_flight.clone().try_acquire_owned() else {
+            return refuse(
+                guard,
+                Some(sha),
+                not_started(
+                    HttpErrorKind::Admission,
+                    "the in-flight bound (B-HTTP-10) is reached",
+                ),
+            );
+        };
+        let (_, order_id) = rate_key(m, endpoint, wire.path());
+        let spec = OpSpec {
+            method: m,
+            endpoint,
+            order_id: order_id.as_deref(),
+            priority: self.priority_of(m, endpoint),
+        };
+        let quota = spec.quota();
+        let class = spec.class();
+        let ctx = OpObs {
+            obs: &self.transport.obs,
+            span: &guard.span,
+            operation_id,
+            waiting: &self.transport.waiting[quota_index(quota)],
+        };
+        let grant = match self
+            .transport
+            .scheduler
+            .admit_now(&self.transport.admission, &spec, &ctx)
+        {
+            Ok(grant) => grant,
+            Err(e) => return refuse(guard, Some(sha), e),
+        };
+
+        // Admitted: from here the attempt belongs to the client.
+        let timeout = self.transport.scheduler.single_attempt_timeout(class);
+        let method = match m {
+            Method::Get => reqwest::Method::GET,
+            Method::Post => reqwest::Method::POST,
+            Method::Put => reqwest::Method::PUT,
+            Method::Delete => reqwest::Method::DELETE,
+        };
+        let target = wire.target();
+        let content_type = wire.content_type();
+        let body = wire.into_body();
+        let build = move |rb: reqwest::RequestBuilder| match content_type {
+            None => rb,
+            Some(content_type) => rb
+                .header(reqwest::header::CONTENT_TYPE, content_type)
+                .body(body.clone()),
+        };
+        let (sender, receiver) = tokio::sync::oneshot::channel();
+        let client = self.clone();
+        let transport = self.transport.clone();
+        let token = correlation.clone();
+        transport.dispatches.fetch_add(1, Ordering::AcqRel);
+        let task = async move {
+            let span = guard.span.clone();
+            let dispatched = guard.dispatched.clone();
+            let sent_at = guard.sent_at.clone();
+            let ctx = OpObs {
+                obs: &transport.obs,
+                span: &guard.span,
+                operation_id,
+                waiting: &transport.waiting[quota_index(quota)],
+            };
+            let mut in_flight = Some(in_flight);
+            let mut attempt = |ctx: AttemptCtx| {
+                let client = &client;
+                let build = &build;
+                let target = &target;
+                let method = &method;
+                let in_flight = in_flight.take();
+                let dispatched = &dispatched;
+                let sent_at = &sent_at;
+                async move {
+                    let number = ctx.number;
+                    let (status, body, stamps) = client
+                        .attempt(
+                            method,
+                            target,
+                            BodyKind::Json,
+                            auth,
+                            build,
+                            m,
+                            endpoint,
+                            ctx,
+                            dispatched,
+                            sent_at,
+                            in_flight,
+                        )
+                        .await?;
+                    let facts = AttemptFacts {
+                        operation_id,
+                        attempt: number,
+                        http_status: status,
+                        source: client.transport.identity.clone(),
+                        stamps,
+                    };
+                    classify_json(status, &body, m, endpoint)
+                        .map(|envelope| envelope.into_response(facts))
+                        .map_err(|e| {
+                            e.with_attempt(number)
+                                .with_sent_at(stamps.sent_at)
+                                .with_received_at(stamps.received_at)
+                        })
+                }
+            };
+            let result = transport
+                .scheduler
+                .one_attempt(
+                    OneAttempt {
+                        number: 1,
+                        grant,
+                        method: m,
+                        endpoint,
+                        quota,
+                        retry_of: None,
+                        timeout,
+                    },
+                    &ctx,
+                    &mut attempt,
                 )
-                .body(body.clone())
-            }
-        })
-        .await
+                .instrument(span)
+                .await;
+            let result = guard.finish(result);
+            let outcome = Outcome::of(
+                &result,
+                &transport.identity,
+                operation_id,
+                token,
+                m,
+                endpoint,
+                sha,
+                ids,
+            );
+            let orphaned = sender
+                .send(Delivery {
+                    result,
+                    outcome: outcome.clone(),
+                })
+                .is_err();
+            transport
+                .outcomes
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .deliver(outcome, orphaned);
+            transport.dispatches.fetch_sub(1, Ordering::AcqRel);
+            transport.drained.notify_waiters();
+        };
+        runtime.spawn(task);
+        let weak: Weak<Transport> = Arc::downgrade(&self.transport);
+        let sink: Weak<dyn OrphanSink> = weak;
+        Dispatched::in_flight(operation_id, correlation, sha, m, endpoint, receiver, sink)
     }
 
     /// Send `body` as JSON (the margin and charges endpoints,
@@ -655,7 +1097,7 @@ impl HTTPClient {
         path: &str,
         validate: std::result::Result<(), crate::kite::connect::models::RequestError>,
         body: &T,
-    ) -> Result<KiteApiResponse<Model>>
+    ) -> Result<Response<Model>>
     where
         Model: DeserializeOwned,
         T: Serialize + ?Sized,
@@ -673,55 +1115,17 @@ impl HTTPClient {
         if body.len() > self.transport.config.limits().request_body_bytes() {
             return Err(rejected("the request body exceeds its bound"));
         }
-        self.json(method, path, None, true, |rb| {
+        self.json(method, path, true, |rb| {
             rb.header(reqwest::header::CONTENT_TYPE, "application/json")
                 .body(body.clone())
         })
         .await
     }
 
-    /// Form-encoded request without the client's `Authorization` header,
-    /// for the session operations.
-    pub(crate) async fn send_form_unauthenticated<Model>(
-        &self,
-        method: reqwest::Method,
-        path: &str,
-        pairs: Vec<(&'static str, String)>,
-    ) -> Result<KiteApiResponse<Model>>
-    where
-        Model: DeserializeOwned,
-    {
-        let body = form_urlencode(&pairs);
-        drop(pairs);
-        self.json(method, path, None, false, |rb| {
-            rb.header(
-                reqwest::header::CONTENT_TYPE,
-                "application/x-www-form-urlencoded",
-            )
-            .body(body.clone())
-        })
-        .await
-    }
-
-    /// DELETE with query parameters and without the client's
-    /// `Authorization` header, for session invalidation.
-    pub(crate) async fn delete_unauthenticated<Model>(
-        &self,
-        path: &str,
-        query: &[(&str, &str)],
-    ) -> Result<KiteApiResponse<Model>>
-    where
-        Model: DeserializeOwned,
-    {
-        self.json(reqwest::Method::DELETE, path, None, false, |rb| {
-            rb.query(query)
-        })
-        .await
-    }
-
-    fn guard(&self, method: Method, endpoint: Endpoint) -> OpGuard<'_> {
+    fn guard(&self, method: Method, endpoint: Endpoint) -> OpGuard {
         let class = RetryClass::of(method, endpoint);
         let quota = class.quota_class();
+        let priority = self.priority_of(method, endpoint);
         let operation_id = self.transport.obs.next_operation_id();
         let deadline = self.transport.scheduler.limits().deadline(class);
         let span = tracing::debug_span!(
@@ -730,12 +1134,19 @@ impl HTTPClient {
             method = method.as_str(),
             endpoint = endpoint.as_str(),
             quota_class = quota.as_str(),
+            priority = PriorityLabel::from(priority).as_str(),
             deadline_ms = deadline.as_millis().min(u64::MAX as u128) as u64,
             result = tracing::field::Empty,
             stage = tracing::field::Empty,
+            admission_cause = tracing::field::Empty,
+            correlation = tracing::field::Empty,
+            wire_sha256 = tracing::field::Empty,
         );
+        if let Some(token) = &self.correlation {
+            span.record("correlation", token.as_str());
+        }
         OpGuard {
-            transport: &self.transport,
+            transport: self.transport.clone(),
             method,
             endpoint,
             quota,
@@ -743,6 +1154,7 @@ impl HTTPClient {
             operation_id,
             started: tokio::time::Instant::now(),
             dispatched: Arc::new(AtomicBool::new(false)),
+            sent_at: Arc::new(Mutex::new(None)),
             done: false,
         }
     }
@@ -773,7 +1185,7 @@ impl HTTPClient {
         &self,
         path: &str,
         policy: RowPolicy,
-    ) -> Result<KiteApiResponse<Rows<T>>>
+    ) -> Result<Response<Rows<T>>>
     where
         T: DeserializeOwned,
     {
@@ -783,17 +1195,16 @@ impl HTTPClient {
             reqwest::Method::GET,
             path,
             BodyKind::Json,
-            None,
             true,
             |rb| rb,
-            |status, body| {
+            |facts, body| {
+                let status = facts.http_status;
                 let envelope = classify_json::<Value>(status, body, m, endpoint)?;
                 let decode = |detail: String| {
                     http_error(HttpErrorKind::Decode, status, m, endpoint).with_detail(&detail)
                 };
-                let elements: Vec<Value> =
-                    serde_json::from_value(envelope.data.unwrap_or(Value::Null))
-                        .map_err(|e| decode(payload_mismatch(&e)))?;
+                let elements: Vec<Value> = serde_json::from_value(envelope.data)
+                    .map_err(|e| decode(payload_mismatch(&e)))?;
                 let total = elements.len();
                 let rows: Vec<Row<T>> = elements
                     .into_iter()
@@ -824,12 +1235,11 @@ impl HTTPClient {
                         "{rejected} of {total} rows rejected; first at index {first}"
                     )));
                 }
-                Ok(KiteApiResponse {
-                    status: envelope.status,
-                    data: Some(rows),
+                Ok(Envelope {
+                    data: rows,
                     message: envelope.message,
-                    error_type: None,
-                })
+                }
+                .into_response(facts))
             },
         )
         .await
@@ -839,50 +1249,44 @@ impl HTTPClient {
         &self,
         method: reqwest::Method,
         path: &str,
-        permit: Option<DispatchPermit>,
         auth: bool,
         build: B,
-    ) -> Result<KiteApiResponse<Model>>
+    ) -> Result<Response<Model>>
     where
         Model: DeserializeOwned,
         B: Fn(reqwest::RequestBuilder) -> reqwest::RequestBuilder,
     {
         let (m, endpoint) = labels(&method, path);
-        self.operation(
-            method,
-            path,
-            BodyKind::Json,
-            permit,
-            auth,
-            build,
-            |status, body| classify_json(status, body, m, endpoint),
-        )
+        self.operation(method, path, BodyKind::Json, auth, build, |facts, body| {
+            classify_json(facts.http_status, body, m, endpoint)
+                .map(|envelope| envelope.into_response(facts))
+        })
         .await
     }
 
     /// Run one logical operation inside its span: every attempt's response
-    /// is classified by `classify`, so the scheduler and the attempt
-    /// accounting see the final result of each attempt.
+    /// is classified by `classify`, with the facts of that attempt, so the
+    /// scheduler and the attempt accounting see the final result of each
+    /// attempt.
     #[allow(clippy::too_many_arguments)]
     async fn operation<T, B, C>(
         &self,
         method: reqwest::Method,
         path: &str,
         kind: BodyKind,
-        permit: Option<DispatchPermit>,
         auth: bool,
         build: B,
         classify: C,
     ) -> Result<T>
     where
         B: Fn(reqwest::RequestBuilder) -> reqwest::RequestBuilder,
-        C: Fn(u16, &[u8]) -> std::result::Result<T, HttpError>,
+        C: Fn(AttemptFacts, &[u8]) -> std::result::Result<T, HttpError>,
     {
         let (m, endpoint) = labels(&method, path);
         let guard = self.guard(m, endpoint);
         let span = guard.span.clone();
         let result = self
-            .execute(method, path, kind, permit, auth, &guard, build, classify)
+            .execute(method, path, kind, auth, &guard, build, classify)
             .instrument(span)
             .await;
         Ok(guard.finish(result)?)
@@ -896,15 +1300,14 @@ impl HTTPClient {
         method: reqwest::Method,
         path: &str,
         kind: BodyKind,
-        permit: Option<DispatchPermit>,
         auth: bool,
-        guard: &OpGuard<'_>,
+        guard: &OpGuard,
         build: B,
         classify: C,
     ) -> std::result::Result<T, HttpError>
     where
         B: Fn(reqwest::RequestBuilder) -> reqwest::RequestBuilder,
-        C: Fn(u16, &[u8]) -> std::result::Result<T, HttpError>,
+        C: Fn(AttemptFacts, &[u8]) -> std::result::Result<T, HttpError>,
     {
         let (m, endpoint) = (guard.method, guard.endpoint);
         let (_, order_id) = rate_key(m, endpoint, path);
@@ -912,6 +1315,7 @@ impl HTTPClient {
             method: m,
             endpoint,
             order_id: order_id.as_deref(),
+            priority: self.priority_of(m, endpoint),
         };
         let ctx = OpObs {
             obs: &self.transport.obs,
@@ -921,31 +1325,39 @@ impl HTTPClient {
         };
         let (build, classify, method) = (&build, &classify, &method);
         let op_dispatched = &guard.dispatched;
+        let op_sent_at = &guard.sent_at;
         self.transport
             .scheduler
-            .run(
-                spec,
-                &self.transport.admission,
-                permit,
-                &ctx,
-                |ctx| async move {
-                    let number = ctx.number;
-                    let (status, body) = self
-                        .attempt(
-                            method,
-                            path,
-                            kind,
-                            auth,
-                            build,
-                            m,
-                            endpoint,
-                            ctx,
-                            op_dispatched,
-                        )
-                        .await?;
-                    classify(status, &body).map_err(|e| e.with_attempt(number))
-                },
-            )
+            .run(spec, &self.transport.admission, &ctx, |ctx| async move {
+                let number = ctx.number;
+                let (status, body, stamps) = self
+                    .attempt(
+                        method,
+                        path,
+                        kind,
+                        auth,
+                        build,
+                        m,
+                        endpoint,
+                        ctx,
+                        op_dispatched,
+                        op_sent_at,
+                        None,
+                    )
+                    .await?;
+                let facts = AttemptFacts {
+                    operation_id: guard.operation_id,
+                    attempt: number,
+                    http_status: status,
+                    source: self.transport.identity.clone(),
+                    stamps,
+                };
+                classify(facts, &body).map_err(|e| {
+                    e.with_attempt(number)
+                        .with_sent_at(stamps.sent_at)
+                        .with_received_at(stamps.received_at)
+                })
+            })
             .await
     }
 
@@ -962,7 +1374,9 @@ impl HTTPClient {
         endpoint: Endpoint,
         ctx: AttemptCtx,
         op_dispatched: &AtomicBool,
-    ) -> std::result::Result<(u16, Vec<u8>), HttpError>
+        op_sent_at: &Mutex<Option<IngressStamp>>,
+        in_flight: Option<tokio::sync::OwnedSemaphorePermit>,
+    ) -> std::result::Result<(u16, Vec<u8>, AttemptStamps), HttpError>
     where
         B: Fn(reqwest::RequestBuilder) -> reqwest::RequestBuilder,
     {
@@ -973,13 +1387,17 @@ impl HTTPClient {
                 .with_attempt(attempt)
                 .with_detail(detail)
         };
-        let _in_flight = self
-            .transport
-            .in_flight
-            .clone()
-            .acquire_owned()
-            .await
-            .map_err(|_| not_started(HttpErrorKind::Admission, "the transport is closed"))?;
+        // A dispatch took its slot before spawning; a read takes it here.
+        let _in_flight = match in_flight {
+            Some(permit) => permit,
+            None => self
+                .transport
+                .in_flight
+                .clone()
+                .acquire_owned()
+                .await
+                .map_err(|_| not_started(HttpErrorKind::Admission, "the transport is closed"))?,
+        };
         let url = self.transport.config.url(path);
         let mut rb = self
             .transport
@@ -1005,15 +1423,19 @@ impl HTTPClient {
             .with_source(e.without_url())
         })?;
         // Dispatch now: the admitted capacity is used, and from here on the
-        // broker may receive the request.
+        // broker may receive the request. The stamp is the last instant
+        // before the bytes leave the process.
         let span = token.dispatch();
+        let sent_at = self.transport.stamp();
+        *op_sent_at.lock().unwrap_or_else(|p| p.into_inner()) = Some(sent_at);
         op_dispatched.store(true, Ordering::Release);
-        self.receive(request, kind, m, endpoint, attempt, &span)
+        self.receive(request, kind, m, endpoint, attempt, &span, sent_at)
             .instrument(span.clone())
             .await
     }
 
     // The dispatched part of an attempt, inside its span.
+    #[allow(clippy::too_many_arguments)]
     async fn receive(
         &self,
         request: reqwest::Request,
@@ -1022,7 +1444,8 @@ impl HTTPClient {
         endpoint: Endpoint,
         attempt: u32,
         span: &Span,
-    ) -> std::result::Result<(u16, Vec<u8>), HttpError> {
+        sent_at: IngressStamp,
+    ) -> std::result::Result<(u16, Vec<u8>, AttemptStamps), HttpError> {
         let mut response = self.transport.http.execute(request).await.map_err(|e| {
             // A connect failure is affirmative evidence that no request
             // bytes left the process; anything later is not.
@@ -1033,6 +1456,11 @@ impl HTTPClient {
             };
             let err =
                 HttpError::new(HttpErrorKind::Transport, m, endpoint, stage).with_attempt(attempt);
+            let err = if stage == Stage::Started {
+                err.with_sent_at(sent_at)
+            } else {
+                err
+            };
             let err = if e.is_timeout() {
                 err.with_timeout()
             } else {
@@ -1040,6 +1468,11 @@ impl HTTPClient {
             };
             err.with_source(e.without_url())
         })?;
+        // The response head is in hand: the response was received.
+        let stamps = AttemptStamps {
+            sent_at,
+            received_at: self.transport.stamp(),
+        };
         let status = response.status().as_u16();
         span.record("http_status", status);
         let limit = match kind {
@@ -1050,6 +1483,8 @@ impl HTTPClient {
             HttpError::new(kind, m, endpoint, Stage::ResponseReceived)
                 .with_status(status)
                 .with_attempt(attempt)
+                .with_sent_at(stamps.sent_at)
+                .with_received_at(stamps.received_at)
         };
         if response.content_length().is_some_and(|n| n > limit as u64) {
             return Err(
@@ -1079,8 +1514,15 @@ impl HTTPClient {
                 }
             }
         }
-        Ok((status, body))
+        Ok((status, body, stamps))
     }
+}
+
+/// The two instants of one dispatched attempt whose response head arrived.
+#[derive(Clone, Copy)]
+pub(crate) struct AttemptStamps {
+    pub(crate) sent_at: IngressStamp,
+    pub(crate) received_at: IngressStamp,
 }
 
 #[derive(Clone, Copy)]
@@ -1095,33 +1537,6 @@ pub(crate) fn credentials_from_session(session: &UserSession) -> Result<Credenti
         ApiKey::new(session.api_key.expose_secret().as_str())?,
         AccessToken::new(session.access_token.expose_secret().as_str())?,
     ))
-}
-
-/// Encode form fields as `application/x-www-form-urlencoded`: ASCII letters,
-/// digits and `*-._` are kept, a space becomes `+`, and every other byte is
-/// percent-encoded.
-pub(crate) fn form_urlencode(pairs: &[(&str, String)]) -> String {
-    fn enc(out: &mut String, s: &str) {
-        for b in s.bytes() {
-            match b {
-                b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'*' | b'-' | b'.' | b'_' => {
-                    out.push(b as char)
-                }
-                b' ' => out.push('+'),
-                _ => out.push_str(&format!("%{b:02X}")),
-            }
-        }
-    }
-    let mut out = String::new();
-    for (i, (k, v)) in pairs.iter().enumerate() {
-        if i > 0 {
-            out.push('&');
-        }
-        enc(&mut out, k);
-        out.push('=');
-        enc(&mut out, v);
-    }
-    out
 }
 
 /// The rate class of a request and, for a modification, its order ID.
@@ -1243,7 +1658,7 @@ pub(crate) fn classify_json<T: DeserializeOwned>(
     body: &[u8],
     method: Method,
     endpoint: Endpoint,
-) -> std::result::Result<KiteApiResponse<T>, HttpError> {
+) -> std::result::Result<Envelope<T>, HttpError> {
     let parsed: std::result::Result<Value, _> = serde_json::from_slice(body);
     if !(200..300).contains(&status) {
         return Err(match parsed {
@@ -1275,15 +1690,48 @@ pub(crate) fn classify_json<T: DeserializeOwned>(
         Some(d) => d.clone(),
     };
     let data: T = serde_json::from_value(data).map_err(|e| decode(payload_mismatch(&e)))?;
-    Ok(KiteApiResponse {
-        status: "success".to_string(),
-        data: Some(data),
+    Ok(Envelope {
+        data,
         message: obj
             .get("message")
             .and_then(Value::as_str)
             .map(str::to_string),
-        error_type: None,
     })
+}
+
+/// A classified success envelope: the data and Kite's optional message. The
+/// operation path turns it into a [`Response`] with the call's facts.
+#[derive(Debug)]
+pub(crate) struct Envelope<T> {
+    pub(crate) data: T,
+    pub(crate) message: Option<String>,
+}
+
+/// The facts of one attempt's response, handed to the classifier.
+#[derive(Clone)]
+pub(crate) struct AttemptFacts {
+    pub(crate) operation_id: u64,
+    pub(crate) attempt: u32,
+    pub(crate) http_status: u16,
+    pub(crate) source: SourceIdentity,
+    pub(crate) stamps: AttemptStamps,
+}
+
+impl<T> Envelope<T> {
+    fn into_response(self, facts: AttemptFacts) -> Response<T> {
+        Response {
+            data: self.data,
+            meta: ResponseMeta {
+                message: self.message,
+                http_status: facts.http_status,
+                operation_id: facts.operation_id,
+                attempt: facts.attempt,
+                source: facts.source,
+                sent_at: facts.stamps.sent_at,
+                received_at: facts.stamps.received_at,
+            },
+        }
+    }
 }
 
 /// Total classification of a text (CSV) response.

@@ -69,8 +69,7 @@ async fn the_order_list_decodes_every_documented_field() {
         .list_orders()
         .await
         .unwrap()
-        .data
-        .unwrap();
+        .data;
     let r = only(&h);
     assert_eq!(
         (r.method.as_str(), r.target.as_str()),
@@ -132,8 +131,7 @@ async fn one_order_is_fetched_by_its_uuid() {
         .get_order(&MfOrderId::new("2b6ad4b7-c84e-4c76-b459-f3a8994184f1").unwrap())
         .await
         .unwrap()
-        .data
-        .unwrap();
+        .data;
     assert_eq!(
         only(&h).target,
         "/mf/orders/2b6ad4b7-c84e-4c76-b459-f3a8994184f1"
@@ -166,8 +164,7 @@ async fn the_sip_list_decodes_every_documented_field() {
         .list_sips()
         .await
         .unwrap()
-        .data
-        .unwrap();
+        .data;
     assert_eq!(only(&h).target, "/mf/sips");
     assert_eq!(sips.len(), 5);
 
@@ -219,8 +216,7 @@ async fn holdings_decode_and_an_empty_nav_date_is_none() {
         .list_holdings()
         .await
         .unwrap()
-        .data
-        .unwrap();
+        .data;
     assert_eq!(only(&h).target, "/mf/holdings");
     assert_eq!(holdings.len(), 3);
     let x = &holdings[0];
@@ -342,8 +338,7 @@ async fn an_unknown_status_is_preserved() {
         .get_order(&MfOrderId::new("2b6ad4b7-c84e-4c76-b459-f3a8994184f1").unwrap())
         .await
         .unwrap()
-        .data
-        .unwrap();
+        .data;
     let status = o.status.unwrap();
     assert!(status.is_unknown());
     assert_eq!(status.as_wire(), "PROCESSING");
@@ -366,8 +361,7 @@ async fn reads_retry_a_transient_failure() {
         .list_holdings()
         .await
         .unwrap()
-        .data
-        .unwrap();
+        .data;
     assert_eq!(holdings.len(), 3);
     assert_eq!(h.requests().len(), 2);
 }

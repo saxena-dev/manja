@@ -56,8 +56,7 @@ async fn full_quote() {
         .get_quotes::<FullQuote>(&["NSE:INFY"])
         .await
         .unwrap()
-        .data
-        .unwrap();
+        .data;
     let r = only(&h);
     assert_eq!(
         (r.method.as_str(), r.target.as_str()),
@@ -88,8 +87,7 @@ async fn ohlc_and_ltp_quotes() {
         .get_quotes::<OHLCQuote>(&["NSE:INFY"])
         .await
         .unwrap()
-        .data
-        .unwrap();
+        .data;
     assert_eq!(only(&h).target, "/quote/ohlc?i=NSE%3AINFY");
     assert_eq!(quotes.get("NSE:INFY").unwrap().last_price, 1075.0);
 
@@ -99,8 +97,7 @@ async fn ohlc_and_ltp_quotes() {
         .get_quotes::<LTPQuote>(&["NSE:INFY"])
         .await
         .unwrap()
-        .data
-        .unwrap();
+        .data;
     assert_eq!(only(&h).target, "/quote/ltp?i=NSE%3AINFY");
     assert_eq!(quotes.get("NSE:INFY").unwrap().last_price, 1074.35);
 }
@@ -114,8 +111,7 @@ async fn every_key_is_sent_and_missing_keys_are_reported_not_zeroed() {
         .get_quotes::<LTPQuote>(&["NSE:INFY", "BSE:SENSEX"])
         .await
         .unwrap()
-        .data
-        .unwrap();
+        .data;
     assert_eq!(only(&h).target, "/quote/ltp?i=NSE%3AINFY&i=BSE%3ASENSEX");
     assert_eq!(quotes.requested, ["NSE:INFY", "BSE:SENSEX"]);
     assert_eq!(quotes.missing, ["BSE:SENSEX"]);
@@ -136,8 +132,7 @@ async fn unrequested_keys_are_reported_as_unexpected() {
         .get_quotes::<LTPQuote>(&["NSE:INFY"])
         .await
         .unwrap()
-        .data
-        .unwrap();
+        .data;
     assert_eq!(quotes.missing, ["NSE:INFY"]);
     assert_eq!(quotes.unexpected, ["NSE:TCS"]);
 }
@@ -173,12 +168,7 @@ async fn limits_are_enforced_by_explicit_rejection() {
     }
     assert!(h.requests().is_empty(), "nothing was sent or truncated");
     // At the limit, every key goes out.
-    let quotes = m
-        .get_quotes::<LTPQuote>(&refs[..1000])
-        .await
-        .unwrap()
-        .data
-        .unwrap();
+    let quotes = m.get_quotes::<LTPQuote>(&refs[..1000]).await.unwrap().data;
     let r = only(&h);
     assert_eq!(r.target.matches("i=").count(), 1000);
     assert_eq!(quotes.missing.len(), 1000);

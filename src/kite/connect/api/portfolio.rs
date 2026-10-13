@@ -12,11 +12,11 @@
 
 use crate::kite::connect::{
     client::HTTPClient,
+    dispatch::{Dispatched, ReceiptIds},
     models::{
-        Auction, Holding, HoldingsAuthorisation, HoldingsAuthorisationRequest, KiteApiResponse,
-        PositionConversionRequest, Positions,
+        Auction, Holding, HoldingsAuthorisation, HoldingsAuthorisationRequest,
+        PositionConversionRequest, Positions, Response,
     },
-    scheduler::DispatchPermit,
 };
 use crate::kite::error::Result;
 
@@ -38,8 +38,8 @@ use crate::kite::error::Result;
 /// # async fn run() -> Result<(), Box<dyn std::error::Error>> {
 /// let client = HTTPClient::new(Config::default())?
 ///     .with_credentials(Credentials::new("api_key", "access_token")?);
-/// let holdings = client.portfolio().get_holdings().await?.data.unwrap_or_default();
-/// let positions = client.portfolio().get_positions().await?.data.expect("data");
+/// let holdings = client.portfolio().get_holdings().await?.data;
+/// let positions = client.portfolio().get_positions().await?.data;
 /// println!("{} holdings, {} net positions", holdings.len(), positions.net.len());
 /// # Ok(()) }
 /// ```
@@ -73,7 +73,7 @@ impl<'c> Portfolio<'c> {
     /// Underneath it all, instruments in the holdings reside in the user's
     /// DEMAT account, as settled by exchanges and clearing institutions.
     ///
-    pub async fn get_holdings(&self) -> Result<KiteApiResponse<Vec<Holding>>> {
+    pub async fn get_holdings(&self) -> Result<Response<Vec<Holding>>> {
         self.client.get("/portfolio/holdings").await
     }
 
@@ -90,7 +90,7 @@ impl<'c> Portfolio<'c> {
     /// of the buying and selling activity for that particular day. This is
     /// useful for computing intraday profits and losses for trading strategies.
     ///
-    pub async fn get_positions(&self) -> Result<KiteApiResponse<Positions>> {
+    pub async fn get_positions(&self) -> Result<Response<Positions>> {
         self.client.get("/portfolio/positions").await
     }
 
@@ -98,38 +98,10 @@ impl<'c> Portfolio<'c> {
     /// `PUT /portfolio/positions`, form-encoded, one attempt.
     ///
     /// The request is validated first; an invalid one sends nothing. The
-    /// `true` result is the broker's response.
-    pub async fn convert_position(
-        &self,
-        request: &PositionConversionRequest,
-    ) -> Result<KiteApiResponse<bool>> {
-        self.convert(request, None).await
-    }
-
-    /// [`Self::convert_position`] with admitted capacity from
-    /// `HTTPClient::admit(PermitTarget::ConvertPosition)`.
-    pub async fn convert_position_with_permit(
-        &self,
-        request: &PositionConversionRequest,
-        permit: DispatchPermit,
-    ) -> Result<KiteApiResponse<bool>> {
-        self.convert(request, Some(permit)).await
-    }
-
-    async fn convert(
-        &self,
-        request: &PositionConversionRequest,
-        permit: Option<DispatchPermit>,
-    ) -> Result<KiteApiResponse<bool>> {
-        self.client
-            .send_form(
-                reqwest::Method::PUT,
-                "/portfolio/positions",
-                request.validate(),
-                request.form_pairs(),
-                permit,
-            )
-            .await
+    /// `true` result is the broker's response. The bytes sent are exactly
+    /// those of [`PositionConversionRequest::wire`].
+    pub fn convert_position(&self, request: &PositionConversionRequest) -> Dispatched<bool> {
+        self.client.dispatch(request.wire(), true, ReceiptIds::none)
     }
 
     /// Retrieve the list of auctions that are currently being held.
@@ -140,7 +112,7 @@ impl<'c> Portfolio<'c> {
     /// the quantity of the security being offered. Only the stocks that
     /// you hold in your demat account will be shown in the auctions list.
     ///
-    pub async fn get_auctions(&self) -> Result<KiteApiResponse<Vec<Auction>>> {
+    pub async fn get_auctions(&self) -> Result<Response<Vec<Auction>>> {
         self.client.get("/portfolio/holdings/auctions").await
     }
 
@@ -153,19 +125,12 @@ impl<'c> Portfolio<'c> {
     /// Send the user to [`HoldingsAuthorisation::portal_url`] to key in their
     /// demat PIN, then retry the order. The SDK opens no browser and does not
     /// retry anything. An ISIN that is not 12 ASCII uppercase letters or
-    /// digits is a `Validation` error, and nothing is sent.
-    pub async fn authorise_holdings(
+    /// digits is a `Validation` error, and nothing is sent. The bytes sent
+    /// are exactly those of [`HoldingsAuthorisationRequest::wire`].
+    pub fn authorise_holdings(
         &self,
         request: &HoldingsAuthorisationRequest,
-    ) -> Result<KiteApiResponse<HoldingsAuthorisation>> {
-        self.client
-            .send_form(
-                reqwest::Method::POST,
-                "/portfolio/holdings/authorise",
-                request.validate(),
-                request.form_pairs(),
-                None,
-            )
-            .await
+    ) -> Dispatched<HoldingsAuthorisation> {
+        self.client.dispatch(request.wire(), true, ReceiptIds::none)
     }
 }

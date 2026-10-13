@@ -13,7 +13,7 @@ use manja::kite::connect::config::Config;
 use manja::kite::connect::credentials::{ApiKey, Credentials};
 use manja::kite::connect::models::{
     Exchange, HoldingsAuthorisation, HoldingsAuthorisationRequest, OrderType, OrderVariety,
-    PlaceOrderRequest, ProductType, TransactionType,
+    PlaceOrderRequest, ProductType, Tag, TransactionType,
 };
 use manja::kite::connect::scheduler::RetryClass;
 use manja::kite::error::{HttpErrorKind, TransportStage};
@@ -52,8 +52,7 @@ async fn named_holdings_are_sent_as_isin_and_quantity_pairs() {
         .authorise_holdings(&two_isins())
         .await
         .unwrap()
-        .data
-        .unwrap();
+        .data;
     assert_eq!(auth.request_id, "na8QgCeQm05UHG6NL9sAGRzdfSF64UdB");
     let r = only(&h);
     assert_eq!(
@@ -109,7 +108,7 @@ async fn a_malformed_isin_sends_nothing() {
             .authorise_holdings(&request)
             .await
             .unwrap_err();
-        let e = err.as_http().unwrap();
+        let e = err;
         assert_eq!(e.kind(), HttpErrorKind::Validation, "{bad:?}");
         assert_eq!(e.stage(), TransportStage::NotStarted);
         assert_eq!(e.endpoint(), Endpoint::HoldingsAuthorise);
@@ -129,7 +128,7 @@ async fn a_lost_response_is_not_resubmitted() {
         .authorise_holdings(&two_isins())
         .await
         .unwrap_err();
-    assert_eq!(err.as_http().unwrap().stage(), TransportStage::Started);
+    assert_eq!(err.stage(), TransportStage::Started);
     assert_eq!(h.requests().len(), 1, "exactly one attempt");
 }
 
@@ -154,6 +153,7 @@ async fn a_sell_order_refused_with_428_asks_for_authorisation() {
         OrderType::Limit,
         Quantity::new(10).unwrap(),
         ProductType::CashAndCarry,
+        Tag::new("t1").unwrap(),
     );
     sell.price = Some(1500.0);
     let err = client(&h.base_url())
@@ -161,7 +161,7 @@ async fn a_sell_order_refused_with_428_asks_for_authorisation() {
         .place_order(&sell)
         .await
         .unwrap_err();
-    let e = err.as_http().unwrap();
+    let e = err;
     assert_eq!(e.http_status(), Some(428));
     assert!(e.requires_holdings_authorisation());
     assert_eq!(h.requests().len(), 1, "a placement is never retried");
@@ -186,7 +186,7 @@ async fn a_429_is_not_retried() {
         .authorise_holdings(&two_isins())
         .await
         .unwrap_err();
-    assert_eq!(err.as_http().unwrap().http_status(), Some(429));
+    assert_eq!(err.http_status(), Some(429));
     assert_eq!(h.requests().len(), 1, "a mutation makes one attempt");
 }
 
@@ -214,5 +214,53 @@ fn authorisation_is_a_standard_class_mutation() {
     assert_eq!(
         Endpoint::HoldingsAuthorise.as_str(),
         "/portfolio/holdings/authorise"
+    );
+}
+
+// ---- wire forms --------------------------------------------------------
+
+fn sha(bytes: &[u8]) -> [u8; 32] {
+    use sha2::Digest;
+    sha2::Sha256::digest(bytes).into()
+}
+
+#[tokio::test]
+async fn authorisation_sends_exactly_its_wire_form() {
+    let h = HttpHarness::start(vec![
+        Reply::json(fixtures::json_body("holdings_auth.json").unwrap()),
+        Reply::json(fixtures::json_body("holdings_auth.json").unwrap()),
+    ])
+    .await;
+    let c = client(&h.base_url());
+    let named = two_isins().wire().unwrap();
+    c.portfolio()
+        .authorise_holdings(&two_isins())
+        .await
+        .unwrap();
+    let all = HoldingsAuthorisationRequest::all().wire().unwrap();
+    c.portfolio()
+        .authorise_holdings(&HoldingsAuthorisationRequest::all())
+        .await
+        .unwrap();
+    let [r1, r2] = h.requests().try_into().unwrap();
+    for (r, wire) in [(&r1, &named), (&r2, &all)] {
+        assert_eq!(r.method, wire.method().as_str());
+        assert_eq!(r.target, wire.path());
+        assert_eq!(r.header("content-type"), wire.content_type());
+        assert_eq!(sha(&r.body), wire.sha256());
+        assert_eq!(String::from_utf8(r.body.clone()).unwrap(), wire.to_string());
+    }
+    assert_eq!(
+        named.to_string(),
+        "isin=INE002A01018&quantity=50&isin=INE009A01021&quantity=50"
+    );
+    assert_eq!(all.body_len(), 0);
+    assert_eq!(all.content_type(), None);
+    assert_ne!(named.sha256(), all.sha256());
+    assert!(
+        HoldingsAuthorisationRequest::all()
+            .with("bad", Quantity::new(1).unwrap())
+            .wire()
+            .is_err()
     );
 }

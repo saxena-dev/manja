@@ -18,6 +18,10 @@
 //! | turn a login into credentials | [`Session::exchange`](kite::connect::api::Session::exchange) |
 //! | call the HTTP API | [`HTTPClient`](kite::connect::client::HTTPClient) |
 //! | place, modify or cancel orders | [`Orders`](kite::connect::api::Orders) and [`PlaceOrderRequest`](kite::connect::models::PlaceOrderRequest) |
+//! | read an order's outcome whatever became of its future | [`Dispatched`](kite::connect::dispatch::Dispatched) and [`OutcomeStream`](kite::connect::dispatch::OutcomeStream) |
+//! | see the exact bytes an order sends | [`WireForm`](kite::connect::wire::WireForm) |
+//! | mark a call as control traffic, or look at headroom first | [`HTTPClient::with_priority`](kite::connect::client::HTTPClient::with_priority) and [`Admission::headroom`](kite::connect::admission::Admission::headroom) |
+//! | know when an access token expires | [`session_expires_at`](kite::protocol::session_expires_at) |
 //! | stream live market data | [`TickerBuilder`](kite::ticker::actor::owner::TickerBuilder) |
 //! | decode ticker messages as they arrive | [`TypedEvents`](kite::ticker::typed::TypedEvents) |
 //! | decode captured bytes offline | [`kite::decoder`] |
@@ -48,7 +52,7 @@
 //!
 //! // HTTP: create one client and share clones of it.
 //! let client = HTTPClient::new(Config::default())?.with_credentials(credentials.clone());
-//! let profile = client.user().profile().await?.data.expect("data");
+//! let profile = client.user().profile().await?.data;
 //! println!("logged in as {}", profile.user_name);
 //!
 //! // Ticker: one background task owns the connection; you hold the handle.
@@ -82,21 +86,32 @@
 //! [`kite::protocol`], observation envelopes and the observability types are
 //! always available and need no async runtime. With
 //! both `ticker` and `decoder`, [`kite::ticker::typed`] decodes messages as
-//! they arrive. A build with only `decoder`, or no features at all, has no
-//! Tokio or network dependency.
+//! they arrive. `http` enables Tokio's runtime handle, because a mutation's
+//! attempt runs on a task the client spawns. A build with only `decoder`, or
+//! no features at all, has no Tokio or network dependency.
 //!
 //! # What you can rely on
 //!
 //! - **Success means success.** A call succeeds only when Kite answers with a
 //!   2xx status, a `success` envelope and data of the expected shape.
-//! - **Mutations are sent once.** Every call that can change your account
-//!   (orders, position conversions, GTT changes, holdings authorisation and
-//!   the session calls) makes exactly one attempt. Reads and margin and
-//!   charge calculations retry transient failures on their own.
+//! - **Mutations are sent once, and their outcome is never lost.** Every
+//!   call that can change your account (orders, position conversions, GTT
+//!   changes, holdings authorisation and the session calls) makes exactly
+//!   one attempt, on a task the client owns: dropping or timing out the
+//!   returned future abandons nothing, and the outcome reaches the client's
+//!   outcome stream or its diagnostics. Reads and margin and charge
+//!   calculations retry transient failures on their own.
 //! - **Rate limits are enforced locally**, at the rates Kite documents. A
-//!   request waits briefly for capacity (`B-HTTP-06`, 5 seconds by default)
-//!   and is refused with an `Admission` error rather than sent to be
-//!   rejected by Kite.
+//!   read waits briefly for capacity (`B-HTTP-06`, 5 seconds by default); an
+//!   order call never waits and is admitted at once or refused with a hint.
+//!   Either way a call is refused with an `Admission` error rather than sent
+//!   to be rejected by Kite.
+//! - **Evidence comes with every answer.** A mutation's exact bytes are
+//!   inspectable before the send and hashed after it; every response and
+//!   error carries the client's source identity and the operation's ID, and,
+//!   once the request left the process, when it left and when the answer
+//!   arrived; and every response type can be built outside the crate, so a
+//!   paper broker speaks the same types.
 //! - **Everything is bounded.** Queues, bodies, payloads and waits have
 //!   documented defaults and limits, and exceeding one is an explicit error.
 //! - **Unknown values are preserved** as unknown, never coerced into a known
@@ -144,6 +159,12 @@
 #![warn(rust_2018_idioms)]
 
 pub mod kite;
+
+/// The `secrecy` crate, re-exported so that the token fields of
+/// [`UserSession`](kite::connect::models::UserSession), which are
+/// `secrecy::Secret<String>`, can be built and read outside the crate
+/// against the same version.
+pub use secrecy;
 
 // The README's examples compile as doc tests, so they cannot drift from the
 // API. They use every feature, so they are checked when all are enabled.

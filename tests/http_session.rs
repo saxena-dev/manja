@@ -17,8 +17,10 @@ use manja::kite::connect::config::{Config, HttpLimits};
 use manja::kite::connect::credentials::{
     AccessToken, ApiKey, ApiSecret, Credentials, RequestToken,
 };
+use manja::kite::connect::dispatch::ReceiptIds;
 use manja::kite::connect::scheduler::SchedulerLimits;
-use manja::kite::error::{HttpErrorKind, TransportStage};
+use manja::kite::error::{HttpError, HttpErrorKind, TransportStage};
+use manja::kite::obs::schema::{Endpoint, HttpOperationResult};
 
 use support::fixtures;
 use support::http::{HttpHarness, RecordedRequest, Reply};
@@ -45,7 +47,7 @@ fn only(h: &HttpHarness) -> RecordedRequest {
     r
 }
 
-async fn exchange(c: &HTTPClient) -> manja::kite::error::Result<()> {
+async fn exchange(c: &HTTPClient) -> Result<(), HttpError> {
     c.session(key())
         .exchange(
             &RequestToken::new(REQUEST_TOKEN).unwrap(),
@@ -71,8 +73,7 @@ async fn exchange_needs_no_access_token_and_sends_only_the_documented_fields() {
         )
         .await
         .unwrap()
-        .data
-        .unwrap();
+        .data;
     let r = only(&h);
     assert_eq!(
         (r.method.as_str(), r.target.as_str()),
@@ -145,8 +146,7 @@ async fn invalidation_takes_the_target_token_and_no_secret() {
         .invalidate(&AccessToken::new("target_token").unwrap())
         .await
         .unwrap()
-        .data
-        .unwrap();
+        .data;
     assert!(invalidated);
     let r = only(&h);
     assert_eq!(
@@ -213,7 +213,7 @@ async fn every_fault_is_one_attempt_with_stage_evidence() {
         let h = HttpHarness::start(replies).await;
         let c = unauthenticated_with(&h.base_url(), short.clone());
         let err = exchange(&c).await.unwrap_err();
-        let e = err.as_http().unwrap();
+        let e = &err;
         assert_eq!((e.kind(), e.stage()), (kind, stage), "{e}");
         assert_eq!(h.requests().len(), 1, "one attempt: {e}");
         for rendered in [err.to_string(), format!("{err:?}")] {
@@ -225,17 +225,45 @@ async fn every_fault_is_one_attempt_with_stage_evidence() {
 }
 
 #[tokio::test]
-async fn cancellation_after_dispatch_claims_nothing() {
-    let h = HttpHarness::start(vec![Reply::Stall]).await;
+async fn dropping_the_exchange_future_abandons_nothing() {
+    // The server answers after 300 ms; the caller gives up after 100 ms.
+    // The exchange was dispatched, so its attempt runs to completion and
+    // its outcome lands in the orphan ring; nothing is recorded as cancelled.
+    let h = HttpHarness::start(vec![Reply::Delayed {
+        after: Duration::from_millis(300),
+        body: fixtures::json_body("generate_session.json")
+            .unwrap()
+            .into_bytes(),
+    }])
+    .await;
     let c = unauthenticated(&h.base_url());
-    let cancelled = tokio::time::timeout(Duration::from_millis(100), exchange(&c)).await;
-    assert!(cancelled.is_err());
+    let dropped = tokio::time::timeout(Duration::from_millis(100), exchange(&c)).await;
+    assert!(dropped.is_err());
     assert_eq!(h.requests().len(), 1);
-    let last = c.diagnostics().last_failures.last().cloned().unwrap();
-    assert_eq!(
-        (last.kind, last.stage),
-        (HttpErrorKind::Cancelled, TransportStage::Started)
+    assert_eq!(c.diagnostics().dispatches_in_flight, 1);
+    c.close(Duration::from_secs(5)).await.unwrap();
+    let d = c.diagnostics();
+    assert!(
+        d.last_failures.is_empty(),
+        "nothing failed: {:?}",
+        d.last_failures
     );
+    assert_eq!(d.dispatches_in_flight, 0);
+    assert_eq!(d.orphaned_outcome_count, 1);
+    let [outcome] = d.orphaned_outcomes.as_slice() else {
+        panic!("one orphaned outcome: {:?}", d.orphaned_outcomes);
+    };
+    assert_eq!(outcome.endpoint, Endpoint::SessionToken);
+    assert_eq!(outcome.result, HttpOperationResult::Ok);
+    assert_eq!(outcome.http_status, Some(200));
+    assert_eq!(outcome.stage, TransportStage::ResponseReceived);
+    assert_eq!(outcome.receipt, ReceiptIds::default());
+    // The outcome record carries no token: it holds the stage, the result
+    // and the hash, never a body.
+    let rendered = format!("{outcome:?}");
+    for s in [SECRET, REQUEST_TOKEN, CHECKSUM, "XXXXXX"] {
+        assert!(!rendered.contains(s), "{rendered}");
+    }
 }
 
 #[tokio::test]
@@ -265,8 +293,7 @@ async fn returned_tokens_are_secret_wrapped_and_exported_intentionally() {
         )
         .await
         .unwrap()
-        .data
-        .unwrap();
+        .data;
     let rendered = format!("{session:?}");
     for sentinel in [
         "SENTINELaccess0001",
@@ -302,4 +329,73 @@ async fn ordinary_calls_and_drop_never_touch_the_session_endpoint() {
     tokio::task::yield_now().await;
     let targets: Vec<String> = h.requests().into_iter().map(|r| r.target).collect();
     assert_eq!(targets, ["/user/profile", "/user/margins"]);
+}
+
+// ---- wire forms --------------------------------------------------------
+
+fn sha(bytes: &[u8]) -> [u8; 32] {
+    use sha2::Digest;
+    sha2::Sha256::digest(bytes).into()
+}
+
+#[tokio::test]
+async fn session_operations_send_exactly_their_wire_forms_and_render_no_secret() {
+    use manja::kite::connect::wire::WireForm;
+    let h = HttpHarness::start(vec![
+        Reply::json(fixtures::json_body("generate_session.json").unwrap()),
+        Reply::json(fixtures::json_body("session_logout.json").unwrap()),
+    ])
+    .await;
+    let c = unauthenticated(&h.base_url());
+    let token = RequestToken::new(REQUEST_TOKEN).unwrap();
+    let secret = ApiSecret::new(SECRET).unwrap();
+    let exchange = WireForm::session_exchange(&key(), &token, &secret);
+    c.session(key()).exchange(&token, &secret).await.unwrap();
+    let access = AccessToken::new("target_token").unwrap();
+    let invalidate = WireForm::session_invalidation(&key(), &access);
+    c.session(key()).invalidate(&access).await.unwrap();
+    let [r1, r2] = h.requests().try_into().unwrap();
+
+    // Exchange: the captured body is the form's bytes, hash for hash.
+    assert_eq!(r1.method, "POST");
+    assert_eq!(r1.target, exchange.path());
+    assert_eq!(r1.header("content-type"), exchange.content_type());
+    assert_eq!(sha(&r1.body), exchange.sha256());
+    assert_eq!(
+        sha(
+            format!("api_key=test_api_key&request_token={REQUEST_TOKEN}&checksum={CHECKSUM}")
+                .as_bytes()
+        ),
+        exchange.sha256()
+    );
+    // Its rendering carries the field names but not the token or checksum.
+    let shown = exchange.to_string();
+    let debug = format!("{exchange:?}");
+    assert_eq!(
+        shown,
+        "api_key=test_api_key&request_token=<redacted>&checksum=<redacted>"
+    );
+    for s in [REQUEST_TOKEN, CHECKSUM, SECRET] {
+        assert!(!shown.contains(s), "{shown}");
+        assert!(!debug.contains(s), "{debug}");
+    }
+
+    // Invalidation: no body, the query is sent as the form renders it.
+    assert_eq!(r2.method, "DELETE");
+    assert_eq!(
+        r2.target,
+        "/session/token?api_key=test_api_key&access_token=target_token"
+    );
+    assert_eq!(invalidate.path(), "/session/token");
+    assert_eq!(invalidate.body_len(), 0);
+    assert_eq!(invalidate.content_type(), None);
+    assert_eq!(sha(&r2.body), invalidate.sha256());
+    assert_eq!(invalidate.to_string(), "");
+    let debug = format!("{invalidate:?}");
+    assert!(debug.contains("access_token=<redacted>"), "{debug}");
+    assert!(!debug.contains("target_token"), "{debug}");
+    assert_eq!(
+        exchange.sha256(),
+        WireForm::session_exchange(&key(), &token, &secret).sha256()
+    );
 }

@@ -21,13 +21,13 @@ use manja::kite::connect::config::{Config, HttpLimits};
 use manja::kite::connect::credentials::Credentials;
 use manja::kite::connect::models::{
     Exchange, GttOrderRequest, GttRequest, GttStatus, GttType, OrderType, OrderValidity,
-    OrderVariety, ProductType, TransactionType,
+    ProductType, TransactionType,
 };
-use manja::kite::connect::scheduler::{PermitTarget, SchedulerLimits};
-use manja::kite::error::{HttpErrorKind, ManjaError, TransportStage};
+use manja::kite::connect::scheduler::SchedulerLimits;
+use manja::kite::error::{HttpError, HttpErrorKind, TransportStage};
 use manja::kite::obs::schema::{Endpoint, Method};
 use manja::kite::obs::{InMemoryRecorder, Instrument, Observability};
-use manja::kite::protocol::{Inbound, InstrumentToken, OrderId, Quantity};
+use manja::kite::protocol::{Inbound, InstrumentToken, Quantity};
 
 use support::fixtures;
 use support::http::{HttpHarness, RecordedRequest, Reply};
@@ -95,8 +95,7 @@ fn single() -> GttRequest {
     GttRequest::single(Exchange::NSE, "INFY", 702.0, 798.0, buy(702.5))
 }
 
-fn is_validation(e: &ManjaError) -> bool {
-    let h = e.as_http().unwrap();
+fn is_validation(h: &HttpError) -> bool {
     h.kind() == HttpErrorKind::Validation && h.stage() == TransportStage::NotStarted
 }
 
@@ -115,8 +114,7 @@ async fn placement_is_form_encoded_with_json_condition_and_orders() {
         .place_trigger(&single())
         .await
         .unwrap()
-        .data
-        .unwrap();
+        .data;
     assert_eq!(receipt.trigger_id, 123);
     let r = only(&h);
     assert_eq!(
@@ -159,8 +157,7 @@ async fn modification_replaces_the_trigger_by_id() {
         .modify_trigger(123, &request)
         .await
         .unwrap()
-        .data
-        .unwrap();
+        .data;
     assert_eq!(receipt.trigger_id, 123);
     let r = only(&h);
     assert_eq!(
@@ -180,8 +177,7 @@ async fn deletion_sends_no_body() {
         .delete_trigger(123)
         .await
         .unwrap()
-        .data
-        .unwrap();
+        .data;
     assert_eq!(receipt.trigger_id, 123);
     let r = only(&h);
     assert_eq!(
@@ -200,8 +196,7 @@ async fn the_trigger_list_decodes_both_documented_triggers() {
         .list_triggers()
         .await
         .unwrap()
-        .data
-        .unwrap();
+        .data;
     assert_eq!(only(&h).target, "/gtt/triggers");
     assert_eq!(triggers.len(), 2);
 
@@ -272,8 +267,7 @@ async fn one_trigger_is_fetched_by_id() {
         .get_trigger(123)
         .await
         .unwrap()
-        .data
-        .unwrap();
+        .data;
     assert_eq!(only(&h).target, "/gtt/triggers/123");
     assert_eq!(t.id, 123);
     assert_eq!(t.trigger_type, Inbound::Known(GttType::TwoLeg));
@@ -297,8 +291,7 @@ async fn an_unknown_status_is_preserved() {
         .get_trigger(123)
         .await
         .unwrap()
-        .data
-        .unwrap();
+        .data;
     assert!(t.status.is_unknown());
     assert_eq!(t.status.as_wire(), "paused");
 }
@@ -357,7 +350,7 @@ async fn a_lost_placement_response_is_not_resubmitted() {
         .place_trigger(&single())
         .await
         .unwrap_err();
-    let e = err.as_http().unwrap();
+    let e = err;
     assert_eq!(e.stage(), TransportStage::Started, "the broker may have it");
     assert_eq!(h.requests().len(), 1, "exactly one attempt");
 }
@@ -379,7 +372,7 @@ async fn deletion_after_a_429_is_not_retried() {
         .delete_trigger(123)
         .await
         .unwrap_err();
-    assert!(err.as_http().is_some());
+    assert_eq!(err.stage(), TransportStage::ResponseReceived);
     assert_eq!(h.requests().len(), 1, "a mutation makes one attempt");
 }
 
@@ -400,14 +393,13 @@ async fn reads_retry_a_transient_failure() {
         .list_triggers()
         .await
         .unwrap()
-        .data
-        .unwrap();
+        .data;
     assert_eq!(triggers.len(), 2);
     assert_eq!(h.requests().len(), 2);
 }
 
 #[tokio::test]
-async fn permits_separate_admission_from_dispatch_for_every_gtt_mutation() {
+async fn every_gtt_mutation_is_admitted_on_its_own_call_and_counted_once() {
     let h = HttpHarness::start(
         [
             "gtt_place_order.json",
@@ -426,23 +418,9 @@ async fn permits_separate_admission_from_dispatch_for_every_gtt_mutation() {
     )
     .unwrap()
     .with_credentials(Credentials::new("test_api_key", "test_access_token").unwrap());
-    let permit = c.admit(PermitTarget::PlaceGtt).await.unwrap();
-    // The caller's own checks run here; nothing has been sent.
-    assert!(h.requests().is_empty());
-    c.gtt()
-        .place_trigger_with_permit(&single(), permit)
-        .await
-        .unwrap();
-    let permit = c.admit(PermitTarget::ModifyGtt).await.unwrap();
-    c.gtt()
-        .modify_trigger_with_permit(123, &single(), permit)
-        .await
-        .unwrap();
-    let permit = c.admit(PermitTarget::DeleteGtt).await.unwrap();
-    c.gtt()
-        .delete_trigger_with_permit(123, permit)
-        .await
-        .unwrap();
+    c.gtt().place_trigger(&single()).await.unwrap();
+    c.gtt().modify_trigger(123, &single()).await.unwrap();
+    c.gtt().delete_trigger(123).await.unwrap();
     let sent: Vec<(String, String)> = h
         .requests()
         .into_iter()
@@ -457,64 +435,9 @@ async fn permits_separate_admission_from_dispatch_for_every_gtt_mutation() {
         ]
         .map(|(m, t)| (m.to_string(), t.to_string()))
     );
-    // Each call spent its permit: three admissions, none repeated at dispatch.
+    // One admission per call, at the call: three grants, none elsewhere.
     let (granted, _) = rec.histogram(Instrument::HttpAdmissionWait, &["mut", "granted"]);
     assert_eq!(granted, 3);
-}
-
-#[tokio::test]
-async fn a_mismatched_expired_or_foreign_gtt_permit_cannot_start_transport() {
-    let h = HttpHarness::start(vec![]).await;
-    let scheduler = SchedulerLimits::default()
-        .with_permit_validity(Duration::from_millis(20))
-        .unwrap();
-    let c = HTTPClient::with_config(
-        Config::new(h.base_url()).with_limits(HttpLimits::default().with_scheduler(scheduler)),
-    )
-    .unwrap()
-    .with_credentials(Credentials::new("test_api_key", "test_access_token").unwrap());
-    let kind = |e: ManjaError| e.as_http().unwrap().kind();
-
-    // Another operation's permit, including the order and GTT counterparts
-    // and the other GTT mutation on the same endpoint.
-    let p = c.admit(PermitTarget::PlaceOrder).await.unwrap();
-    let e = c.gtt().place_trigger_with_permit(&single(), p).await;
-    assert_eq!(kind(e.unwrap_err()), HttpErrorKind::Admission);
-    let p = c.admit(PermitTarget::DeleteGtt).await.unwrap();
-    let e = c.gtt().modify_trigger_with_permit(1, &single(), p).await;
-    assert_eq!(kind(e.unwrap_err()), HttpErrorKind::Admission);
-    let p = c.admit(PermitTarget::ModifyGtt).await.unwrap();
-    let e = c.gtt().delete_trigger_with_permit(1, p).await;
-    assert_eq!(kind(e.unwrap_err()), HttpErrorKind::Admission);
-    let p = c.admit(PermitTarget::DeleteGtt).await.unwrap();
-    let e = c
-        .orders()
-        .cancel_order_with_permit(OrderVariety::Regular, &OrderId::new("1").unwrap(), p)
-        .await;
-    assert_eq!(kind(e.unwrap_err()), HttpErrorKind::Admission);
-
-    // An expired permit.
-    let p = c.admit(PermitTarget::PlaceGtt).await.unwrap();
-    tokio::time::sleep(Duration::from_millis(40)).await;
-    let e = c.gtt().place_trigger_with_permit(&single(), p).await;
-    assert_eq!(kind(e.unwrap_err()), HttpErrorKind::Deadline);
-
-    // A permit from another client's admission scope.
-    let p = client(&h.base_url())
-        .admit(PermitTarget::DeleteGtt)
-        .await
-        .unwrap();
-    let e = c.gtt().delete_trigger_with_permit(1, p).await;
-    assert_eq!(kind(e.unwrap_err()), HttpErrorKind::Admission);
-
-    // A valid permit does not let an invalid request through.
-    let mut invalid = single();
-    invalid.trigger_values.push(800.0);
-    let p = c.admit(PermitTarget::PlaceGtt).await.unwrap();
-    let e = c.gtt().place_trigger_with_permit(&invalid, p).await;
-    assert!(is_validation(&e.unwrap_err()));
-
-    assert!(h.requests().is_empty(), "no permit started a transport");
 }
 
 #[test]
@@ -587,7 +510,7 @@ async fn a_two_leg_placement_sends_both_values_and_both_orders() {
 async fn a_fetched_trigger_converts_into_a_request_for_modification() {
     let get = serve("gtt_get_order.json").await;
     let c = client(&get.base_url());
-    let trigger = c.gtt().get_trigger(123).await.unwrap().data.unwrap();
+    let trigger = c.gtt().get_trigger(123).await.unwrap().data;
     let mut request = GttRequest::from_trigger(&trigger).unwrap();
     assert_eq!(request.trigger_type, GttType::TwoLeg);
     assert_eq!(request.exchange, Exchange::NSE);
@@ -655,8 +578,7 @@ async fn a_trigger_a_request_cannot_carry_does_not_convert() {
             .get_trigger(123)
             .await
             .unwrap()
-            .data
-            .unwrap();
+            .data;
         let err = GttRequest::from_trigger(&trigger).unwrap_err();
         assert_eq!(err.field, field);
     }
@@ -668,4 +590,71 @@ fn a_zero_last_price_is_accepted() {
     let mut r = single();
     r.last_price = 0.0;
     assert_eq!(r.validate(), Ok(()));
+}
+
+// ---- wire forms --------------------------------------------------------
+
+fn sha(bytes: &[u8]) -> [u8; 32] {
+    use sha2::Digest;
+    sha2::Sha256::digest(bytes).into()
+}
+
+fn assert_sent_exactly(r: &RecordedRequest, wire: &manja::kite::connect::wire::WireForm) {
+    assert_eq!(r.method, wire.method().as_str());
+    assert_eq!(r.target, wire.path());
+    assert_eq!(r.header("content-type"), wire.content_type());
+    assert_eq!(sha(&r.body), wire.sha256());
+    assert_eq!(String::from_utf8(r.body.clone()).unwrap(), wire.to_string());
+}
+
+#[tokio::test]
+async fn gtt_mutations_send_exactly_their_wire_forms() {
+    use manja::kite::connect::wire::WireForm;
+    let h = HttpHarness::start(vec![
+        Reply::json(fixtures::json_body("gtt_place_order.json").unwrap()),
+        Reply::json(fixtures::json_body("gtt_modify_order.json").unwrap()),
+        Reply::json(fixtures::json_body("gtt_delete_order.json").unwrap()),
+    ])
+    .await;
+    let c = client(&h.base_url());
+    let two_leg = GttRequest::two_leg(
+        Exchange::NSE,
+        "INFY",
+        [702.0, 798.0],
+        750.0,
+        [buy(702.5), buy(798.5)],
+    );
+    let place = two_leg.wire().unwrap();
+    c.gtt().place_trigger(&two_leg).await.unwrap();
+    let modify = single().wire_modification(123).unwrap();
+    c.gtt().modify_trigger(123, &single()).await.unwrap();
+    let delete = WireForm::delete_trigger(123);
+    c.gtt().delete_trigger(123).await.unwrap();
+    let [r1, r2, r3] = h.requests().try_into().unwrap();
+    assert_sent_exactly(&r1, &place);
+    assert_sent_exactly(&r2, &modify);
+    assert_sent_exactly(&r3, &delete);
+    // The JSON-valued fields are inside the form body, percent-encoded as
+    // sent, and decode back to the documented condition and orders.
+    let fields = form(place.to_string().as_bytes());
+    assert_eq!(fields[0], ("type".to_string(), "two-leg".to_string()));
+    let condition: serde_json::Value = serde_json::from_str(&fields[1].1).unwrap();
+    assert_eq!(
+        condition["trigger_values"],
+        serde_json::json!([702.0, 798.0])
+    );
+    let orders: serde_json::Value = serde_json::from_str(&fields[2].1).unwrap();
+    assert_eq!(orders.as_array().unwrap().len(), 2);
+    assert_eq!(modify.path(), "/gtt/triggers/123");
+    assert_eq!(delete.body_len(), 0);
+    assert_eq!(delete.content_type(), None);
+    // Determinism, JSON fields included.
+    for _ in 0..100 {
+        assert_eq!(two_leg.wire().unwrap().sha256(), place.sha256());
+        assert_eq!(
+            single().wire_modification(123).unwrap().sha256(),
+            modify.sha256()
+        );
+    }
+    assert_ne!(place.sha256(), single().wire().unwrap().sha256());
 }

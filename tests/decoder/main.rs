@@ -33,7 +33,7 @@ use manja::kite::obs::Observability;
 use manja::kite::obs::schema::SourceMode;
 use manja::kite::protocol::scale::Segment;
 
-use support::capture::{read_capture, read_real_capture, read_ticker_fixture};
+use support::capture::{read_capture, read_synthetic_corpus, read_ticker_fixture};
 use support::fixtures;
 
 // ---- generator --------------------------------------------------------
@@ -186,10 +186,6 @@ fn assert_faithful(bytes: &[u8]) {
             assert_eq!(n, bytes.len());
             assert_eq!(PacketFamily::of_len(n), PacketFamily::Unknown);
         }
-        Err(PacketErrorKind::NegativeQuantity { offset }) => {
-            assert!(offset + 2 <= bytes.len());
-            assert!(bytes[offset] & 0x80 != 0, "only a set sign bit is refused");
-        }
         Err(other) => panic!("{other:?}"),
     }
 }
@@ -248,13 +244,13 @@ fn base64(text: &str) -> Vec<u8> {
 
 #[test]
 fn golden_packet_families_inv_b() {
-    // INV-B-01 LTP: qdx single_ltp (no official packet exists, INV-GAP-05).
+    // INV-B-01 LTP: hand-built single_ltp (no official packet exists, INV-GAP-05).
     assert!(matches!(packets_of("single_ltp")[..], [Packet::Ltp(_)]));
-    // INV-B-02 tradable quote: official ticker_quote.packet and qdx single_quote.
+    // INV-B-02 tradable quote: official ticker_quote.packet and hand-built single_quote.
     let official = base64(&fixtures::read("ticker_quote.packet").unwrap());
     assert!(matches!(decode_bytes(&official), Ok(Packet::Quote(_))));
     assert!(matches!(packets_of("single_quote")[..], [Packet::Quote(_)]));
-    // INV-B-03 full with depth: official, qdx single_full, and the capture.
+    // INV-B-03 full with depth: official, single_full, and the synthetic corpus.
     let official = base64(&fixtures::read("ticker_full.packet").unwrap());
     let Ok(Packet::Full(full)) = decode_bytes(&official) else {
         panic!()
@@ -286,12 +282,12 @@ fn golden_packet_families_inv_b() {
 #[test]
 fn golden_framing_cases_inv_f() {
     let l = FramingLimits::default();
-    // INV-F-01 batch: qdx multi_packet and all 19 capture records.
+    // INV-F-01 batch: multi_packet and all 19 corpus records.
     assert_eq!(
         assert_frames_exact(&read_ticker_fixture("protocol/multi_packet.bin"), l),
         Ok(2)
     );
-    let capture = read_real_capture();
+    let capture = read_synthetic_corpus();
     let records = read_capture(&capture).unwrap();
     assert_eq!(records.len(), 19);
     let packets: usize = records
@@ -336,9 +332,10 @@ fn golden_text_scale_and_provenance() {
         parse(r#"{"type":"zzz","data":{}}"#, l),
         Ok(TextEvent::Unknown { .. })
     ));
-    // INV-S-01 CDS divides by 10^7; INV-S-02 BCD is refused.
+    // INV-S-01 CDS divides by 10^7; INV-S-02 BCD and INV-S-03 NCO by 10^4.
     assert_eq!(scaled(831_234_000, Segment::Cds).unwrap().to_f64(), 83.1234);
-    assert!(scaled(1, Segment::Bcd).is_err());
+    assert_eq!(scaled(831_234, Segment::Bcd).unwrap().to_f64(), 83.1234);
+    assert_eq!(scaled(7_512_345, Segment::Nco).unwrap().to_f64(), 751.2345);
     // Provenance: every event carries the source key and pinned versions.
     let mut s = SourceSequencer::new(SourceIdentity::generate());
     s.begin_epoch();
@@ -379,7 +376,7 @@ fn a_mutated_vendored_byte_is_caught() {
 
 #[test]
 fn outputs_ignore_clocks_and_leave_raw_bytes_intact() {
-    let capture = read_real_capture();
+    let capture = read_synthetic_corpus();
     let identity = SourceIdentity::new("manja", RunId::from_u128(9), "qual").unwrap();
     let adapter = Adapter::new(SourceMode::Replay, &Observability::disabled());
     for r in read_capture(&capture).unwrap() {
@@ -604,6 +601,7 @@ fn campaign_numeric_extremes_and_segments() {
         Segment::Bse,
         Segment::Bfo,
         Segment::Bcd,
+        Segment::Nco,
         Segment::Mcx,
         Segment::McxSx,
         Segment::Indices,
@@ -611,10 +609,8 @@ fn campaign_numeric_extremes_and_segments() {
     for _ in 0..n {
         let raw = rng.extreme_i32();
         for s in segments {
-            match scaled(raw, s) {
-                Ok(p) => assert_eq!(p.raw(), raw as i64),
-                Err(_) => assert_eq!(s, Segment::Bcd, "only the unverified segment is refused"),
-            }
+            let p = scaled(raw, s).expect("every segment has a divisor");
+            assert_eq!(p.raw(), raw as i64);
         }
     }
 }
@@ -622,7 +618,7 @@ fn campaign_numeric_extremes_and_segments() {
 #[test]
 fn campaign_capture_mutations() {
     let (mut rng, n) = campaign("capture", 3_000, 0x06);
-    let capture = read_real_capture();
+    let capture = read_synthetic_corpus();
     let records = read_capture(&capture).unwrap();
     let limits = FramingLimits::default();
     for _ in 0..n {

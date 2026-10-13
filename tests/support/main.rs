@@ -201,7 +201,7 @@ async fn manja_http_client_reads_official_profile_through_the_harness() {
         .await
         .unwrap();
     // Expected values are written out from the official fixture, not re-parsed from it.
-    let profile = serde_json::to_value(response.data.unwrap()).unwrap();
+    let profile = serde_json::to_value(response.data).unwrap();
     assert_eq!(profile["user_id"], "AB1234");
     assert_eq!(profile["user_name"], "AxAx Bxx");
     assert_eq!(profile["broker"], "ZERODHA");

@@ -37,6 +37,12 @@ use crate::kite::protocol::{Inbound, InstrumentToken, OrderId};
 pub struct PostbackChecksum(String);
 
 impl PostbackChecksum {
+    /// A checksum as a postback carries it, for building an [`OrderUpdate`]
+    /// outside the crate; the SDK does not verify it.
+    pub fn new(checksum: impl Into<String>) -> Self {
+        Self(checksum.into())
+    }
+
     /// The checksum text, for an application's own verification.
     pub fn expose(&self) -> &str {
         &self.0
@@ -155,6 +161,50 @@ pub struct OrderUpdate {
     /// Postback checksum, `SHA-256(order_id + order_timestamp + api_secret)`.
     #[serde(default)]
     pub checksum: Option<PostbackChecksum>,
+}
+
+impl OrderUpdate {
+    /// An update for `order_id` with every other field absent, for building
+    /// one outside the crate: the type is `#[non_exhaustive]`, so this is
+    /// the way to build one, and the fields are public to set afterwards.
+    pub fn new(order_id: OrderId) -> Self {
+        Self {
+            order_id,
+            exchange_order_id: None,
+            parent_order_id: None,
+            status: None,
+            status_message: None,
+            status_message_raw: None,
+            user_id: None,
+            placed_by: None,
+            app_id: None,
+            tradingsymbol: None,
+            instrument_token: None,
+            exchange: None,
+            variety: None,
+            order_type: None,
+            transaction_type: None,
+            validity: None,
+            product: None,
+            quantity: None,
+            disclosed_quantity: None,
+            filled_quantity: None,
+            unfilled_quantity: None,
+            pending_quantity: None,
+            cancelled_quantity: None,
+            price: None,
+            trigger_price: None,
+            average_price: None,
+            market_protection: None,
+            order_timestamp: None,
+            exchange_timestamp: None,
+            exchange_update_timestamp: None,
+            meta: None,
+            tag: None,
+            guid: None,
+            checksum: None,
+        }
+    }
 }
 
 #[cfg(test)]
