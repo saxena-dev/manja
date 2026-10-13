@@ -24,6 +24,7 @@ mod support;
 use manja::kite::connect::client::HTTPClient;
 use manja::kite::connect::config::Config;
 use manja::kite::connect::credentials::{AccessToken, ApiKey, ApiSecret, RequestToken};
+use manja::kite::protocol::session_expires_at;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -81,6 +82,14 @@ async fn local() -> Result<(), Box<dyn std::error::Error>> {
         "exchanged: user {} ({:?})",
         session.user_id, session.user_type
     );
+    // A token expires at the next 06:00 IST after it was issued; the SDK
+    // publishes the rule and never acts on it.
+    if let Some(login_time) = session.login_time {
+        println!(
+            "token issued {login_time}, expires {}",
+            session_expires_at(login_time)
+        );
+    }
     let credentials = session.credentials()?;
     // Invalidation takes the token to retire and no secret.
     let done = client

@@ -18,6 +18,10 @@
 //! | turn a login into credentials | [`Session::exchange`](kite::connect::api::Session::exchange) |
 //! | call the HTTP API | [`HTTPClient`](kite::connect::client::HTTPClient) |
 //! | place, modify or cancel orders | [`Orders`](kite::connect::api::Orders) and [`PlaceOrderRequest`](kite::connect::models::PlaceOrderRequest) |
+//! | read an order's outcome whatever became of its future | [`Dispatched`](kite::connect::dispatch::Dispatched) and [`OutcomeStream`](kite::connect::dispatch::OutcomeStream) |
+//! | see the exact bytes an order sends | [`WireForm`](kite::connect::wire::WireForm) |
+//! | mark a call as control traffic, or look at headroom first | [`HTTPClient::with_priority`](kite::connect::client::HTTPClient::with_priority) and [`Admission::headroom`](kite::connect::admission::Admission::headroom) |
+//! | know when an access token expires | [`session_expires_at`](kite::protocol::session_expires_at) |
 //! | stream live market data | [`TickerBuilder`](kite::ticker::actor::owner::TickerBuilder) |
 //! | decode ticker messages as they arrive | [`TypedEvents`](kite::ticker::typed::TypedEvents) |
 //! | decode captured bytes offline | [`kite::decoder`] |
@@ -82,8 +86,9 @@
 //! [`kite::protocol`], observation envelopes and the observability types are
 //! always available and need no async runtime. With
 //! both `ticker` and `decoder`, [`kite::ticker::typed`] decodes messages as
-//! they arrive. A build with only `decoder`, or no features at all, has no
-//! Tokio or network dependency.
+//! they arrive. `http` enables Tokio's runtime handle, because a mutation's
+//! attempt runs on a task the client spawns. A build with only `decoder`, or
+//! no features at all, has no Tokio or network dependency.
 //!
 //! # What you can rely on
 //!
@@ -101,6 +106,12 @@
 //!   order call never waits and is admitted at once or refused with a hint.
 //!   Either way a call is refused with an `Admission` error rather than sent
 //!   to be rejected by Kite.
+//! - **Evidence comes with every answer.** A mutation's exact bytes are
+//!   inspectable before the send and hashed after it; every response and
+//!   error carries the client's source identity and the operation's ID, and,
+//!   once the request left the process, when it left and when the answer
+//!   arrived; and every response type can be built outside the crate, so a
+//!   paper broker speaks the same types.
 //! - **Everything is bounded.** Queues, bodies, payloads and waits have
 //!   documented defaults and limits, and exceeding one is an explicit error.
 //! - **Unknown values are preserved** as unknown, never coerced into a known

@@ -9,8 +9,8 @@ but never renumbers or reuses one.
 Citations of the form `kite:<page>.md:<lines>` point into the Kite Connect v3
 documentation pages listed, with access time and SHA-256, in
 [`kite-sources.toml`](kite-sources.toml). How each part is tested is in
-[`verification.md`](verification.md), and changes from 0.1 are in
-[`migration.md`](migration.md).
+[`verification.md`](verification.md), and the changes from 0.2 to 0.3 (and, before that,
+from 0.1 to 0.2) are in [`migration.md`](migration.md).
 
 ---
 
@@ -511,7 +511,7 @@ serialize; `SourceIdentity` serializes as its three identifiers, as a `SourceKey
 and an identifier that `SourceIdentity::new` refuses is refused on the way back in. The 0.2 envelope `KiteApiResponse`, with its
 `status`, `Option<T>` data and `error_type`, no longer exists: `status` was always
 `"success"` and `error_type` always `None` on a returned value, so neither was data
-(`migration.md` §7).
+(`migration.md` §3).
 
 Broker state arrives unchanged. An order row keeps every field reservation logic depends
 on exactly as the broker reports it: `status`, `filled_quantity`, `pending_quantity` and
@@ -870,7 +870,7 @@ These choices are not dictated by the Kite documentation alone.
 | GTT orders | Only LIMIT orders, each for the condition's instrument; a modification sends the complete trigger | The documentation lists `LIMIT` as the only order type and shows each order repeating the condition's exchange and tradingsymbol (`kite:gtt.md:56-64`); it recommends fetching the trigger and sending it back modified (`kite:gtt.md:390-393`) |
 | Default features | `http`, `ticker` and `decoder` | Keeps every 0.1 import path available |
 | Edition and minimum Rust version | Edition 2024; `rust-version` 1.88.0 | 1.88 is the first release with let chains, which the code uses. Every feature row, doc tests included, passes on 1.88.0, and 1.87.0 rejects the let chains (E0658). With `rust-version` at 1.88 the resolver picks dependency versions that build on it. Dependencies alone do not set the floor: down to 1.85 the resolver still finds compatible releases (the `icu_*` 2.3 crates, which need 1.88, fall back to earlier 2.x releases), and with the let chains reverted the all-features suite passes on 1.87.0 (checked on 2026-09-24) |
-| 0.1 code | Removed in 0.2.0 rather than deprecated: the `WebSocketClient` ticker, `TickerRequest::subscribe_with_mode`, `kite::traits` and the error variants nothing constructs (`migration.md` §4) | 0.2.0 is itself the breaking release, so keeping code only 0.1 callers needed would carry it into a release that already requires migration. The old ticker read the socket directly, so it could not have been repaired without changing its behavior |
+| 0.1 code | Removed in 0.2.0 rather than deprecated: the `WebSocketClient` ticker, `TickerRequest::subscribe_with_mode`, `kite::traits` and the error variants nothing constructs (`migration.md` §7.4) | 0.2.0 is itself the breaking release, so keeping code only 0.1 callers needed would carry it into a release that already requires migration. The old ticker read the socket directly, so it could not have been repaired without changing its behavior |
 | Observability budgets | As in `verification.md` §5 | Measured on a recorded host; exceeding one fails the benchmark |
 
 ---
@@ -885,6 +885,10 @@ These choices are not dictated by the Kite documentation alone.
 | `OBS_SCHEMA_VERSION` | 1 | the observability schema (§4) |
 | `QUOTA_PROFILE_VERSION` | `kite-connect-v3/exceptions.md@2026-09-23+r2` | the default quota profile (§3.6): the page it encodes, the date that page was accessed, and a revision that increases when the encoding of the same page changes. A version without a `+r` suffix is revision 1, and the revision restarts at 1 when the page is accessed again on a new date. Revision 2 added the `Historical` class |
 
-Each is versioned independently. The crate is pre-1.0: every intentional break ships only
-in a minor-version bump and is listed in `migration.md`. Where practical, an item is
-deprecated for a release before it is removed.
+The crate is at version 0.3.0, and every constant above has the value it had in 0.2.0:
+`OBS_SCHEMA_VERSION` stays 1 because the span fields 0.3 added are additive, and the
+envelope, decoder, conversion and quota versions are untouched by the release. Each is
+versioned independently. The crate is pre-1.0: every intentional break ships only in a
+minor-version bump and is listed in `migration.md`, all of a release's breaks together;
+where practical, an item is deprecated for a release before it is removed. 1.0 is
+reserved for the first release that needed no break from its predecessor.

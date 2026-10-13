@@ -41,8 +41,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     .await;
 
     // Credentials are an explicit, immutable snapshot supplied by the caller.
-    let client = HTTPClient::with_observability(Config::new(base), obs)?
-        .with_credentials(Credentials::new("api_key", "access_token")?);
+    // The outcome stream, registered at build time, receives the outcome of
+    // every mutation, including one whose future was dropped.
+    let (client, mut outcomes) = HTTPClient::builder(Config::new(base))
+        .observability(obs)
+        .credentials(Credentials::new("api_key", "access_token")?)
+        .build_with_outcomes()?;
 
     let profile = client.user().profile().await?.data;
     println!("profile: {} ({})", profile.user_name, profile.user_id);
@@ -74,12 +78,30 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         Tag::new("example1")?,
     );
     request.validate()?;
+    // The exact bytes the placement sends, and their hash, before anything
+    // leaves the process.
+    let wire = request.wire()?;
+    println!(
+        "sending {} ({} bytes, sha256 {})",
+        wire.path(),
+        wire.body_len(),
+        wire.sha256_hex()
+    );
     // Placement is admitted now or refused with a hint, never queued, and
-    // makes exactly one attempt; a lost response is reported with its stage,
-    // never retried or assumed sent.
-    let receipt = client.orders().place_order(&request).await?.data;
+    // makes exactly one attempt on a task the client owns; a lost response
+    // is reported with its stage, never retried or assumed sent.
+    let dispatched = client.orders().place_order(&request);
+    println!("operation {} dispatched", dispatched.operation_id());
+    let receipt = dispatched.await?.data;
     // A receipt means the broker accepted the request, not that it filled.
     println!("order accepted: {}", receipt.order_id);
+    // The same outcome, as a record on the stream: what a journal would keep.
+    if let Some(Ok(outcome)) = outcomes.recv().await {
+        println!(
+            "outcome: operation {} {:?} status {:?} order {:?}",
+            outcome.operation_id, outcome.result, outcome.http_status, outcome.receipt.order_id
+        );
+    }
 
     // Quotes: every requested key is accounted for.
     let quotes = client
