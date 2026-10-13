@@ -14,8 +14,11 @@
 //! latency percentiles are reported for the ticker (receive to consumer)
 //! and the decoder.
 //!
-//! With `MANJA_BUDGETS=check` the run fails when a measured delta against
-//! `disabled` exceeds its budget (see `BUDGETS`, `docs/verification.md` §5.3).
+//! With `MANJA_BUDGETS=check` the run fails when any budget in
+//! `docs/verification.md` §5.3 is exceeded: a configuration's delta against
+//! `disabled` (`BUDGETS`), extra allocations, ticker latency and peak heap,
+//! decoder allocations, or a dispatched mutation's median against a read's
+//! (`MAX_DISPATCH_OVER_READ`).
 
 #[path = "../tests/support/mod.rs"]
 mod support;
@@ -494,11 +497,12 @@ const MAX_EXTRA_ALLOCS_PER_OP: f64 = 1.0;
 const MAX_TICKER_P999_NS: u64 = 1_000_000;
 /// Peak retained heap of a ticker case.
 const MAX_TICKER_PEAK_KIB: usize = 16 * 1024;
-/// Median time per dispatched mutation (`http dispatch PUT`, `disabled`),
-/// in nanoseconds: the task spawn, the oneshot and the outcome record over
-/// a sequential GET. Set by the owner once measured on the recorded host;
-/// `None` reports the figure without judging it.
-const MAX_DISPATCH_MEDIAN_NS: Option<f64> = None;
+/// A dispatched mutation (`http dispatch PUT`: the task spawn, the oneshot
+/// and the outcome record) may take at most this many times the median of a
+/// read (`http sequential GET`) in the same configuration of the same run.
+/// Relative, so it holds on any host and fails only when dispatch becomes
+/// clearly slower than a read (`docs/verification.md` §5.3).
+const MAX_DISPATCH_OVER_READ: f64 = 1.25;
 
 fn main() {
     // `cargo test --all-targets` runs this binary without `--bench`: check
@@ -629,14 +633,19 @@ fn main() {
                 ));
             }
         }
-        if r.case == "http dispatch PUT"
-            && r.mode == Mode4::Disabled
-            && MAX_DISPATCH_MEDIAN_NS.is_some_and(|max| r.median_ns > max)
-        {
-            failures.push(format!(
-                "{}: {:.0} ns/op over the dispatch budget",
-                r.case, r.median_ns
-            ));
+        if r.case == "http dispatch PUT" {
+            let read = rows
+                .iter()
+                .find(|g| g.case == "http sequential GET" && g.mode == r.mode)
+                .expect("the read row is measured in every configuration");
+            let ratio = r.median_ns / read.median_ns;
+            if ratio > MAX_DISPATCH_OVER_READ {
+                failures.push(format!(
+                    "{} {}: {ratio:.2}× the read median, over {MAX_DISPATCH_OVER_READ}×",
+                    r.case,
+                    r.mode.name()
+                ));
+            }
         }
         if r.case.starts_with("ticker") {
             if r.lat.is_some_and(|(_, _, p999)| p999 > MAX_TICKER_P999_NS) {

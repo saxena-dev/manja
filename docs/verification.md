@@ -284,7 +284,7 @@ Rust 1.98.0, release profile and all features. Another host needs its own measur
 | Extra allocations from recording | ≤ 1 per operation over `disabled` | 0 |
 | Ticker delivery latency, p99.9 | ≤ 1 ms | 282 µs |
 | Ticker peak retained heap | ≤ 16 MiB | 12.4 MiB |
-| HTTP dispatch, median time per mutation (`http dispatch PUT`, `disabled`) | owner to set after measuring on the recorded host (`MAX_DISPATCH_MEDIAN_NS`, unset: the row is reported, not judged) | not yet measured |
+| HTTP dispatch (`http dispatch PUT`) against a read (`http sequential GET`), median time per operation, each configuration of the same run | ≤ 1.25× (`MAX_DISPATCH_OVER_READ`) | 1.08× (`trace-info`), worst of four runs on 2026-10-13; the first, at 43e1a9d, measured 0.93× `disabled`, 0.94× `metrics`, 0.95× `trace-info` and 0.91× `trace-sampled` |
 
 ---
 
