@@ -87,6 +87,23 @@ pub struct SliceError {
     pub message: Option<String>,
 }
 
+impl SliceError {
+    /// A slice rejection as the broker reports it, for building an
+    /// [`OrderReceipt`] outside the crate. The type is `#[non_exhaustive]`,
+    /// so this is the way to build one.
+    pub fn new(
+        code: Option<u16>,
+        error_type: Option<Inbound<crate::kite::error::KiteApiException>>,
+        message: Option<String>,
+    ) -> Self {
+        Self {
+            code,
+            error_type,
+            message,
+        }
+    }
+}
+
 #[derive(Deserialize)]
 struct SliceWire {
     #[serde(default)]
@@ -339,6 +356,15 @@ pub struct RequestError {
 impl std::fmt::Display for RequestError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "invalid `{}`: {}", self.field, self.reason)
+    }
+}
+
+impl RequestError {
+    /// A rejection of `field` for `reason`, for a double that validates
+    /// requests the way the SDK does. The type is `#[non_exhaustive]`, so
+    /// this is the way to build one.
+    pub fn new(field: &'static str, reason: &'static str) -> Self {
+        Self { field, reason }
     }
 }
 

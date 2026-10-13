@@ -520,6 +520,37 @@ on exactly as the broker reports it: `status`, `filled_quantity`, `pending_quant
 not tell a partial fill of an open order from a terminal partially filled order; it
 reports the fields that let the caller do so.
 
+### 2.19 Constructibility
+
+Every public response type is constructible outside the crate, so a broker double or a
+fixture-based test can build what the client would return: `Response<T>`, `ResponseMeta`
+and `IngressStamp`; every DTO and request type in `kite::connect::models`; every receipt
+(`OrderReceipt` with `SliceResult` and `SliceError`, `GttReceipt`,
+`HoldingsAuthorisation`); the outcome record (`Outcome`, `ReceiptIds`); `HttpError` at
+every stage, with `BrokerError` and `RetryInfo`; the ticker's `OrderUpdate` with
+`PostbackChecksum`; and every checked type (`OrderId`, `MfOrderId`, `Tag`, `Quantity`,
+`InstrumentToken`, `ScaledPrice`, `BrokerTimestamp`, `Inbound`, `SourceIdentity`,
+`RunId`, `ReceiveTime`, `MonotonicElapsed`). The rules:
+
+| Shape | How it is built |
+|---|---|
+| Public fields | A struct literal, or an enum variant |
+| Checked type | Its fallible constructor (`OrderId::new`, `Tag::new`, `Quantity::new`, `ScaledPrice::new`, `BrokerTimestamp::parse`, `SourceIdentity::new`), which keeps its validation; `InstrumentToken::new`, `RunId::from_u128`, `ReceiveTime::from_unix_nanos`, `MonotonicElapsed::from_nanos` and `PostbackChecksum::new` are infallible. An unknown wire value, `Inbound::Unknown`, is built through `Inbound::from_wire` |
+| `#[non_exhaustive]` struct | A public constructor of its required facts, with the remaining public fields set afterwards, so that a later field stays additive: `ResponseMeta::new(message, http_status, operation_id, attempt, source, sent_at, received_at)`, `Outcome::new(operation_id, method, endpoint, wire_sha256, stage, result, source)`, `OrderUpdate::new(order_id)`, `SliceError::new(code, error_type, message)`, `RequestError::new(field, reason)` |
+| `HttpError` | `HttpError::new(kind, method, endpoint, stage)` then the builders `with_status`, `with_broker`, `with_attempt`, `with_timeout`, `with_retry`, `with_detail`, `with_source`, `with_admission`, `with_operation`, `with_sent_at` and `with_received_at`; `BrokerError::new(error_type, message)` bounds and sanitizes the message as the client does, and `with_detail` the detail. The SDK never puts a value from a response body in an error; a downstream that builds errors keeps that rule itself |
+| Secrets | `UserSession`'s token fields are `secrecy::Secret<String>`; the crate re-exports the crate as `manja::secrecy`, so they are built against the same version. `chrono` and `serde_json` types in fields come from the downstream's own dependency on those crates |
+
+Exceptions among response types: none. The runtime handles (`HTTPClient`, `Dispatched`,
+`OutcomeStream`, the ticker handles), the diagnostics snapshots and the validation error
+types of the checked types (`OrderIdError`, `UnitError`, `ScaleError`, `DateTimeError`,
+`EnvelopeError`, `UnknownValue`) are not response types and carry no such promise;
+`UnknownExchange` is built from the `UnknownValue` that `Inbound::from_wire` yields. No
+broker port trait is defined here: which subset of this surface a double speaks is the
+application's decision. `tests/constructible.rs`, which runs on every feature row, builds
+one value of each type in a downstream-style module that uses public paths only, and
+checks the model inventory against the source files, so a public model type added without
+a construction fails the test.
+
 ---
 
 ## 3. Runtime bounds
@@ -830,6 +861,7 @@ These choices are not dictated by the Kite documentation alone.
 | Oversized quote requests | Rejected before sending, never split or truncated | A split would return several snapshots taken at different times as one result |
 | Endpoint support | Holdings auctions and the order charges calculation stay supported | Both are documented read or calculation endpoints with official fixtures |
 | Holdings authorisation | Supported as the HTTP call that starts the flow, with the documented portal URL; the portal itself is left to the application | The endpoint and its result are documented (`kite:portfolio.md:503-541`). The remaining steps happen in the user's browser on the depository's portal, which an SDK cannot and should not drive |
+| Non-exhaustive response types | `ResponseMeta`, `Outcome`, `OrderUpdate`, `SliceError` and `RequestError` keep `#[non_exhaustive]` and gain a public constructor of their required facts; the two metadata structs become `SessionMeta` and `ProfileMeta`; `secrecy` is re-exported (§2.19) | Dropping the attribute would make every later field a breaking change; a constructor of the required facts keeps additions additive while leaving the type constructible, and the public fields take the optional facts afterwards. The two `Meta` structs were public fields' types that no downstream could name, so renaming them breaks nobody and says which object each belongs to. A downstream cannot build a `Secret<String>` without the crate that defines it, and a separately pinned version would be a different type |
 | Required tag | `PlaceOrderRequest::new` takes a `Tag`; the tag is documented as a correlation field, never an idempotency key, with one tag per attempt recommended; `list_orders_tagged` is a client-side filter over the order book (§2.16) | Kite has no idempotency key and the tag is the only caller-chosen field it echoes, so a placement whose response was lost has no other anchor than symbol, quantity and time, which an active caller's own flow makes ambiguous within seconds. A generated tag the caller never saw would be useless for recovery, and modification and cancellation carry an order ID and no tag field, so requiring one there would be a lie in the type. The broker does not make tags unique and manual orders can carry any text, so the SDK filters and the caller assigns the confidence; one tag per attempt is what makes a duplicate visible |
 | Order IDs | Checked types; a response ID that fails its grammar is a `Decode` error | An ID is a request path segment. A lenient fallback would let a malformed broker value reach a path unchecked, and every ID in the official samples already fits its grammar |
 | Rejected list rows | The default equity order and trade list methods stay strict; a paired `*_with_rejections` method returns every row, rejected ones in place (§2.16) | Strict is the default because `?` keeps a failure loud, and an entirely rejected book can never pass for an empty one. The tolerant form lets a caller still see, and act on, the rows that decoded. Keeping partial data out of `HttpError` keeps broker rows out of commonly logged errors |

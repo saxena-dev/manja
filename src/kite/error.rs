@@ -132,7 +132,9 @@ pub struct BrokerError {
 
 #[cfg_attr(not(feature = "http"), allow(dead_code))]
 impl BrokerError {
-    pub(crate) fn new(error_type: Option<&str>, message: Option<&str>) -> Self {
+    /// A broker error as an envelope would carry it: `error_type` is kept
+    /// as a known or unknown value and `message` is bounded and sanitized.
+    pub fn new(error_type: Option<&str>, message: Option<&str>) -> Self {
         Self {
             error_type: error_type.map(Inbound::from_wire),
             message: message.map(|m| {
@@ -224,7 +226,13 @@ struct HttpErrorInner {
 
 #[cfg_attr(not(feature = "http"), allow(dead_code))]
 impl HttpError {
-    pub(crate) fn new(
+    /// An error of `kind` for `method` on `endpoint` that got as far as
+    /// `stage`, with nothing else set: attempt 0, no status, no broker
+    /// error, no detail, no stamps. The `with_*` builders add the rest.
+    /// Public so that a broker double or a fixture test can build the
+    /// error the SDK would return; the SDK itself never puts a value from
+    /// a response body in an error, and a builder of one should not either.
+    pub fn new(
         kind: HttpErrorKind,
         method: Method,
         endpoint: Endpoint,
@@ -253,8 +261,9 @@ impl HttpError {
     }
 
     /// The operation this error belongs to: the client's identity and the
-    /// operation ID. Set once per operation, on the way out.
-    pub(crate) fn with_operation(mut self, identity: SourceIdentity, operation_id: u64) -> Self {
+    /// operation ID. Set once per operation, on the way out; kept if
+    /// already set.
+    pub fn with_operation(mut self, identity: SourceIdentity, operation_id: u64) -> Self {
         if self.0.identity.is_none() {
             self.0.identity = Some(identity);
         }
@@ -265,7 +274,7 @@ impl HttpError {
     }
 
     /// When the failed attempt was dispatched; kept if already set.
-    pub(crate) fn with_sent_at(mut self, sent_at: IngressStamp) -> Self {
+    pub fn with_sent_at(mut self, sent_at: IngressStamp) -> Self {
         if self.0.sent_at.is_none() {
             self.0.sent_at = Some(sent_at);
         }
@@ -273,14 +282,16 @@ impl HttpError {
     }
 
     /// When the failed attempt's response head arrived; kept if already set.
-    pub(crate) fn with_received_at(mut self, received_at: IngressStamp) -> Self {
+    pub fn with_received_at(mut self, received_at: IngressStamp) -> Self {
         if self.0.received_at.is_none() {
             self.0.received_at = Some(received_at);
         }
         self
     }
 
-    pub(crate) fn with_admission(
+    /// The admission facts of an `Admission` refusal: the cause and, when
+    /// known, the time until the next slot or the instant the ceiling resets.
+    pub fn with_admission(
         mut self,
         cause: AdmissionCause,
         retry_after: Option<std::time::Duration>,
@@ -292,32 +303,40 @@ impl HttpError {
         self
     }
 
-    pub(crate) fn with_status(mut self, status: u16) -> Self {
+    /// The HTTP status of the response, when one was received.
+    pub fn with_status(mut self, status: u16) -> Self {
         self.0.http_status = Some(status);
         self
     }
 
-    pub(crate) fn with_broker(mut self, broker: BrokerError) -> Self {
+    /// The broker's error envelope, when one was received.
+    pub fn with_broker(mut self, broker: BrokerError) -> Self {
         self.0.broker = Some(broker);
         self
     }
 
-    pub(crate) fn with_attempt(mut self, attempt: u32) -> Self {
+    /// The number of the attempt that failed: 1 for a first try.
+    pub fn with_attempt(mut self, attempt: u32) -> Self {
         self.0.attempt = attempt;
         self
     }
 
-    pub(crate) fn with_timeout(mut self) -> Self {
+    /// Mark the error as ended by a timeout (`is_timeout`).
+    pub fn with_timeout(mut self) -> Self {
         self.0.timed_out = true;
         self
     }
 
-    pub(crate) fn with_retry(mut self, retry: RetryInfo) -> Self {
+    /// The retry metadata of the operation.
+    pub fn with_retry(mut self, retry: RetryInfo) -> Self {
         self.0.retry = Some(retry);
         self
     }
 
-    pub(crate) fn with_detail(mut self, detail: &str) -> Self {
+    /// A bounded, sanitized detail for people. The SDK never puts a value
+    /// taken from a response body here; a builder of errors should not
+    /// either.
+    pub fn with_detail(mut self, detail: &str) -> Self {
         self.0.detail = Some(BoundedText::sanitize(
             detail,
             crate::kite::obs::diagnostics::DEFAULT_TEXT_BYTES,
@@ -325,10 +344,8 @@ impl HttpError {
         self
     }
 
-    pub(crate) fn with_source(
-        mut self,
-        source: impl std::error::Error + Send + Sync + 'static,
-    ) -> Self {
+    /// The underlying error, reported through `std::error::Error::source`.
+    pub fn with_source(mut self, source: impl std::error::Error + Send + Sync + 'static) -> Self {
         self.0.source = Some(Box::new(source));
         self
     }

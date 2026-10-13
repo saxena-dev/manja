@@ -149,6 +149,12 @@
 
 pub mod kite;
 
+/// The `secrecy` crate, re-exported so that the token fields of
+/// [`UserSession`](kite::connect::models::UserSession), which are
+/// `secrecy::Secret<String>`, can be built and read outside the crate
+/// against the same version.
+pub use secrecy;
+
 // The README's examples compile as doc tests, so they cannot drift from the
 // API. They use every feature, so they are checked when all are enabled.
 #[cfg(all(doctest, feature = "http", feature = "ticker", feature = "decoder"))]

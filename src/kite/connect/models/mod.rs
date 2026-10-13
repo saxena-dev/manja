@@ -79,6 +79,31 @@ pub struct ResponseMeta {
     pub received_at: IngressStamp,
 }
 
+impl ResponseMeta {
+    /// The facts of a call, for building a [`Response`] outside the crate:
+    /// a broker double or a fixture test produces what the client would.
+    /// The type is `#[non_exhaustive]`, so this is the way to build one.
+    pub fn new(
+        message: Option<String>,
+        http_status: u16,
+        operation_id: u64,
+        attempt: u32,
+        source: SourceIdentity,
+        sent_at: IngressStamp,
+        received_at: IngressStamp,
+    ) -> Self {
+        Self {
+            message,
+            http_status,
+            operation_id,
+            attempt,
+            source,
+            sent_at,
+            received_at,
+        }
+    }
+}
+
 /// One ingress or egress instant, in both of the envelope's clocks: wall
 /// time for display and broker comparison, monotonic time for ordering
 /// within a run.
@@ -97,12 +122,12 @@ pub struct IngressStamp {
 /// Models for the `/session/` API group, including user session management.
 ///
 mod session;
-pub use session::UserSession;
+pub use session::{SessionMeta, UserSession};
 
 /// Models for the `/user/` API group, handling user-specific data and settings.
 ///
 mod user;
-pub use user::{Available, Segment, SegmentKind, UserMargins, UserProfile, Utilised};
+pub use user::{Available, ProfileMeta, Segment, SegmentKind, UserMargins, UserProfile, Utilised};
 
 /// Models for the `/orders/` API group, facilitating order placement, modification,
 /// and status checks.
@@ -177,4 +202,4 @@ pub use crate::kite::protocol::OrderUpdate;
 
 /// Enumerations for exchanges supported by Kite Connect API.
 mod exchange;
-pub use exchange::Exchange;
+pub use exchange::{Exchange, UnknownExchange};

@@ -24,7 +24,7 @@ use crate::kite::protocol::datetime::parse_broker_datetime;
 
 /// Additional session metadata.
 #[derive(Clone, Debug, PartialEq, Eq, Deserialize)]
-pub struct Meta {
+pub struct SessionMeta {
     /// Demat consent: empty, `consent` or `physical`.
     pub demat_consent: String,
 }
@@ -69,7 +69,7 @@ pub struct UserSession {
     /// Last login time (IST).
     pub login_time: Option<DateTime<FixedOffset>>,
     /// Additional metadata.
-    pub meta: Option<Meta>,
+    pub meta: Option<SessionMeta>,
 }
 
 impl UserSession {
@@ -116,7 +116,7 @@ impl<'de> Deserialize<'de> for UserSession {
             #[serde(default)]
             login_time: Option<String>,
             #[serde(default)]
-            meta: Option<Meta>,
+            meta: Option<SessionMeta>,
         }
 
         let f = Fields::deserialize(deserializer)?;

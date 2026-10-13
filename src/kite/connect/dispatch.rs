@@ -282,6 +282,39 @@ pub struct Outcome {
 }
 
 impl Outcome {
+    /// An outcome record with its required facts and nothing else: no
+    /// correlation, no error kind, no status, attempt 0, no receipt IDs and
+    /// no stamps. The type is `#[non_exhaustive]`, so this is the way to
+    /// build one outside the crate; the remaining fields are public and set
+    /// afterwards. For a broker double or a fixture test that produces what
+    /// the client would.
+    pub fn new(
+        operation_id: u64,
+        method: Method,
+        endpoint: Endpoint,
+        wire_sha256: [u8; 32],
+        stage: TransportStage,
+        result: HttpOperationResult,
+        source: SourceIdentity,
+    ) -> Self {
+        Self {
+            operation_id,
+            correlation: None,
+            method,
+            endpoint,
+            wire_sha256,
+            stage,
+            result,
+            error: None,
+            http_status: None,
+            attempt: 0,
+            receipt: ReceiptIds::default(),
+            source,
+            sent_at: None,
+            received_at: None,
+        }
+    }
+
     /// The record of `result`, for the stream or the ring.
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn of<T>(

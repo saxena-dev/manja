@@ -29,6 +29,6 @@ pub use datetime::{
 };
 pub use enums::{Inbound, UnknownValue, WireEnum};
 pub use ids::{InstrumentToken, MfOrderId, OrderId, OrderIdError};
-pub use order_update::OrderUpdate;
+pub use order_update::{OrderUpdate, PostbackChecksum};
 pub use scale::{ScaleError, Segment, price_divisor};
 pub use units::{CONVERSION_POLICY_VERSION, Quantity, ScaledPrice, UnitError};
