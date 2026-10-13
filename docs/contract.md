@@ -263,9 +263,10 @@ clock, network or global state, and is bounded by §3.4.
   (`kite:websocket.md:131-163`) contradicts that paragraph and the 184-byte total, and
   is not followed. A packet of any other length is reported as an unknown length,
   never guessed.
-- **Values**: prices stay the raw `int32` on the wire. `scaled` turns one into a
-  `ScaledPrice` with a caller-supplied `Segment` (§5). Negative quantities and order counts
-  are refused. Timestamps stay raw Unix seconds.
+- **Values**: prices stay the raw signed `int32` on the wire. `scaled` turns one into a
+  `ScaledPrice` with a caller-supplied `Segment`, and every segment has a divisor (§5).
+  Quantities, volume, open interest and order counts are read unsigned and never refused
+  (§5). Timestamps stay raw Unix seconds, read unsigned.
 - **Text** (`kite:websocket.md:165-184`): `order`, `error` and `message` messages
   become typed variants; any other `type` is preserved as `Unknown`. A `TextError`'s
   detail follows the rule for HTTP error details (§2.4): what failed and where, never a
@@ -809,7 +810,7 @@ the buckets 0.001, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10, 30, 
 |---|---|
 | `HttpDiagnostics` | active attempts, admission waiters in total and per quota class, recent failures (≤ `B-DIAG-01`) each with endpoint, method, status, error class, stage, broker error type, a redacted message (≤ `B-DIAG-02`) and a monotonic timestamp, the mutation dispatches in flight, the orphaned outcome ring (≤ `B-HTTP-14`) with the counts of orphaned outcomes and of outcomes the stream could not take (§2.17), and a snapshot revision |
 | `TickerStatus` | as §2.7 |
-| Decoder adapter diagnostic | source key, decoder version, packet index if any, a bounded detail (≤ `B-DIAG-02`), and a `DecodeDiagnosticKind`: `truncated`, `count_mismatch`, `trailing_bytes`, `unknown_length`, `oversized`, `invalid_text`, `unknown_text_type`, or `invalid_field` (a field value its type cannot hold, such as a negative quantity) |
+| Decoder adapter diagnostic | source key, decoder version, packet index if any, a bounded detail (≤ `B-DIAG-02`), and a `DecodeDiagnosticKind`: `truncated`, `count_mismatch`, `trailing_bytes`, `unknown_length`, `oversized`, `invalid_text`, `unknown_text_type`, or `invalid_field` (a field value its type cannot hold; since `DECODER_VERSION` 2 no binary packet field produces it) |
 
 Snapshots are bounded, carry revisions and timestamps so a stale view is detectable,
 and need no recorder or subscriber.
@@ -846,7 +847,8 @@ These choices are not dictated by the Kite documentation alone.
 
 | Topic | Decision | Reason |
 |---|---|---|
-| Ticker price scale | Currency derivatives (CDS) divide by 10 000 000; NSE, NFO, BSE, BFO, MCX, MCXSX and indices divide by 100. The BSE currency segment (BCD) is refused | The documentation gives 10 000 000 for currencies and 100 for everything else (`kite:websocket.md:89`); nothing establishes a separate BCD scale, and the segment cannot be read from the token, so the caller supplies it |
+| Ticker price scale | Currency derivatives (CDS) divide by 10 000 000; BSE currency derivatives (BCD) and NSE commodity derivatives (NCO) divide by 10 000; NSE, NFO, BSE, BFO, MCX, MCXSX and indices divide by 100. The caller supplies the segment (`CONVERSION_POLICY_VERSION` 2) | The documentation gives 10 000 000 for currencies and 100 for everything else (`kite:websocket.md:89`) and names neither BCD nor NCO; its general rules would give BCD 10 000 000 and NCO 100. Zerodha's own client library, pykiteconnect 5.2.2, divides BCD (since 2021) and NCO (since 2026-09-15) by 10 000, and its divisors are what Kite's own users have relied on, so manja follows them rather than refusing those prices. The segment cannot be read reliably from the token, so the caller supplies it |
+| Unsigned counts | Every quantity, volume, open-interest and order-count field, and both timestamps, are read unsigned (`u32`; `u16` for depth order counts) and never refused; prices and the index change stay signed (`DECODER_VERSION` 2) | The page types every field `int32` (`kite:websocket.md:87-129`), but the server encodes counts unsigned: on 2026-02-20 every full packet of one NFO futures contract carried open interest between 2.67 and 4.03 billion, above `i32::MAX`, and refusing them dropped the instrument for the day. Zerodha's own client library has read every 32-bit field unsigned from its start, and changed depth order counts to an unsigned 16-bit read in 2018 to fix an overflow. A count is never negative, so the high bit can only be magnitude. Prices can be negative in principle and the signed read of them loses nothing, so they stay signed, where that library's unsigned read would be wrong |
 | Handshake rejection | A 401 or 403 WebSocket handshake ends the ticker with `AuthRejected` | Retrying rejected credentials cannot succeed and would only repeat the rejection |
 | Quota enforcement | Every documented window is enforced locally by default (§3.6) | Exceeding them is a documented broker error (`kite:exceptions.md:39`) |
 | No dispatch permits | The permit API of 0.2 (`admit`, `DispatchPermit`, `PermitTarget`, the `*_with_permit` methods and `B-HTTP-12`) is removed; the mutation call is the admission boundary (§3.6) | A permit was a timed race whose validity bound had to outlast the caller's own checks, which is the caller's policy in the SDK's configuration; it held a window slot for a request that might never be sent, exactly the slot a cancellation needs under load; and it doubled the mutation surface. A call that is admitted now or refused with a hint gives the same affirmative not-sent evidence with no token |
@@ -880,14 +882,15 @@ These choices are not dictated by the Kite documentation alone.
 | Constant | Value | Versions |
 |---|---|---|
 | `ENVELOPE_VERSION` | 1.0 | the raw observation and lifecycle envelope (§2.8) |
-| `DECODER_VERSION` | 1 | the decoder's output for a given input |
-| `CONVERSION_POLICY_VERSION` | 1 | price scaling (§5) |
+| `DECODER_VERSION` | 2 | the decoder's output for a given input; 2 since 0.3.0, when count and timestamp fields became unsigned (§5) |
+| `CONVERSION_POLICY_VERSION` | 2 | price scaling (§5); 2 since 0.3.0, when BCD and NCO gained the 10 000 divisor |
 | `OBS_SCHEMA_VERSION` | 1 | the observability schema (§4) |
 | `QUOTA_PROFILE_VERSION` | `kite-connect-v3/exceptions.md@2026-09-23+r2` | the default quota profile (§3.6): the page it encodes, the date that page was accessed, and a revision that increases when the encoding of the same page changes. A version without a `+r` suffix is revision 1, and the revision restarts at 1 when the page is accessed again on a new date. Revision 2 added the `Historical` class |
 
-The crate is at version 0.3.0, and every constant above has the value it had in 0.2.0:
-`OBS_SCHEMA_VERSION` stays 1 because the span fields 0.3 added are additive, and the
-envelope, decoder, conversion and quota versions are untouched by the release. Each is
+The crate is at version 0.3.0. `DECODER_VERSION` and `CONVERSION_POLICY_VERSION` moved
+from 1 to 2 in it, because the decoder's output and the price scale changed for some
+inputs (§5); `OBS_SCHEMA_VERSION` stays 1 because the span fields 0.3 added are
+additive, and the envelope and quota versions are untouched. Each is
 versioned independently. The crate is pre-1.0: every intentional break ships only in a
 minor-version bump and is listed in `migration.md`, all of a release's breaks together;
 where practical, an item is deprecated for a release before it is removed. 1.0 is

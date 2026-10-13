@@ -27,7 +27,10 @@ use crate::kite::protocol::scale::{ScaleError, Segment, price_divisor};
 ///
 /// Incremented whenever a conversion rule changes its result for any input,
 /// so derived values can record which policy produced them.
-pub const CONVERSION_POLICY_VERSION: u32 = 1;
+///
+/// 2 (0.3.0): BSE currency derivatives and NSE commodity derivatives divide
+/// by 10 000 instead of the former being refused (`docs/contract.md` §5).
+pub const CONVERSION_POLICY_VERSION: u32 = 2;
 
 /// Largest distance from an integer, in raw units, that `from_f64` accepts as
 /// float representation noise.

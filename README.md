@@ -299,10 +299,12 @@ async fn prices(events: TickerEvents) -> Result<(), Box<dyn std::error::Error>> 
 }
 ```
 
-Prices on the wire are integers. Kite divides NSE currency derivatives by 10,000,000 and
-everything else by 100, so `scaled` asks you for the segment rather than guessing it.
-The BSE currency segment has no verified scale, so `scaled` refuses it rather than
-guess.
+Prices on the wire are integers. Kite's documentation divides currencies by 10,000,000
+and everything else by 100, and manja follows it, except for BSE currency (BCD) and NSE
+commodity (NCO) derivatives, which it divides by 10,000 as Zerodha's own client library
+does. `scaled` asks you for the segment rather than guessing it. Quantities, volume and
+open interest are unsigned counts, so a value above two billion, which large futures
+contracts reach, decodes as it is.
 
 The decoder works on plain bytes and needs no runtime, so it is just as useful for
 replaying captured data offline. With `default-features = false, features = ["decoder"]`

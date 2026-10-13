@@ -49,7 +49,10 @@ use crate::kite::obs::schema::{DecodeResult, PayloadKindLabel, SourceMode};
 use crate::kite::protocol::CONVERSION_POLICY_VERSION;
 
 /// Version of this decoder's output semantics.
-pub const DECODER_VERSION: u32 = 1;
+///
+/// 2 (0.3.0): quantity, volume, open-interest, order-count and timestamp
+/// fields are read unsigned and never refused (`docs/contract.md` §5).
+pub const DECODER_VERSION: u32 = 2;
 
 /// The versions an output was produced under.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -282,11 +285,12 @@ fn decode_observation(o: &RawObservation, framing: FramingLimits, text: TextLimi
                             packet,
                         }),
                         Err(e) => {
+                            // A packet of a known length always decodes:
+                            // count fields are unsigned and never refused.
                             let kind = match e.kind {
                                 PacketErrorKind::UnknownLength(_) => {
                                     DecodeDiagnosticKind::UnknownLength
                                 }
-                                _ => DecodeDiagnosticKind::InvalidField,
                             };
                             diagnostics.push(diagnostic(
                                 Some(e.packet_index),

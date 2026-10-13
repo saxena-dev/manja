@@ -90,7 +90,8 @@ IDs are stable. Tests cite the rows they cover, singly or as a range such as
 | ID | Segment | Expected |
 |---|---|---|
 | `INV-S-01` | CDS | divide by 10 000 000 |
-| `INV-S-02` | BCD | refused (`contract.md` §5) |
+| `INV-S-02` | BCD | divide by 10 000 (`contract.md` §5) |
+| `INV-S-03` | NCO | divide by 10 000 (`contract.md` §5) |
 
 ### 2.5 Known gaps
 
@@ -135,7 +136,7 @@ IDs are stable. Tests cite the rows they cover, singly or as a range such as
 | `ticker_delivery` | `ticker` | bounded delivery, cancellation and teardown |
 | `ticker_status` | `ticker` | ticker spans, metrics and status |
 | `decoder_framing` | `decoder` | framing against the vendored corpus |
-| `decoder_packets` | `decoder` | every packet family, field by field |
+| `decoder_packets` | `decoder` | every packet family, field by field. Unit tests in `kite::decoder::packets` decode a hand-built full packet with open interest 3 000 000 000 in all three open-interest fields, `u32::MAX` in every quantity, volume and depth quantity, 40 000 depth orders and timestamps past `0x8000_0000`, all as those unsigned values, while a price with the same sign bit stays negative; unit tests in `kite::protocol::scale` scale BCD and NCO by 10 000 and map `Exchange::NCO` to `Segment::Nco` (`contract.md` §5) |
 | `decoder_text` | `decoder` | text messages without coercion, and a failed parse whose detail names what failed but no value from the message (`contract.md` §2.9) |
 | `decoder_adapter` | `decoder` | provenance and identical live and captured results, and a retained text diagnostic that holds no value from the message (`contract.md` §2.9) |
 | `decoder_qualification` | `decoder` | §4 |
@@ -173,7 +174,7 @@ MANJA_FUZZ_SEED=0xdeadbeef cargo test --no-default-features --features decoder -
 | `campaign_trailing_bytes` | `0x2` | 10 000 / 100 000 | always `TrailingBytes`, with no packet exposed |
 | `campaign_allocation_and_work_bounds` | `0x3` | 200 / 2 000, inputs up to 8 MiB | each call under 500 ms (linear work); over 16 MiB is `Oversized` before any work |
 | `campaign_malformed_text` | `0x4` | 20 000 / 200 000, with mutations, truncation and nesting to 80 | success only for a JSON object with a string `type`, as the matching variant; detail ≤ 512 bytes |
-| `campaign_numeric_extremes_and_segments` | `0x5` | 20 000 / 200 000 packets and prices × 9 segments | packets are byte-faithful; only a negative unsigned field is refused; every `i32` scales exactly in every supported segment; only BCD is refused |
+| `campaign_numeric_extremes_and_segments` | `0x5` | 20 000 / 200 000 packets and prices × 10 segments | every packet of a known length decodes byte-faithfully, whatever its sign bits; every `i32` price scales exactly in every segment, none refused |
 | `campaign_capture_mutations` | `0x6` | 3 000 / 30 000 bit flips, truncations, insertions and extensions of the capture | the same framing and faithfulness invariants |
 
 A further test decodes all 19 capture records with different receive times and after a

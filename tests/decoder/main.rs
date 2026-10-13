@@ -186,10 +186,6 @@ fn assert_faithful(bytes: &[u8]) {
             assert_eq!(n, bytes.len());
             assert_eq!(PacketFamily::of_len(n), PacketFamily::Unknown);
         }
-        Err(PacketErrorKind::NegativeQuantity { offset }) => {
-            assert!(offset + 2 <= bytes.len());
-            assert!(bytes[offset] & 0x80 != 0, "only a set sign bit is refused");
-        }
         Err(other) => panic!("{other:?}"),
     }
 }
@@ -336,9 +332,10 @@ fn golden_text_scale_and_provenance() {
         parse(r#"{"type":"zzz","data":{}}"#, l),
         Ok(TextEvent::Unknown { .. })
     ));
-    // INV-S-01 CDS divides by 10^7; INV-S-02 BCD is refused.
+    // INV-S-01 CDS divides by 10^7; INV-S-02 BCD and INV-S-03 NCO by 10^4.
     assert_eq!(scaled(831_234_000, Segment::Cds).unwrap().to_f64(), 83.1234);
-    assert!(scaled(1, Segment::Bcd).is_err());
+    assert_eq!(scaled(831_234, Segment::Bcd).unwrap().to_f64(), 83.1234);
+    assert_eq!(scaled(7_512_345, Segment::Nco).unwrap().to_f64(), 751.2345);
     // Provenance: every event carries the source key and pinned versions.
     let mut s = SourceSequencer::new(SourceIdentity::generate());
     s.begin_epoch();
@@ -604,6 +601,7 @@ fn campaign_numeric_extremes_and_segments() {
         Segment::Bse,
         Segment::Bfo,
         Segment::Bcd,
+        Segment::Nco,
         Segment::Mcx,
         Segment::McxSx,
         Segment::Indices,
@@ -611,10 +609,8 @@ fn campaign_numeric_extremes_and_segments() {
     for _ in 0..n {
         let raw = rng.extreme_i32();
         for s in segments {
-            match scaled(raw, s) {
-                Ok(p) => assert_eq!(p.raw(), raw as i64),
-                Err(_) => assert_eq!(s, Segment::Bcd, "only the unverified segment is refused"),
-            }
+            let p = scaled(raw, s).expect("every segment has a divisor");
+            assert_eq!(p.raw(), raw as i64);
         }
     }
 }
