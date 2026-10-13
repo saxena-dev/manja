@@ -325,7 +325,9 @@ async fn signatures(c: &HTTPClient, h: &TickerHandle) {
         room.next_slot_in,
         room.day_remaining,
     );
-    let _ = (format!("{copy:?}"), copy == room, Clone::clone(&room));
+    let _ = (format!("{copy:?}"), copy == room);
+    fn assert_copy<T: Copy>() {}
+    assert_copy::<Headroom>();
     let _: u32 = c.admission().modifications_remaining(&id);
     let _: Result<Revision, CommandError> =
         h.subscribe([InstrumentToken::new(1)], Mode::Quote).await;
