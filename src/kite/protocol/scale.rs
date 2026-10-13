@@ -126,11 +126,10 @@ mod tests {
         assert_eq!(price_divisor(Segment::Nse), Ok(100));
         assert_eq!(price_divisor(Segment::Indices), Ok(100));
         assert_eq!(price_divisor(Segment::Cds), Ok(10_000_000));
-        // Golden: an NSE raw price of 157 610 paise is 1576.10 rupees
-        // (the vendored single_full case, raw last_traded_price 157610).
-        let p = ScaledPrice::from_raw(157_610, Segment::Nse).unwrap();
-        assert_eq!((p.raw(), p.divisor()), (157_610, 100));
-        assert_eq!(p.to_f64(), 1576.10);
+        // Golden: an NSE raw price of 123 456 paise is 1234.56 rupees.
+        let p = ScaledPrice::from_raw(123_456, Segment::Nse).unwrap();
+        assert_eq!((p.raw(), p.divisor()), (123_456, 100));
+        assert_eq!(p.to_f64(), 1234.56);
         // Golden: a CDS raw price of 831 234 000 is 83.1234 rupees.
         let p = ScaledPrice::from_raw(831_234_000, Segment::Cds).unwrap();
         assert_eq!(p.to_f64(), 83.1234);

@@ -403,7 +403,7 @@ async fn ticker(obs: Observability, instruments: usize, messages: usize) -> Vec<
     lat
 }
 
-// Every committed binary message: the protocol fixtures and the capture.
+// Every committed binary message: the protocol fixtures and the synthetic corpus.
 fn corpus() -> Vec<Vec<u8>> {
     let mut out = Vec::new();
     for name in [
@@ -419,7 +419,7 @@ fn corpus() -> Vec<Vec<u8>> {
             "protocol/{name}.bin"
         )));
     }
-    let capture = support::capture::read_real_capture();
+    let capture = support::capture::read_synthetic_corpus();
     for r in support::capture::read_capture(&capture).unwrap() {
         out.push(r.payload.to_vec());
     }

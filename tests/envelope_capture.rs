@@ -1,5 +1,5 @@
-//! Wrap every record of the vendored real capture (manifest entry
-//! `tick_set_0__2026_01_21.bin`, SHA-256 a54f73d1…cb912) in raw-observation
+//! Wrap every record of the vendored synthetic-derived corpus (manifest entry
+//! `synthetic_corpus.bin`) in raw-observation
 //! envelopes and check that bytes and receive times survive unchanged. Needs
 //! no async runtime or feature.
 
@@ -13,8 +13,8 @@ use manja::kite::envelope::{
 };
 
 #[test]
-fn real_capture_payloads_and_receive_times_are_preserved() {
-    let bytes = capture::read_real_capture();
+fn corpus_payloads_and_receive_times_are_preserved() {
+    let bytes = capture::read_synthetic_corpus();
     let records = capture::read_capture(&bytes).unwrap();
     let mut seq = SourceSequencer::new(SourceIdentity::generate());
     let epoch = seq.begin_epoch();

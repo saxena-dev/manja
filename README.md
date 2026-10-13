@@ -480,9 +480,11 @@ Trust has to be earned, so here is how manja tries to earn it:
   [`kiteconnect-mocks`](https://github.com/zerodha/kiteconnect-mocks), pinned to a
   commit and served byte for byte. Expected values are written out by hand, never
   produced by parsing the fixture a second time.
-- **Real ticker bytes.** The decoder is checked against a capture from a live Kite
-  session and a vendored corpus of framed, index, heartbeat and malformed messages,
-  each with its origin and SHA-256 recorded.
+- **Real-shaped ticker bytes.** The decoder is checked against a corpus derived from a
+  live Kite session: the same framing, packet mix, instruments and depth structure, with
+  every non-zero price, quantity and time changed and the stream's ordering and range
+  constraints re-imposed, so the repository holds no recorded bytes. Alongside it are
+  framed, index, heartbeat and malformed messages, each with its SHA-256 recorded.
 - **Hostile inputs.** Seeded property campaigns feed the decoder more than 70,000
   generated, mutated and truncated inputs, checking that it stays within its bounds and
   that every decoded packet re-encodes to its exact bytes.
@@ -515,7 +517,7 @@ without an account:
 | `session` | exchanging a request token and invalidating a session |
 | `ticker` | subscribing, changing modes, reading raw messages, status and a clean shutdown |
 | `ticker_typed` | the ticker with the decoder: every message with its decoded packets |
-| `decode_offline` | decoding captured ticker bytes with no runtime or network |
+| `decode_offline` | decoding a recorded-format corpus of ticker bytes with no runtime or network |
 
 ```text
 cargo run --example http_client

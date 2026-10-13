@@ -46,7 +46,9 @@ fn walk(root: &Path, dir: &Path, out: &mut Vec<String>) {
             .unwrap()
             .to_string_lossy()
             .replace('\\', "/");
-        if rel.starts_with("tests/fixtures") {
+        // Vendored bytes are checked by their manifest, and scripts/output
+        // holds local, git-ignored run output rather than repository material.
+        if rel.starts_with("tests/fixtures") || rel.starts_with("scripts/output") {
             continue;
         }
         if path.is_dir() {
@@ -380,6 +382,10 @@ fn no_file_refers_to_material_outside_the_repository() {
         ["DEC", "-Q"],
         ["FX", "-01"],
         ["G", "-01"],
+        // manja is an independent public crate: no private repository or crate
+        // is named anywhere in it.
+        ["kite-data", "-feed"],
+        ["q", "dx"],
     ]
     .iter()
     .map(|[a, b]| format!("{a}{b}"))

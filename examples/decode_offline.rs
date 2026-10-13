@@ -1,10 +1,11 @@
-//! Offline decoding of captured ticker bytes, with no runtime, network,
+//! Offline decoding of recorded-format ticker bytes, with no runtime, network,
 //! credential or storage: `cargo run --example decode_offline
 //! --no-default-features --features decoder`.
 //!
-//! It reads the test-only capture container in `tests/fixtures/ticker/`
-//! (records of a little-endian u64 receipt time, a little-endian u32 length
-//! and the unchanged Kite message), frames and decodes every message, and
+//! It reads the synthetic-derived corpus in `tests/fixtures/ticker/`, a
+//! test-only container (records of a little-endian u64 receipt time, a
+//! little-endian u32 length and a Kite binary message) shaped like a real
+//! capture but holding no recorded bytes, frames and decodes every message, and
 //! wraps each one in a source envelope to show provenance.
 
 use manja::kite::decoder::adapter::Adapter;
@@ -19,7 +20,7 @@ use manja::kite::obs::schema::SourceMode;
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let path = concat!(
         env!("CARGO_MANIFEST_DIR"),
-        "/tests/fixtures/ticker/tick_set_0__2026_01_21.bin"
+        "/tests/fixtures/ticker/synthetic_corpus.bin"
     );
     let capture = std::fs::read(path)?;
     let mut rest = &capture[..];

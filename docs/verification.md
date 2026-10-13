@@ -23,23 +23,51 @@ runs, so a missing fixture fails setup instead of skipping tests.
 ### 1.2 Vendored ticker corpus
 
 `tests/fixtures/ticker/` holds binary ticker messages that the official samples do not
-provide: framed batches, index packets, the heartbeat, malformed cases, and one real
-capture of 19 messages. [`MANIFEST.toml`](../tests/fixtures/ticker/MANIFEST.toml)
-records each file's origin, source commit, SHA-256, size and class:
+provide: framed batches, index packets, the heartbeat, malformed cases, and a
+synthetic-derived corpus of 19 messages (2 692 packets). No file in it holds bytes
+recorded from a Kite session. [`MANIFEST.toml`](../tests/fixtures/ticker/MANIFEST.toml)
+records each file's SHA-256, size and class:
 
-- **captured**: bytes recorded from a live Kite WebSocket session;
-- **derived**: bytes cut, re-framed or generated from captured bytes;
-- **synthetic**: hand-constructed bytes with no capture origin.
+- **synthetic**: hand-constructed bytes, and the decoded expectation of such bytes;
+- **synthetic-derived**: bytes produced from a private capture by a
+  constraint-preserving perturbation, with the tool and its version, the parameter set
+  and its SHA-256, the seed, and the SHA-256 and size of the private original, which
+  never leaves private storage.
 
-`tests/fixture_manifest.rs` re-hashes every file and rejects any file the manifest does
-not list. Each `<case>.json` file holds the output of an independent decoder, called
-qdx, for its `<case>.bin`. Those outputs are a cross-check, not protocol truth: the
-protocol reference is `kite:websocket.md`. Where `manja` deliberately differs from qdx,
-the difference is documented in `kite::decoder::framing` and `kite::decoder::packets`.
+The perturbation keeps the capture's shape and changes its values. Framing, record
+count and lengths, packet count, families, instrument tokens, zero fields and signs are
+unchanged; every other non-zero number is moved, by a per-instrument price level and an
+increasing map over each instrument's prices, multiplicative noise on quantities, noise
+on the increments of cumulative volume, one offset of whole weeks plus a random second
+on every timestamp, and N(0, 2 ms) jitter on each record's receipt time; then the
+constraints of the perturbation are re-imposed: tick and lot grids, depth order and a
+positive spread, the day's low and high bracketing open, last price and the previous
+close, monotone cumulative volume, and index change equal to last price minus close.
+No non-zero value other than a token equals its original, the zero mask equals the
+original's, and the same seed and parameters reproduce the same bytes. Those
+properties need the private original, so the tool checks them where the original is
+kept. This repository checks, on the
+vendored bytes, depth order and a positive spread, the day's range, monotone volume, the
+index change identity and last-trade time no later than exchange time, and pins the
+zero-field counts (`fixture_invariants`); the tick and lot grids are checked by the
+tool only. The corpus and the three protocol fixtures cut from it
+(`single_full`, `single_index_full`, `multi_packet`) are synthetic-derived; the
+`original_sha256` and `original_size` of the three cut fixtures and their oracles
+identify the capture they were cut from, and `parameter_set_sha256` is the SHA-256 of
+the tool's complete parameter file, which `parameter_set` summarises. Every other case
+is hand-built.
 
-The capture file uses a test-only container read by `tests/support/capture.rs`. It is
+`tests/fixture_manifest.rs` re-hashes every file, rejects any file the manifest does not
+list, requires each class's fields, and refuses a field that would point at private
+storage. Each `<case>.json` file holds the output of an independent decoder
+implementation, not `manja`'s, for its `<case>.bin`. Those outputs are a cross-check,
+not protocol truth: the protocol reference is `kite:websocket.md`. Where `manja`
+deliberately differs from the independent decoder, the difference is documented in
+`kite::decoder::framing` and `kite::decoder::packets`.
+
+The corpus file uses a test-only container read by `tests/support/capture.rs`. It is
 not a `manja` format: each record is a little-endian `u64` receive time in Unix
-nanoseconds, a little-endian `u32` length, and that many bytes of the unchanged Kite
+nanoseconds, a little-endian `u32` length, and that many bytes of a Kite binary
 message.
 
 ### 1.3 Supplemental fixtures
@@ -60,22 +88,22 @@ IDs are stable. Tests cite the rows they cover, singly or as a range such as
 
 | ID | Family | Evidence |
 |---|---|---|
-| `INV-B-01` | LTP, 8 bytes | qdx `single_ltp` (synthetic); no official LTP packet exists (`INV-GAP-05`) |
-| `INV-B-02` | Quote, 44 bytes | official `ticker_quote.packet`; qdx `single_quote` |
-| `INV-B-03` | Full with depth, 184 bytes | official `ticker_full.packet`; qdx `single_full`; the capture |
-| `INV-B-04` | Index quote, 28 bytes | qdx `single_index_quote` (synthetic) |
-| `INV-B-05` | Index full, 32 bytes | qdx `single_index_full`; the capture |
-| `INV-B-06` | Heartbeat, 1 byte: a message, not a tick | qdx `heartbeat` (synthetic) |
+| `INV-B-01` | LTP, 8 bytes | hand-built `single_ltp`; no official LTP packet exists (`INV-GAP-05`) |
+| `INV-B-02` | Quote, 44 bytes | official `ticker_quote.packet`; hand-built `single_quote` |
+| `INV-B-03` | Full with depth, 184 bytes | official `ticker_full.packet`; `single_full`; the synthetic-derived corpus |
+| `INV-B-04` | Index quote, 28 bytes | hand-built `single_index_quote` |
+| `INV-B-05` | Index full, 32 bytes | `single_index_full`; the synthetic-derived corpus |
+| `INV-B-06` | Heartbeat, 1 byte: a message, not a tick | hand-built `heartbeat` |
 
 ### 2.2 Framing cases (`kite:websocket.md:73-85`)
 
 | ID | Case | Evidence |
 |---|---|---|
-| `INV-F-01` | Count plus length-prefixed batch | qdx `multi_packet`; all 19 capture records (2 692 packets) |
-| `INV-F-02` | Count and length disagree | qdx `malformed_count` |
-| `INV-F-03` | Truncated packet or header | qdx `truncated` |
-| `INV-F-04` | Trailing bytes | qdx `trailing_bytes` |
-| `INV-F-05` | Unknown packet length | qdx `unknown_size` |
+| `INV-F-01` | Count plus length-prefixed batch | `multi_packet`; all 19 corpus records (2 692 packets) |
+| `INV-F-02` | Count and length disagree | hand-built `malformed_count` |
+| `INV-F-03` | Truncated packet or header | hand-built `truncated` |
+| `INV-F-04` | Trailing bytes | hand-built `trailing_bytes` |
+| `INV-F-05` | Unknown packet length | hand-built `unknown_size` |
 
 ### 2.3 Text messages (`kite:websocket.md:165-184`)
 
@@ -97,9 +125,10 @@ IDs are stable. Tests cite the rows they cover, singly or as a range such as
 
 | ID | Gap | How it is covered |
 |---|---|---|
-| `INV-GAP-05` | No official LTP packet (`ticker_ltp.json` has no `.packet` file) | the synthetic qdx `single_ltp` and generated packets |
+| `INV-GAP-05` | No official LTP packet (`ticker_ltp.json` has no `.packet` file) | the hand-built `single_ltp` and generated packets |
 | `INV-GAP-06` | No official index, heartbeat or broker-text messages | the vendored corpus for index and heartbeat; supplemental text messages |
 | `INV-GAP-07` | No official non-2xx error envelopes (400, 403, 429, 500, a missing `error_type`, an HTML body) | supplemental envelopes in the documented shape (`kite:response-structure.md:17-28`, `kite:exceptions.md:7-16`), each stating the official body it was derived from |
+| `INV-GAP-08` | No file in the repository is a captured Kite message | the vendored corpus is synthetic-derived (§1.2); equivalence between live and replayed bytes is established outside this repository, where the original captures are kept |
 
 ---
 
@@ -109,8 +138,9 @@ IDs are stable. Tests cite the rows they cover, singly or as a range such as
 |---|---|---|
 | `support` | `http`, `ticker` | the loopback harnesses and every fault they can inject |
 | `protocol_common` | none | the always-available protocol types. The session expiry rule is covered by unit tests in `kite::protocol::datetime`: issued 05:59:59 IST expires the same day at 06:00, issued 06:00:00 IST the next day, a UTC input (01:00Z, 06:30 IST) the next day at 06:00 IST, sub-second inputs either side of 06:00, and for every input the result carries offset +05:30, falls at `SESSION_EXPIRY_IST`, and is strictly after the input by at most one day (`contract.md` §2.2) |
-| `envelope_capture` | none | raw-observation envelopes over the capture keep bytes and receive times; a unit test in `kite::envelope::types` round-trips a `SourceIdentity` through serde as its three identifiers and refuses an invalid one on the way in |
-| `fixture_manifest` | none | the vendored corpus against `MANIFEST.toml` |
+| `envelope_capture` | none | raw-observation envelopes over the synthetic-derived corpus keep bytes and receive times; a unit test in `kite::envelope::types` round-trips a `SourceIdentity` through serde as its three identifiers and refuses an invalid one on the way in |
+| `fixture_manifest` | none | the vendored corpus against `MANIFEST.toml`: every file listed with its SHA-256 and size and nothing unlisted, the corpus framing into 19 records, each class's fields present (`synthetic-derived` entries carry the tool and version, the parameter set and its SHA-256, the seed and the private original's SHA-256 and size), no `captured` or `derived` class, no field pointing at private storage, and no fixture file name carrying a date |
+| `fixture_invariants` | `decoder` | the constraints the synthetic-derived corpus re-imposes, decoded with manja: 2 692 packets (2 399 full, 293 index full); strictly increasing receipt times; the day's low and high bracket open, close and last price over non-zero values in every packet; non-zero bid prices strictly descend and offer prices ascend, and the best offer is above the best bid where both exist (none does in this post-close corpus); per-instrument cumulative volume never decreases (each instrument appears once here); index `change` equals last price minus close wherever it is non-zero; last-trade time never after the exchange time; the zero-field counts are pinned (78 293 of 107 955 numeric fields in full packets, 56 of 2 051 in index packets), since zero-mask equality with the original is checked where the original is kept |
 | `obs_schema` | none | the observability catalogue against `tests/obs_schema/catalogue.v1.txt` |
 | `references` | none | every citation and ID in the repository resolves (§7) |
 | `http_classification` | `http` | total success and error classification (`contract.md` §2.4) |
@@ -175,13 +205,13 @@ MANJA_FUZZ_SEED=0xdeadbeef cargo test --no-default-features --features decoder -
 | `campaign_allocation_and_work_bounds` | `0x3` | 200 / 2 000, inputs up to 8 MiB | each call under 500 ms (linear work); over 16 MiB is `Oversized` before any work |
 | `campaign_malformed_text` | `0x4` | 20 000 / 200 000, with mutations, truncation and nesting to 80 | success only for a JSON object with a string `type`, as the matching variant; detail ≤ 512 bytes |
 | `campaign_numeric_extremes_and_segments` | `0x5` | 20 000 / 200 000 packets and prices × 10 segments | every packet of a known length decodes byte-faithfully, whatever its sign bits; every `i32` price scales exactly in every segment, none refused |
-| `campaign_capture_mutations` | `0x6` | 3 000 / 30 000 bit flips, truncations, insertions and extensions of the capture | the same framing and faithfulness invariants |
+| `campaign_capture_mutations` | `0x6` | 3 000 / 30 000 bit flips, truncations, insertions and extensions of the synthetic-derived corpus | the same framing and faithfulness invariants |
 
-A further test decodes all 19 capture records with different receive times and after a
+A further test decodes all 19 corpus records with different receive times and after a
 serialize-and-read-back round trip, and checks that the results are identical and that
 a failed decode leaves the raw bytes readable.
 
-**Limits.** The capture holds only 184-byte full and 32-byte index-full packets, so LTP,
+**Limits.** The synthetic-derived corpus holds only 184-byte full and 32-byte index-full packets, so LTP,
 quote, index quote, heartbeat and text coverage comes from the official samples, the
 vendored corpus and supplemental messages. CDS scaling is exercised by golden values and
 generated integers only. The campaign covers the parser and the adapter, not the live

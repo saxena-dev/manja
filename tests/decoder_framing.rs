@@ -1,7 +1,7 @@
 //! Binary framing against the vendored corpus.
 //!
-//! The qdx `<case>.json` files (`docs/verification.md` §1.2) are a
-//! cross-check, not protocol truth; the
+//! The vendored `<case>.json` files, from an independent decoder
+//! (`docs/verification.md` §1.2), are a cross-check, not protocol truth; the
 //! dispositions of their differences are in `manja::kite::decoder::framing`.
 
 mod support;
@@ -10,7 +10,7 @@ use manja::kite::decoder::framing::{
     DecodeDiagnosticKind, FramingLimits, Message, PacketFamily, frame,
 };
 
-use support::capture::{read_capture, read_real_capture, read_ticker_fixture};
+use support::capture::{read_capture, read_synthetic_corpus, read_ticker_fixture};
 
 fn oracle(name: &str) -> serde_json::Value {
     let text = std::fs::read_to_string(
@@ -75,7 +75,8 @@ fn structurally_invalid_messages_expose_no_packet_and_leave_the_input_intact() {
     let cases = [
         ("malformed_count", DecodeDiagnosticKind::CountMismatch),
         ("truncated", DecodeDiagnosticKind::Truncated),
-        // Disposition: qdx reports the packet too; the batch is rejected here.
+        // Disposition: the independent decoder reports the packet too; the
+        // batch is rejected here.
         ("trailing_bytes", DecodeDiagnosticKind::TrailingBytes),
     ];
     for (name, kind) in cases {
@@ -98,8 +99,8 @@ fn structurally_invalid_messages_expose_no_packet_and_leave_the_input_intact() {
 }
 
 #[test]
-fn every_record_of_the_real_capture_frames_cleanly() {
-    let capture = read_real_capture();
+fn every_record_of_the_synthetic_corpus_frames_cleanly() {
+    let capture = read_synthetic_corpus();
     let records = read_capture(&capture).unwrap();
     assert_eq!(records.len(), 19);
     let mut total = 0;

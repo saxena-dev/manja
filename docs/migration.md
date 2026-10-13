@@ -125,7 +125,7 @@ of the SDK (`contract.md` §2.11) and has no code of its own.
 | D9, constructible types | `contract.md` §2.19, `contract.md` §5 "Non-exhaustive response types" | `constructible` | §4 "Constructibility" |
 | D10, advisory headroom | `contract.md` §3.6, `contract.md` §5 "Headroom" | `http_admission` | §4 "Headroom" |
 | D11, session expiry constant | `contract.md` §2.2, `contract.md` §5 "Session expiry" | `protocol_common` (unit tests in `kite::protocol::datetime`) | §4 "Session expiry" |
-| D13, synthetic fixtures | not implemented in 0.3.0: the task is blocked on owner inputs (the synthetic set's parameters), so the vendored corpus and `verification.md` §1.2 are unchanged | none yet | none yet |
+| D13, synthetic fixtures | none: fixtures are not part of the contract | `fixture_manifest`, `fixture_invariants`, `decoder_packets`; `verification.md` §1.2 and `INV-GAP-08` | none: not a break, no public item changes |
 
 ## 7. Migrating from manja 0.1 to 0.2
 

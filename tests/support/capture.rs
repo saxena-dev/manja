@@ -1,9 +1,10 @@
 // Reader for the test-only capture container of the vendored ticker corpus.
 //
-// `tests/fixtures/ticker/tick_set_0__2026_01_21.bin` is a sequence of records,
-// each a little-endian `u64` receipt time in Unix nanoseconds, a little-endian
-// `u32` payload length, then that many bytes of an unchanged big-endian Kite
-// binary WebSocket message. This container is a TEST INPUT FORMAT ONLY: it is
+// `tests/fixtures/ticker/synthetic_corpus.bin` is a sequence of records, each a
+// little-endian `u64` receipt time in Unix nanoseconds, a little-endian `u32`
+// payload length, then that many bytes of a big-endian Kite binary WebSocket
+// message. The corpus is synthetic-derived: no bytes in it were recorded from a
+// Kite session (`docs/verification.md` §1.2). This container is a TEST INPUT FORMAT ONLY: it is
 // not part of manja's public API and not a manja format. The reader exists
 // only in test support code.
 //
@@ -83,7 +84,7 @@ pub fn read_ticker_fixture(path: &str) -> Vec<u8> {
     std::fs::read(&full).unwrap_or_else(|e| panic!("cannot read {}: {e}", full.display()))
 }
 
-/// The real capture, `tick_set_0__2026_01_21.bin`.
-pub fn read_real_capture() -> Vec<u8> {
-    read_ticker_fixture("tick_set_0__2026_01_21.bin")
+/// The synthetic-derived corpus, `synthetic_corpus.bin`: 19 records, 2 692 packets.
+pub fn read_synthetic_corpus() -> Vec<u8> {
+    read_ticker_fixture("synthetic_corpus.bin")
 }
